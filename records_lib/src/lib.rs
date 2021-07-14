@@ -294,7 +294,17 @@ pub async fn player_new_record(
             now,
             flags
         )
-        .map(|row: MySqlRow|  { Ok((None, Record::from_row(&row)?)) })
+            .map(|row: MySqlRow|  { Ok((None, Record {
+                id: row.try_get(0).unwrap(),
+                player_id: row.try_get(1).unwrap(),
+                map_id: row.try_get(2).unwrap(),
+                time: row.try_get(3).unwrap(),
+                respawn_count: row.try_get(4).unwrap(),
+                try_count: row.try_get(5).unwrap(),
+                created_at: row.try_get(6).unwrap(),
+                updated_at: row.try_get(7).unwrap(),
+                flags: row.try_get(8).unwrap(),
+            })) })
         .fetch_one(&db.mysql_pool)
         .await?
     }
