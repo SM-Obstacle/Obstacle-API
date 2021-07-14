@@ -1,0 +1,18 @@
+[package]
+name = "records_lib"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+async-graphql = { version = "2.8.5", features = ["dataloader", "apollo_tracing"] }
+async-graphql-warp = "2.8.5"
+sqlx = { version = "0.5", features = [ "runtime-tokio-native-tls", "mysql", "macros", "chrono" ] }
+chrono = "0.4"
+deadpool = { version = "0.8.0", features = ["managed", "rt_tokio_1"] }
+deadpool-redis = { version = "0.8.1", features = ["rt_tokio_1"] }
+serde = "1.0.126"
+thiserror = "1.0"
+warp = "0.3"

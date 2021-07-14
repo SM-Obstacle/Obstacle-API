@@ -1,0 +1,8 @@
+[workspace]
+
+members = [
+    "records_lib",
+    "game_api",
+    "admin_api",
+    "json_unformat",
+]
