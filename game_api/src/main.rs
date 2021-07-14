@@ -2,7 +2,7 @@ use sqlx::mysql;
 use std::convert::Infallible;
 use std::time::Duration;
 use tracing_subscriber::fmt::format::FmtSpan;
-use warp::{http::StatusCode, Filter, Rejection, Reply};
+use warp::{http::{StatusCode, header}, Filter, Rejection, Reply};
 
 pub mod graphql;
 pub mod http;
@@ -30,6 +30,18 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Filter traces based on the RUST_LOG env var, or, if it's not set,
+    // default to show the output of the example.
+    let filter = std::env::var("RECORDS_API_LOG")
+        .unwrap_or_else(|_| "tracing=info,warp=debug,game_api=trace".to_owned());
+
+    let mut port = 3000 as u16;
+    if let Ok(s) = std::env::var("RECORDS_API_PORT") {
+        if let Ok(env_port) = s.parse::<u16>() {
+            port = env_port;
+        }
+    };
+
     let mysql_pool = mysql::MySqlPoolOptions::new()
         .connect_timeout(Duration::new(10, 0))
         // .connect("mysql://vincent:vincent@10.0.0.1/test2")
@@ -51,15 +63,11 @@ async fn main() -> anyhow::Result<()> {
         redis_pool,
     };
 
-    println!(
-        "{:?}",
-        records_lib::update_player(&db, &"adelete".to_string(), None).await?
-    );
-
-    // Filter traces based on the RUST_LOG env var, or, if it's not set,
-    // default to show the output of the example.
-    let filter = std::env::var("RUST_LOG")
-        .unwrap_or_else(|_| "tracing=info,warp=debug,game_api=trace".to_owned());
+    let cors = warp::cors()
+        .allow_origin("https://www.obstacle.ovh")
+        .allow_methods(vec!["GET", "POST"])
+        .allow_headers(vec![header::ACCEPT, header::CONTENT_TYPE])
+        .max_age(3600);
 
     // Configure the default `tracing` subscriber.
     // The `fmt` subscriber from the `tracing-subscriber` crate logs `tracing`
@@ -76,8 +84,9 @@ async fn main() -> anyhow::Result<()> {
     let routes = http::warp_routes(db.clone())
         .or(graphql::warp_routes(db))
         .recover(handle_rejection)
-        .with(warp::trace::request());
+        .with(warp::trace::request())
+        .with(cors);
 
-    warp::serve(routes).run(([0, 0, 0, 0], 8000)).await;
+    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
     Ok(())
 }
