@@ -284,14 +284,15 @@ pub async fn player_new_record(
         Ok((Some(old_record), new_record))
     } else {
         sqlx::query!(
-            "INSERT INTO records (player_id, map_id, time, respawn_count, try_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING player_id, map_id, time, respawn_count, try_count, created_at, updated_at",
+            "INSERT INTO records (player_id, map_id, time, respawn_count, try_count, created_at, updated_at, flags) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, player_id, map_id, time, respawn_count, try_count, created_at, updated_at, flags",
             player_id,
             map_id,
             time,
             respawn_count,
             1,
             now,
-            now
+            now,
+            flags
         )
         .map(|row: MySqlRow|  { Ok((None, Record::from_row(&row)?)) })
         .fetch_one(&db.mysql_pool)
