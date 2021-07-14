@@ -29,7 +29,6 @@ impl QueryRoot {
                 // Build the query string
                 let mut query = String::from("SELECT id, login, name FROM players ");
                 connections_append_query_string(&mut query, false, after, before, first, last);
-                dbg!(&query);
                 let reversed = first.is_none() && last.is_some();
 
                 // Bind the parameters

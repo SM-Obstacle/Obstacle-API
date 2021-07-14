@@ -131,6 +131,33 @@ pub async fn update_map(
     }
 }
 
+/// Returns the id of a map, creates it if it doesn't exist
+///
+/// # Arguments
+///
+/// * `db` - A data source
+/// * `login` - The maniaplanet account login
+///
+pub async fn select_or_insert_map(db: &Database, game_id: &str) -> Result<u32, RecordsError> {
+    let query = sqlx::query_scalar!("SELECT id from maps where game_id = ?", game_id);
+
+    if let Some(id) = query.fetch_optional(&db.mysql_pool).await? {
+        Ok(id)
+    } else {
+        sqlx::query!(
+            "INSERT INTO maps (game_id, player_id, name) VALUES (?, ?, ?) RETURNING id",
+            game_id,
+            "smokegun",
+            "Unknown map"
+        )
+        .map(|row: MySqlRow| -> Result<u32, sqlx::Error> { row.try_get(0) })
+        .fetch_one(&db.mysql_pool)
+        .await?
+        .map_err(|e| e.into())
+    }
+}
+
+
 /// Fetch a map from the database
 ///
 /// # Arguments

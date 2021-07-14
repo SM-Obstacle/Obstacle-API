@@ -130,8 +130,6 @@ impl Player {
                 let mut query = String::from("SELECT id, game_id, player_id, name FROM maps WHERE player_id = ? ");
                 connections_append_query_string(&mut query, true, after, before, first, last);
 
-                // dbg!(&query);
-
                 let reversed = first.is_none() && last.is_some();
 
                 // Bind the parameters

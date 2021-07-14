@@ -85,7 +85,7 @@ pub fn warp_routes(
 
     // POST player-finished {"time": 10, "respawnCount": 0, "playerId": "smokegun", "mapId": "XXX"}
     let new_player_finished = warp::post()
-        .and(warp::path("player-finished"))
+        .and(warp::path("player_finished"))
         .and(db_filter.clone())
         // Only accept bodies smaller than 16kb...
         .and(warp::body::content_length_limit(1024 * 16))
@@ -209,12 +209,11 @@ async fn overview(
     let mut redis_conn = db.redis_pool.get().await.unwrap();
 
     // Insert map and player if they dont exist yet
-    let map_id = records_lib::update_map(&db, &query.map_game_id, None, None).await?;
+    let map_id = records_lib::select_or_insert_map(&db, &query.map_game_id).await?;
     let player_id = records_lib::select_or_insert_player(&db, &query.player_login).await?;
 
     // Update redis if needed
     let key = format!("l0:{}", query.map_game_id);
-    dbg!(&key);
     let count = records_lib::update_redis_leaderboard(&db, &key, map_id).await? as u32;
 
     let mut ranked_records: Vec<RankedRecord> = vec![];
@@ -228,7 +227,7 @@ async fn overview(
     let mut start: u32 = 0;
     let mut end: u32;
 
-    if let Some(player_rank) = dbg!(player_rank) {
+    if let Some(player_rank) = player_rank {
         // The player has a record and is in top ROWS, display ROWS records
         if player_rank < ROWS {
             end = ROWS;
@@ -320,7 +319,7 @@ async fn player_finished(
         .any(|&banned_player| body.player_login == banned_player);
 
     // Insert map and player if they dont exist yet
-    let map_id = records_lib::update_map(&db, &body.map_game_id, None, None).await?;
+    let map_id = records_lib::select_or_insert_map(&db, &body.map_game_id).await?;
     let player_id = records_lib::select_or_insert_player(&db, &body.player_login).await?;
 
     if is_banned {

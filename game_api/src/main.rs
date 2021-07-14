@@ -16,6 +16,7 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
             StatusCode::BAD_REQUEST,
         ))
     } else if let Some(err) = err.find::<records_lib::RecordsError>() {
+        tracing::error!("RecordsError: {}", err.to_string());
         Ok(warp::reply::with_status(
             err.to_string(),
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -33,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     // Filter traces based on the RUST_LOG env var, or, if it's not set,
     // default to show the output of the example.
     let filter = std::env::var("RECORDS_API_LOG")
-        .unwrap_or_else(|_| "tracing=info,warp=debug,game_api=trace".to_owned());
+        .unwrap_or_else(|_| "tracing=info,warp=info,game_api=info".to_owned());
 
     let mut port = 3000 as u16;
     if let Ok(s) = std::env::var("RECORDS_API_PORT") {
@@ -54,7 +55,6 @@ async fn main() -> anyhow::Result<()> {
             connection: None,
             pool: None,
         };
-        dbg!(&cfg);
         cfg.create_pool().unwrap()
     };
 
