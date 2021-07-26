@@ -271,11 +271,12 @@ pub async fn player_new_record(
             let _added: i64 = redis_conn.zadd(&key, player_id, time).await.unwrap_or(0);
             let _count = update_redis_leaderboard(db, &key, map_id).await?;
 
-            sqlx::query!("UPDATE records SET time = ?, respawn_count = ?, try_count = ?, updated_at = ?  WHERE id = ?",
+            sqlx::query!("UPDATE records SET time = ?, respawn_count = ?, try_count = ?, updated_at = ?, flags = ? WHERE id = ?",
                         new_record.time,
                         new_record.respawn_count,
                         new_record.try_count,
                         new_record.updated_at,
+                        new_record.flags,
                         new_record.id)
                 .execute(&db.mysql_pool)
                 .await?;
