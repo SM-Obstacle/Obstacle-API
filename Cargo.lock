@@ -955,6 +955,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ladder_score"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "deadpool",
+ "deadpool-redis",
+ "records_lib",
+ "serde",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
