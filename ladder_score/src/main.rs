@@ -28,6 +28,26 @@ impl MapStats
     }
 }
 
+fn compute_score(r: f64, rn: f64, t: f64, average_record: f64) -> f64 {
+    let record_score = (1000.0 * (rn * rn)).log10() + ((average_record - t).powi(2) + 1.0).log10();
+    let record_score = record_score * ((rn / r) + 1.0).log10().powi(3);
+    record_score
+}
+
+async fn compute_map_score(mysql_pool: &mysql::MySqlPool, map_stats: &HashMap<u32, MapStats>, map_id: u32) -> f64
+{
+    let stats = &map_stats[&map_id];
+    let map_records = sqlx::query_as!(Record, "SELECT * from records WHERE map_id = ? ORDER BY time", map_id).fetch_all(mysql_pool).await.unwrap();
+    let to_sec = |time: i32| (time as f64) / 1000.0;
+
+    let r  = 1.0;
+    let rn = stats.records_count;
+    let t  = to_sec(map_records[0].time);
+    let t  = t.max(stats.average_record);
+
+    compute_score(r, rn, t, stats.average_record)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mysql_pool = mysql::MySqlPoolOptions::new()
@@ -83,8 +103,7 @@ async fn main() -> anyhow::Result<()> {
             let t  = to_sec(record.time);
             let t  = t.max(stats.average_record);
 
-            let record_score = (1000.0 * (rn * rn)).log10() + ((stats.average_record - t).powi(2) + 1.0).log10();
-            let record_score = record_score * ((rn / r) + 1.0).log10().powi(3);
+            let record_score = compute_score(r, rn, t, stats.average_record);
 
             *map_scores.entry(record.map_id).or_insert(0.0) += record_score;
             *player_scores.entry(record.player_id).or_insert(0.0) += record_score;
@@ -93,9 +112,20 @@ async fn main() -> anyhow::Result<()> {
         map_stats.insert(map.id, stats);
     }
 
+
+    let id = 16284;
+    let map = &maps[&id];
+    println!("r1 for map #{} \"{}\": {} pts of {} total.", map.id, map.name, compute_map_score(&mysql_pool, &map_stats, map.id).await, &map_scores[&id]);
+
+
+    let id = 38179;
+    let map = &maps[&id];
+    println!("r1 for map #{} \"{}\": {} pts of {} total.", map.id, map.name, compute_map_score(&mysql_pool, &map_stats, map.id).await, &map_scores[&id]);
+
+
+
     let mut player_scores = player_scores.into_iter().collect::<Vec<_>>();
     player_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
     let mut map_scores = map_scores.into_iter().collect::<Vec<_>>();
     map_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
