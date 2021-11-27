@@ -5,7 +5,6 @@ pub mod models;
 pub mod escape;
 
 use crate::models::*;
-use escape::*;
 use chrono::Utc;
 pub use database::*;
 use deadpool_redis::redis::AsyncCommands;
@@ -25,14 +24,12 @@ pub async fn update_player(
 ) -> Result<u32, RecordsError> {
     let name = name.unwrap_or(login);
 
-    let escaped_name = format!("{}", Escape(&name));
-
     let player_id = sqlx::query_scalar!("SELECT id from players where login = ?", login)
         .fetch_optional(&db.mysql_pool)
         .await?;
 
     if let Some(player_id) = player_id {
-        sqlx::query!("UPDATE players SET name = ? WHERE id = ?", escaped_name, player_id)
+        sqlx::query!("UPDATE players SET name = ? WHERE id = ?", name, player_id)
             .execute(&db.mysql_pool)
             .await?;
 
@@ -41,7 +38,7 @@ pub async fn update_player(
         sqlx::query!(
             "INSERT INTO players (login, name) VALUES (?, ?) RETURNING id",
             login,
-            escaped_name
+            name
         )
         .map(|row: MySqlRow| -> Result<u32, sqlx::Error> { row.try_get(0) })
         .fetch_one(&db.mysql_pool)
@@ -102,7 +99,6 @@ pub async fn update_map(
     db: &Database, game_id: &str, name: Option<&str>, author_login: Option<&str>,
 ) -> Result<u32, RecordsError> {
     let name = name.unwrap_or("Unknown map");
-    let escaped_name = format!("{}", Escape(&name));
 
     let author_login = author_login.unwrap_or("smokegun");
 
@@ -115,7 +111,7 @@ pub async fn update_map(
     if let Some(map_id) = map_id {
         sqlx::query!(
             "UPDATE maps SET name = ?, player_id = ? WHERE id = ?",
-            escaped_name,
+            name,
             player_id,
             map_id
         )
@@ -128,7 +124,7 @@ pub async fn update_map(
             "INSERT INTO maps (game_id, player_id, name) VALUES (?, ?, ?) RETURNING id",
             game_id,
             player_id,
-            escaped_name
+            name
         )
         .map(|row: MySqlRow| -> Result<u32, sqlx::Error> { row.try_get(0) })
         .fetch_one(&db.mysql_pool)

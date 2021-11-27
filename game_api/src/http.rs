@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{mysql, FromRow};
 use std::vec::Vec;
 use warp::Filter;
+use records_lib::escape::*;
 
 #[derive(Deserialize)]
 pub struct OverviewQuery {
@@ -187,7 +188,11 @@ async fn append_range(
     }
 
     let records = query
-        .map(|row: mysql::MySqlRow| RankedRecord::from_row(&row).unwrap())
+        .map(|row: mysql::MySqlRow| {
+            let mut record = RankedRecord::from_row(&row).unwrap();
+            record.nickname = format!("{}", Escape(&record.nickname));
+            record
+        })
         .fetch_all(&db.mysql_pool)
         .await
         .unwrap()
@@ -278,14 +283,16 @@ async fn update_player(
     db: records_lib::Database, body: UpdatePlayerBody,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let player_id = records_lib::update_player(&db, &body.login, Some(&body.nickname)).await?;
-    let player = records_lib::select_player(&db, player_id).await?;
+    let mut player = records_lib::select_player(&db, player_id).await?;
+    player.name = format!("{}", Escape(&player.name));
     Ok(xml::reply::xml(&player))
 }
 
 async fn select_player(
     db: records_lib::Database, player_id: u32,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let player = records_lib::select_player(&db, player_id).await?;
+    let mut player = records_lib::select_player(&db, player_id).await?;
+    player.name = format!("{}", Escape(&player.name));
     Ok(xml::reply::xml(&player))
 }
 
@@ -299,14 +306,16 @@ async fn update_map(
         Some(&body.player_login),
     )
     .await?;
-    let map = records_lib::select_map(&db, map_id).await?;
+    let mut map = records_lib::select_map(&db, map_id).await?;
+    map.name = format!("{}", Escape(&map.name));
     Ok(xml::reply::xml(&map))
 }
 
 async fn select_map(
     db: records_lib::Database, map_id: u32,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let map = records_lib::select_map(&db, map_id).await?;
+    let mut map = records_lib::select_map(&db, map_id).await?;
+    map.name = format!("{}", Escape(&map.name));
     Ok(xml::reply::xml(&map))
 }
 
