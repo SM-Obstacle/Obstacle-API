@@ -2,7 +2,10 @@ use sqlx::mysql;
 use std::convert::Infallible;
 use std::time::Duration;
 use tracing_subscriber::fmt::format::FmtSpan;
-use warp::{http::{StatusCode, header}, Filter, Rejection, Reply};
+use warp::{
+    http::{header, StatusCode},
+    Filter, Rejection, Reply,
+};
 
 pub mod graphql;
 pub mod http;
@@ -46,12 +49,13 @@ async fn main() -> anyhow::Result<()> {
     let mysql_pool = mysql::MySqlPoolOptions::new()
         .connect_timeout(Duration::new(10, 0))
         // .connect("mysql://vincent:vincent@10.0.0.1/test2")
-        .connect("mysql://root:root@localhost/test2")
+        .connect("mysql://root:root@localhost/obstacle_records")
         .await?;
 
     let redis_pool = {
         let cfg = deadpool_redis::Config {
-            url: Some("redis://10.0.0.1/".to_string()),
+            // url: Some("redis://10.0.0.1/".to_string()),
+            url: Some("redis://localhost/".to_string()),
             connection: None,
             pool: None,
         };
@@ -64,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let cors = warp::cors()
+        // .allow_any_origin()
         .allow_origin("https://www.obstacle.ovh")
         .allow_methods(vec!["GET", "POST"])
         .allow_headers(vec![header::ACCEPT, header::CONTENT_TYPE])
