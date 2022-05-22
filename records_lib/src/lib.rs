@@ -1,8 +1,8 @@
 pub mod database;
 pub mod error;
+pub mod escape;
 pub mod graphql;
 pub mod models;
-pub mod escape;
 
 use crate::models::*;
 use chrono::Utc;
@@ -159,7 +159,6 @@ pub async fn select_or_insert_map(db: &Database, game_id: &str) -> Result<u32, R
     }
 }
 
-
 /// Fetch a map from the database
 ///
 /// # Arguments
@@ -222,6 +221,8 @@ pub async fn update_redis_leaderboard(
                 .fetch_all(&db.mysql_pool)
                 .await?;
 
+        let _removed_count: i64 = redis_conn.del(key).await.unwrap_or(0);
+
         for record in all_map_records {
             let _: i64 = redis_conn
                 .zadd(key, record.player_id, record.time)
@@ -244,7 +245,8 @@ pub async fn update_redis_leaderboard(
 /// * `respawn_count` - The new record's respawn count
 ///
 pub async fn player_new_record(
-    db: &Database, map_game_id: &str, map_id: u32, player_id: u32, time: i32, respawn_count: i32, flags: u32,
+    db: &Database, map_game_id: &str, map_id: u32, player_id: u32, time: i32, respawn_count: i32,
+    flags: u32,
 ) -> Result<(Option<Record>, Record), RecordsError> {
     let mut redis_conn = db.redis_pool.get().await.unwrap();
 
