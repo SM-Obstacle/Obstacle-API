@@ -40,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "tracing=info,warp=info,game_api=info".to_owned());
 
     let mut port = 3000 as u16;
+    // let mut port = 3001 as u16;
     if let Ok(s) = std::env::var("RECORDS_API_PORT") {
         if let Ok(env_port) = s.parse::<u16>() {
             port = env_port;
@@ -48,13 +49,14 @@ async fn main() -> anyhow::Result<()> {
 
     let mysql_pool = mysql::MySqlPoolOptions::new()
         .connect_timeout(Duration::new(10, 0))
-        // .connect("mysql://vincent:vincent@10.0.0.1/test2")
+        // .connect("mysql://records_api:api@localhost/obs_records")
         .connect("mysql://root:root@localhost/obstacle_records")
         .await?;
 
     let redis_pool = {
         let cfg = deadpool_redis::Config {
             // url: Some("redis://10.0.0.1/".to_string()),
+            // url: Some("redis://127.0.0.1:6379/".to_string()),
             url: Some("redis://localhost/".to_string()),
             connection: None,
             pool: None,
@@ -92,6 +94,10 @@ async fn main() -> anyhow::Result<()> {
         .with(warp::trace::request())
         .with(cors);
 
+    // let key = include_bytes!("../../cert/localhost.decrypted.key");
+    // let cert = include_bytes!("../../cert/localhost.crt");
+
+    // warp::serve(routes).tls().cert(cert).key(key).run(([0, 0, 0, 0], port)).await;
     warp::serve(routes).run(([0, 0, 0, 0], port)).await;
     Ok(())
 }
