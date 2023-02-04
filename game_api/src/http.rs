@@ -288,7 +288,7 @@ async fn update_player(
     Ok(xml::reply::xml(&player))
 }
 
-async fn select_player(
+async fn _select_player(
     db: records_lib::Database, player_id: u32,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let mut player = records_lib::select_player(&db, player_id).await?;
@@ -311,7 +311,7 @@ async fn update_map(
     Ok(xml::reply::xml(&map))
 }
 
-async fn select_map(
+async fn _select_map(
     db: records_lib::Database, map_id: u32,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let mut map = records_lib::select_map(&db, map_id).await?;

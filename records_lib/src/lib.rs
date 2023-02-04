@@ -9,7 +9,7 @@ use chrono::Utc;
 pub use database::*;
 use deadpool_redis::redis::AsyncCommands;
 pub use error::RecordsError;
-use sqlx::{mysql::MySqlRow, FromRow, Row};
+use sqlx::{mysql::MySqlRow, Row};
 
 /// Update a player login and nickname, it will create the player if it doesn't exists and returns its id
 ///
