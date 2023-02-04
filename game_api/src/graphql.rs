@@ -149,15 +149,21 @@ impl QueryRoot {
 
     // Old website
 
-    async fn map(&self, ctx: &async_graphql::Context<'_>, game_id: String) -> async_graphql::Result<Map>
-    {
+    async fn map(
+        &self, ctx: &async_graphql::Context<'_>, game_id: String,
+    ) -> async_graphql::Result<Map> {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let query = sqlx::query_as!(Map, "SELECT id, game_id, player_id, name FROM maps WHERE game_id = ? ", game_id);
+        let query = sqlx::query_as!(
+            Map,
+            "SELECT id, game_id, player_id, name FROM maps WHERE game_id = ? ",
+            game_id
+        );
         Ok(query.fetch_one(mysql_pool).await?)
     }
 
-    async fn player(&self, ctx: &async_graphql::Context<'_>, login: String) -> async_graphql::Result<Player>
-    {
+    async fn player(
+        &self, ctx: &async_graphql::Context<'_>, login: String,
+    ) -> async_graphql::Result<Player> {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
         let query = sqlx::query_as!(Player, "SELECT * FROM players WHERE login = ? ", login);
         Ok(query.fetch_one(mysql_pool).await?)
@@ -178,10 +184,7 @@ impl QueryRoot {
         );
 
         let mut records = query
-            .map(|record: Record| RankedRecord {
-                rank: 0,
-                record,
-            })
+            .map(|record: Record| RankedRecord { rank: 0, record })
             .fetch_all(mysql_pool)
             .await
             .unwrap()
@@ -189,14 +192,23 @@ impl QueryRoot {
             .collect::<Vec<_>>();
 
         for mut record in &mut records {
-            let map_game_id = sqlx::query_scalar!("SELECT game_id from maps where id = ?", record.record.map_id)
-                .fetch_one(&db.mysql_pool)
-                .await?;
+            let map_game_id = sqlx::query_scalar!(
+                "SELECT game_id from maps where id = ?",
+                record.record.map_id
+            )
+            .fetch_one(&db.mysql_pool)
+            .await?;
             let key = format!("l0:{}", map_game_id);
-            let mut player_rank: Option<i64> = redis_conn.zrank(&key, record.record.player_id).await.unwrap();
+            let mut player_rank: Option<i64> = redis_conn
+                .zrank(&key, record.record.player_id)
+                .await
+                .unwrap();
             if player_rank.is_none() {
                 records_lib::update_redis_leaderboard(db, &key, record.record.map_id).await?;
-                player_rank = redis_conn.zrank(&key, record.record.player_id).await.unwrap();
+                player_rank = redis_conn
+                    .zrank(&key, record.record.player_id)
+                    .await
+                    .unwrap();
             }
 
             record.rank = player_rank.map(|r: i64| (r as u64) as i32).unwrap_or(-1) + 1;
@@ -268,6 +280,7 @@ pub fn warp_routes(
         .with(warp::trace::named("graphql_playground"));
 
     println!("Playground: http://localhost:8000/graphql");
+    // println!("Playground: http://localhost:3001/graphql");
 
     warp::path("graphql").and(graphql_playground.or(graphql_post))
 }
