@@ -21,9 +21,8 @@ pub fn decode_id(id: Option<&ID>) -> Option<u32> {
     }
 }
 
-pub fn connections_append_query_string(
+pub fn connections_append_query_string_page(
     query: &mut String, has_where_clause: bool, after: Option<u32>, before: Option<u32>,
-    first: Option<usize>, last: Option<usize>,
 ) {
     if before.is_some() || after.is_some() {
         query.push_str(if !has_where_clause { "WHERE " } else { "and " });
@@ -35,12 +34,24 @@ pub fn connections_append_query_string(
             _ => unreachable!(),
         }
     }
+}
 
+pub fn connections_append_query_string_order(
+    query: &mut String, first: Option<usize>, last: Option<usize>,
+) {
     if first.is_some() {
         query.push_str("ORDER BY id ASC LIMIT ? "); // first
     } else if last.is_some() {
         query.push_str("ORDER BY id DESC LIMIT ? "); // last
     }
+}
+
+pub fn connections_append_query_string(
+    query: &mut String, has_where_clause: bool, after: Option<u32>, before: Option<u32>,
+    first: Option<usize>, last: Option<usize>,
+) {
+    connections_append_query_string_page(query, has_where_clause, after, before);
+    connections_append_query_string_order(query, first, last);
 }
 
 pub type SqlQuery<'q> = sqlx::query::Query<
@@ -49,18 +60,21 @@ pub type SqlQuery<'q> = sqlx::query::Query<
     <mysql::MySql as sqlx::database::HasArguments<'q>>::Arguments,
 >;
 
-pub fn connections_bind_query_parameters(
-    query: SqlQuery, after: Option<u32>, before: Option<u32>, first: Option<usize>,
-    last: Option<usize>,
+pub fn connections_bind_query_parameters_page(
+    mut query: SqlQuery, after: Option<u32>, before: Option<u32>,
 ) -> SqlQuery {
-    let mut query = query;
     match (before, after) {
         (Some(before), Some(after)) => query = query.bind(before).bind(after),
         (Some(before), _) => query = query.bind(before),
         (_, Some(after)) => query = query.bind(after),
         _ => {}
     }
+    query
+}
 
+pub fn connections_bind_query_parameters_order(
+    mut query: SqlQuery, first: Option<usize>, last: Option<usize>,
+) -> SqlQuery {
     // Actual limits are N+1 to check if previous/next pages
     if let Some(first) = first {
         query = query.bind(first as u32 + 1);
@@ -68,6 +82,15 @@ pub fn connections_bind_query_parameters(
         query = query.bind(last as u32 + 1);
     }
 
+    query
+}
+
+pub fn connections_bind_query_parameters(
+    mut query: SqlQuery, after: Option<u32>, before: Option<u32>, first: Option<usize>,
+    last: Option<usize>,
+) -> SqlQuery {
+    query = connections_bind_query_parameters_page(query, after, before);
+    query = connections_bind_query_parameters_order(query, first, last);
     query
 }
 
@@ -177,10 +200,7 @@ impl Player {
         );
 
         let mut records = query
-            .map(|record: Record| RankedRecord {
-                rank: 0,
-                record,
-            })
+            .map(|record: Record| RankedRecord { rank: 0, record })
             .fetch_all(mysql_pool)
             .await
             .unwrap()
@@ -188,9 +208,12 @@ impl Player {
             .collect::<Vec<_>>();
 
         for mut record in &mut records {
-            let map_game_id = sqlx::query_scalar!("SELECT game_id from maps where id = ?", record.record.map_id)
-                .fetch_one(&db.mysql_pool)
-                .await?;
+            let map_game_id = sqlx::query_scalar!(
+                "SELECT game_id from maps where id = ?",
+                record.record.map_id
+            )
+            .fetch_one(&db.mysql_pool)
+            .await?;
             let key = format!("l0:{}", map_game_id);
             let mut player_rank: Option<i64> = redis_conn.zrank(&key, self.id).await.unwrap();
             if player_rank.is_none() {
