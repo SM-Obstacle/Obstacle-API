@@ -150,15 +150,19 @@ impl Player {
                 let before = decode_id(before.as_ref());
 
                 // Build the query string
-                let mut query = String::from("SELECT id, game_id, player_id, name FROM maps WHERE player_id = ? ");
-                connections_append_query_string(&mut query, true, after, before, first, last);
+                let mut query = String::from("SELECT id, game_id, player_id, name FROM maps m1 WHERE player_id = ? ");
+                connections_append_query_string_page(&mut query, true, after, before);
+                query.push_str(" GROUP BY name HAVING id = (SELECT MAX(id) FROM maps m2 WHERE player_id = ? AND m1.name = m2.name)");
+                connections_append_query_string_order(&mut query, first, last);
 
                 let reversed = first.is_none() && last.is_some();
 
                 // Bind the parameters
                 let mut query = sqlx::query(&query);
                 query = query.bind(self.id);
-                query = connections_bind_query_parameters(query, after, before, first, last);
+                query = connections_bind_query_parameters_page(query, after, before);
+                query = query.bind(self.id);
+                query = connections_bind_query_parameters_order(query, first, last);
 
                 // Execute the query
                 let mysql_pool = ctx.data_unchecked::<MySqlPool>();
