@@ -227,6 +227,15 @@ fn create_schema(db: records_lib::Database) -> Schema {
     .finish();
 
     println!("Schema:");
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(format!("schema_{}.graphql", chrono::Utc::now().timestamp()))
+        .unwrap()
+        .write_all(schema.sdl().as_bytes())
+        .unwrap();
+
     println!("{}", &schema.sdl());
 
     schema
