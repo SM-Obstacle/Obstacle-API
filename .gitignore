@@ -1,2 +1,5 @@
 target
 .env
+schema_*
+python_*
+cert
