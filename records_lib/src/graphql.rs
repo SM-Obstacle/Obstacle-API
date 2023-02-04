@@ -266,15 +266,23 @@ impl Map {
         crate::update_redis_leaderboard(db, &key, self.id).await?;
 
         let record_ids: Vec<i32> = redis_conn.zrange(key, 0, 99).await.unwrap();
+        let player_cond = if record_ids.is_empty() {
+            "".to_string()
+        } else {
+            format!(
+                "AND player_id IN ({})",
+                record_ids
+                    .iter()
+                    .map(|_| "?".to_string())
+                    .collect::<Vec<String>>()
+                    .join(",")
+            )
+        };
 
         // Query the records with these ids
         let query = format!(
-            "SELECT * FROM records WHERE map_id = ? AND player_id IN ({}) ORDER BY time ASC",
-            record_ids
-                .iter()
-                .map(|_| "?".to_string())
-                .collect::<Vec<String>>()
-                .join(",")
+            "SELECT * FROM records WHERE map_id = ? {} ORDER BY time ASC",
+            player_cond
         );
 
         let mut query = sqlx::query(&query);
