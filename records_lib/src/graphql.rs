@@ -181,8 +181,8 @@ impl Player {
 
                 let (has_previous_page, has_next_page) = connections_pages_info(maps.len(), first, last);
                 let mut connection = connection::Connection::new(has_previous_page, has_next_page);
-                connection.append(maps);
-                Ok(connection)
+                connection.edges.extend(maps);
+                Ok::<_, sqlx::Error>(connection)
             },
         )
         .await

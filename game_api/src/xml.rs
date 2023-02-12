@@ -1,9 +1,17 @@
 pub mod reply {
 
+    use actix_web::{
+        body::{BodySize, MessageBody},
+        web,
+    };
     use serde::{ser::StdError, Serialize};
     use serde_xml_rs::ser::Serializer;
-    use std::fmt;
     use std::io::prelude::*;
+    use std::{
+        fmt,
+        pin::Pin,
+        task::{Context, Poll},
+    };
     use warp::{
         http::{header, HeaderValue, StatusCode},
         reply::{Reply, Response},
@@ -85,6 +93,27 @@ pub mod reply {
                     res
                 }
                 Err(()) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+        }
+    }
+
+    impl MessageBody for Xml {
+        type Error = String;
+
+        fn size(&self) -> BodySize {
+            match self.inner {
+                Ok(ref body) => BodySize::Sized(body.len() as u64),
+                Err(_) => BodySize::Sized(0),
+            }
+        }
+
+        fn poll_next(
+            mut self: Pin<&mut Self>, cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<web::Bytes, Self::Error>>> {
+            if let Ok(ref mut body) = self.inner {
+                <Vec<u8> as MessageBody>::poll_next(Pin::new(body), cx).map_err(|_| "".to_owned())
+            } else {
+                Poll::Ready(Some(Err("error generating XML".to_owned())))
             }
         }
     }

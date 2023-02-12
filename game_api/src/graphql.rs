@@ -1,10 +1,10 @@
+use actix_web::web::{self, Data};
+use actix_web::{get, post, HttpResponse, Responder};
+use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use async_graphql::{connection, dataloader, ID};
-use async_graphql_warp::Response;
+use async_graphql_actix_web::GraphQLRequest;
 use sqlx::{mysql, FromRow, MySqlPool, Row};
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::{convert::Infallible, vec::Vec};
-use warp::{http::Response as HttpResponse, Filter, Rejection};
+use std::vec::Vec;
 
 use deadpool_redis::redis::AsyncCommands;
 
@@ -53,9 +53,9 @@ impl QueryRoot {
 
                 let (has_previous_page, has_next_page) = connections_pages_info(players.len(), first, last);
                 let mut connection = connection::Connection::new(has_previous_page, has_next_page);
-                connection.append(players);
+                connection.edges.extend(players);
 
-                Ok(connection)
+                Ok::<_, sqlx::Error>(connection)
             },
         )
         .await
@@ -107,10 +107,10 @@ impl QueryRoot {
 
                 let (has_previous_page, has_next_page) = connections_pages_info(maps.len(), first, last);
                 let mut connection = connection::Connection::new(has_previous_page, has_next_page);
-                connection.append(maps);
+                connection.edges.extend(maps);
 
                 println!("root maps: done connection {:.3?}", time_start.elapsed().unwrap());
-                Ok(connection)
+                Ok::<_, sqlx::Error>(connection)
             },
         )
         .await
@@ -224,63 +224,57 @@ pub type Schema = async_graphql::Schema<
     async_graphql::EmptySubscription,
 >;
 
-fn create_schema(db: records_lib::Database) -> Schema {
+pub fn create_schema(db: records_lib::Database) -> Schema {
     let schema = async_graphql::Schema::build(
         QueryRoot,
         async_graphql::EmptyMutation,
         async_graphql::EmptySubscription,
     )
     .extension(async_graphql::extensions::ApolloTracing)
-    .data(dataloader::DataLoader::new(PlayerLoader::new(db.clone())))
-    .data(dataloader::DataLoader::new(MapLoader::new(
-        db.mysql_pool.clone(),
-    )))
+    .data(dataloader::DataLoader::new(
+        PlayerLoader::new(db.clone()),
+        tokio::spawn,
+    ))
+    .data(dataloader::DataLoader::new(
+        MapLoader::new(db.mysql_pool.clone()),
+        tokio::spawn,
+    ))
     .data(db.mysql_pool.clone())
     .data(db.redis_pool.clone())
     .data(db)
     .finish();
 
-    println!("Schema:");
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(format!("schema_{}.graphql", chrono::Utc::now().timestamp()))
-        .unwrap()
-        .write_all(schema.sdl().as_bytes())
-        .unwrap();
+    #[cfg(feature = "output_gql_schema")]
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        println!("Schema:");
+        OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(format!(
+                "schemas/schema_{}.graphql",
+                chrono::Utc::now().timestamp()
+            ))
+            .unwrap()
+            .write_all(schema.sdl().as_bytes())
+            .unwrap();
+    }
 
     println!("{}", &schema.sdl());
 
     schema
 }
 
-pub fn warp_routes(
-    db: records_lib::Database,
-) -> impl Filter<Extract = impl warp::Reply, Error = Rejection> + Clone {
-    let schema = create_schema(db);
+#[post("/graphql")]
+pub async fn index_graphql(schema: Data<Schema>, request: GraphQLRequest) -> impl Responder {
+    web::Json(schema.execute(request.into_inner()).await)
+}
 
-    let graphql_post = async_graphql_warp::graphql(schema)
-        .and_then(
-            |(schema, request): (Schema, async_graphql::Request)| async move {
-                Ok::<_, Infallible>(Response::from(schema.execute(request).await))
-            },
-        )
-        .with(warp::trace::named("graphql_post"));
-
-    let graphql_playground = warp::path::end()
-        .and(warp::get())
-        .map(|| {
-            HttpResponse::builder()
-                .header("content-type", "text/html")
-                .body(async_graphql::http::playground_source(
-                    async_graphql::http::GraphQLPlaygroundConfig::new("/graphql"),
-                ))
-        })
-        .with(warp::trace::named("graphql_playground"));
-
-    println!("Playground: http://localhost:8000/graphql");
-    // println!("Playground: http://localhost:3001/graphql");
-
-    warp::path("graphql").and(graphql_playground.or(graphql_post))
+#[get("/graphql")]
+pub async fn index_playground() -> impl Responder {
+    HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(playground_source(GraphQLPlaygroundConfig::new("/graphql")))
 }

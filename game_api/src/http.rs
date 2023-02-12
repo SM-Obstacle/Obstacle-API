@@ -1,10 +1,17 @@
-use crate::xml;
+use crate::xml::{
+    self,
+    reply::{self, xml_elements},
+};
+use actix_web::{
+    get, post,
+    web::{Data, Json, Query},
+    Responder,
+};
 use deadpool_redis::redis::AsyncCommands;
+use records_lib::escape::*;
 use serde::{Deserialize, Serialize};
 use sqlx::{mysql, FromRow};
 use std::vec::Vec;
-use warp::Filter;
-use records_lib::escape::*;
 
 #[derive(Deserialize)]
 pub struct OverviewQuery {
@@ -49,105 +56,6 @@ pub struct HasFinishedResponse {
     pub login: String,
     pub old: i32,
     pub new: i32,
-}
-
-pub fn warp_routes(
-    db: records_lib::Database,
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    let db_filter = warp::any().map(move || db.clone());
-
-    // GET /overview?mapId=XXXXX&playerId=XXXXXX
-    let new_overview = warp::get()
-        .and(warp::path("overview"))
-        .and(db_filter.clone())
-        .and(warp::query::<OverviewQuery>())
-        .and_then(overview)
-        .with(warp::trace::named("overview"));
-
-    // POST /update_player  {"login": "smokegun","nickname": "looser"}
-    let new_update_player = warp::post()
-        .and(warp::path("update_player"))
-        .and(db_filter.clone())
-        // Only accept bodies smaller than 16kb...
-        .and(warp::body::content_length_limit(1024 * 16))
-        .and(warp::body::json())
-        .and_then(update_player)
-        .with(warp::trace::named("update_player"));
-
-    // POST /update_map  {"name": "XXX","maniaplanetMapId": "XXX", "playerId": "XXX"}
-    let new_update_map = warp::post()
-        .and(warp::path("update_map"))
-        .and(db_filter.clone())
-        // Only accept bodies smaller than 16kb...
-        .and(warp::body::content_length_limit(1024 * 16))
-        .and(warp::body::json())
-        .and_then(update_map)
-        .with(warp::trace::named("update_map"));
-
-    // POST player-finished {"time": 10, "respawnCount": 0, "playerId": "smokegun", "mapId": "XXX"}
-    let new_player_finished = warp::post()
-        .and(warp::path("player_finished"))
-        .and(db_filter.clone())
-        // Only accept bodies smaller than 16kb...
-        .and(warp::body::content_length_limit(1024 * 16))
-        .and(warp::body::json())
-        .and_then(player_finished)
-        .with(warp::trace::named("player-finished"));
-
-
-    let compat_prefix = warp::path("api");
-
-    // GET /api/Records/overview?mapId=XXXXX&playerId=XXXXXX
-    let compat_overview = warp::get()
-        .and(warp::path("Records"))
-        .and(warp::path("overview"))
-        .and(db_filter.clone())
-        .and(warp::query::<OverviewQuery>())
-        .and_then(overview)
-        .with(warp::trace::named("overview"));
-
-    // POST /api/Players/replaceOrCreate  {"login": "smokegun","nickname": "looser"}
-    let compat_update_player = warp::post()
-        .and(warp::path("Players"))
-        .and(warp::path("replaceOrCreate"))
-        .and(db_filter.clone())
-        // Only accept bodies smaller than 16kb...
-        .and(warp::body::content_length_limit(1024 * 16))
-        .and(warp::body::json())
-        .and_then(update_player)
-        .with(warp::trace::named("update_player"));
-
-    // POST /api/Maps/replaceOrCreate  {"name": "XXX","maniaplanetMapId": "XXX", "playerId": "XXX"}
-    let compat_update_map = warp::post()
-        .and(warp::path("Maps"))
-        .and(warp::path("replaceOrCreate"))
-        .and(db_filter.clone())
-        // Only accept bodies smaller than 16kb...
-        .and(warp::body::content_length_limit(1024 * 16))
-        .and(warp::body::json())
-        .and_then(update_map)
-        .with(warp::trace::named("update_map"));
-
-    // POST /api/Records/player-finished {"time": 10, "respawnCount": 0, "playerId": "smokegun", "mapId": "XXX"}
-    let compat_player_finished = warp::post()
-        .and(warp::path("Records"))
-        .and(warp::path("player-finished"))
-        .and(db_filter)
-        // Only accept bodies smaller than 16kb...
-        .and(warp::body::content_length_limit(1024 * 16))
-        .and(warp::body::json())
-        .and_then(player_finished)
-        .with(warp::trace::named("player-finished"));
-
-    let compat_routes = compat_prefix.and(
-        compat_overview.or(compat_update_player).or(compat_update_map).or(compat_player_finished)
-    );
-
-    new_overview
-        .or(new_update_player)
-        .or(new_update_map)
-        .or(new_player_finished)
-        .or(compat_routes)
 }
 
 #[derive(Clone, Deserialize, Serialize, sqlx::FromRow)]
@@ -208,9 +116,23 @@ async fn append_range(
     }
 }
 
-async fn overview(
-    db: records_lib::Database, query: OverviewQuery,
-) -> Result<impl warp::Reply, warp::Rejection> {
+#[get("/overview")]
+pub async fn overview(
+    db: Data<records_lib::Database>, query: Query<OverviewQuery>,
+) -> impl Responder {
+    inner_overview_query(db, query).await
+}
+
+#[get("/api/Records/overview")]
+pub async fn overview_compat(
+    db: Data<records_lib::Database>, query: Query<OverviewQuery>,
+) -> impl Responder {
+    inner_overview_query(db, query).await
+}
+
+async fn inner_overview_query(
+    db: Data<records_lib::Database>, query: Query<OverviewQuery>,
+) -> impl Responder {
     let mut redis_conn = db.redis_pool.get().await.unwrap();
 
     // Insert map and player if they dont exist yet
@@ -276,16 +198,38 @@ async fn overview(
         }
     }
 
-    Ok(xml::reply::xml_elements(&ranked_records))
+    Ok::<_, records_lib::RecordsError>(
+        actix_web::dev::Response::ok()
+            .map_body(|_, _| xml_elements(&ranked_records))
+            .map_into_boxed_body(),
+    )
 }
 
-async fn update_player(
-    db: records_lib::Database, body: UpdatePlayerBody,
-) -> Result<impl warp::Reply, warp::Rejection> {
+#[post("/update_player")]
+pub async fn update_player(
+    db: Data<records_lib::Database>, body: Json<UpdatePlayerBody>,
+) -> impl Responder {
+    inner_update_player(db, body).await
+}
+
+#[post("/api/Players/replaceOrCreate")]
+pub async fn update_player_compat(
+    db: Data<records_lib::Database>, body: Json<UpdatePlayerBody>,
+) -> impl Responder {
+    inner_update_player(db, body).await
+}
+
+async fn inner_update_player(
+    db: Data<records_lib::Database>, body: Json<UpdatePlayerBody>,
+) -> impl Responder {
     let player_id = records_lib::update_player(&db, &body.login, Some(&body.nickname)).await?;
     let mut player = records_lib::select_player(&db, player_id).await?;
     player.name = format!("{}", Escape(&player.name));
-    Ok(xml::reply::xml(&player))
+    Ok::<_, records_lib::RecordsError>(
+        actix_web::dev::Response::ok()
+            .map_body(|_, _| reply::xml(&player))
+            .map_into_boxed_body(),
+    )
 }
 
 async fn _select_player(
@@ -296,9 +240,23 @@ async fn _select_player(
     Ok(xml::reply::xml(&player))
 }
 
-async fn update_map(
-    db: records_lib::Database, body: UpdateMapBody,
-) -> Result<impl warp::Reply, warp::Rejection> {
+#[post("/update_map")]
+pub async fn update_map(
+    db: Data<records_lib::Database>, body: Json<UpdateMapBody>,
+) -> impl Responder {
+    inner_update_map(db, body).await
+}
+
+#[post("/api/Maps/replaceOrCreate")]
+pub async fn update_map_compat(
+    db: Data<records_lib::Database>, body: Json<UpdateMapBody>,
+) -> impl Responder {
+    inner_update_map(db, body).await
+}
+
+async fn inner_update_map(
+    db: Data<records_lib::Database>, body: Json<UpdateMapBody>,
+) -> impl Responder {
     let map_id = records_lib::update_map(
         &db,
         &body.map_game_id,
@@ -308,7 +266,11 @@ async fn update_map(
     .await?;
     let mut map = records_lib::select_map(&db, map_id).await?;
     map.name = format!("{}", Escape(&map.name));
-    Ok(xml::reply::xml(&map))
+    Ok::<_, records_lib::RecordsError>(
+        actix_web::dev::Response::ok()
+            .map_body(|_, _| reply::xml(&map))
+            .map_into_boxed_body(),
+    )
 }
 
 async fn _select_map(
@@ -319,9 +281,23 @@ async fn _select_map(
     Ok(xml::reply::xml(&map))
 }
 
-async fn player_finished(
-    db: records_lib::Database, body: HasFinishedBody,
-) -> Result<impl warp::Reply, warp::Rejection> {
+#[post("/player_finished")]
+pub async fn player_finished(
+    db: Data<records_lib::Database>, body: Json<HasFinishedBody>,
+) -> impl Responder {
+    inner_player_finished(db, body).await
+}
+
+#[post("/api/Records/player-finished")]
+pub async fn player_finished_compat(
+    db: Data<records_lib::Database>, body: Json<HasFinishedBody>,
+) -> impl Responder {
+    inner_player_finished(db, body).await
+}
+
+async fn inner_player_finished(
+    db: Data<records_lib::Database>, body: Json<HasFinishedBody>,
+) -> impl Responder {
     let banned_players = ["xxel94toonzxx", "encht"];
     let is_banned = banned_players
         .iter()
@@ -332,12 +308,7 @@ async fn player_finished(
     let player_id = records_lib::select_or_insert_player(&db, &body.player_login).await?;
 
     if is_banned {
-        return Ok(xml::reply::xml(&HasFinishedResponse {
-            has_improved: false,
-            login: body.player_login,
-            old: body.time,
-            new: body.time,
-        }));
+        return Err(records_lib::RecordsError::BannedPlayer);
     }
 
     let (old, new) = records_lib::player_new_record(
@@ -347,14 +318,20 @@ async fn player_finished(
         player_id,
         body.time,
         body.respawn_count,
-        body.flags.unwrap_or(0)
+        body.flags.unwrap_or(0),
     )
     .await?;
 
-    Ok(xml::reply::xml(&HasFinishedResponse {
-        has_improved: old.as_ref().map_or(true, |old| new.time < old.time),
-        login: body.player_login,
-        old: old.as_ref().map_or(new.time, |old| old.time),
-        new: new.time,
-    }))
+    Ok::<_, records_lib::RecordsError>(
+        actix_web::dev::Response::ok()
+            .map_body(|_, _| {
+                reply::xml(&HasFinishedResponse {
+                    has_improved: old.as_ref().map_or(true, |old| new.time < old.time),
+                    login: body.into_inner().player_login,
+                    old: old.as_ref().map_or(new.time, |old| old.time),
+                    new: new.time,
+                })
+            })
+            .map_into_boxed_body(),
+    )
 }

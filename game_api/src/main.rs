@@ -1,36 +1,17 @@
+use self::graphql::create_schema;
+use actix_cors::Cors;
+use actix_web::{web::Data, App, HttpServer};
+use anyhow::Context;
+use deadpool::Runtime;
 use sqlx::mysql;
-use std::convert::Infallible;
 use std::time::Duration;
+use tracing_actix_web::TracingLogger;
 use tracing_subscriber::fmt::format::FmtSpan;
-use warp::{
-    http::{header, StatusCode},
-    Filter, Rejection, Reply,
-};
+use warp::http::header;
 
 pub mod graphql;
 pub mod http;
 pub mod xml;
-
-async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
-    // Send bad request if it is an error from graphql
-    if let Some(async_graphql_warp::BadRequest(_)) = err.find() {
-        Ok(warp::reply::with_status(
-            "Bad graphql request".to_string(),
-            StatusCode::BAD_REQUEST,
-        ))
-    } else if let Some(err) = err.find::<records_lib::RecordsError>() {
-        tracing::error!("RecordsError: {}", err.to_string());
-        Ok(warp::reply::with_status(
-            err.to_string(),
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ))
-    } else {
-        Ok(warp::reply::with_status(
-            "Not found".to_string(),
-            StatusCode::NOT_FOUND,
-        ))
-    }
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,8 +20,8 @@ async fn main() -> anyhow::Result<()> {
     let filter = std::env::var("RECORDS_API_LOG")
         .unwrap_or_else(|_| "tracing=info,warp=info,game_api=info".to_owned());
 
-    let mut port = 3000 as u16;
-    // let mut port = 3001 as u16;
+    // let mut port = 3000 as u16;
+    let mut port = 3001 as u16;
     if let Ok(s) = std::env::var("RECORDS_API_PORT") {
         if let Ok(env_port) = s.parse::<u16>() {
             port = env_port;
@@ -48,33 +29,26 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mysql_pool = mysql::MySqlPoolOptions::new()
-        .connect_timeout(Duration::new(10, 0))
-        // .connect("mysql://records_api:api@localhost/obs_records")
-        .connect("mysql://root:root@localhost/obstacle_records")
+        .acquire_timeout(Duration::new(10, 0))
+        .connect("mysql://records_api:api@localhost/obs_records")
+        // .connect("mysql://root:root@localhost/obstacle_records")
         .await?;
 
     let redis_pool = {
         let cfg = deadpool_redis::Config {
             // url: Some("redis://10.0.0.1/".to_string()),
-            // url: Some("redis://127.0.0.1:6379/".to_string()),
-            url: Some("redis://localhost/".to_string()),
+            url: Some("redis://127.0.0.1:6379/".to_string()),
+            // url: Some("redis://localhost/".to_string()),
             connection: None,
             pool: None,
         };
-        cfg.create_pool().unwrap()
+        cfg.create_pool(Some(Runtime::Tokio1)).unwrap()
     };
 
     let db = records_lib::Database {
         mysql_pool,
         redis_pool,
     };
-
-    let cors = warp::cors()
-        // .allow_any_origin()
-        .allow_origin("https://www.obstacle.ovh")
-        .allow_methods(vec!["GET", "POST"])
-        .allow_headers(vec![header::ACCEPT, header::CONTENT_TYPE])
-        .max_age(3600);
 
     // Configure the default `tracing` subscriber.
     // The `fmt` subscriber from the `tracing-subscriber` crate logs `tracing`
@@ -88,16 +62,32 @@ async fn main() -> anyhow::Result<()> {
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
-    let routes = http::warp_routes(db.clone())
-        .or(graphql::warp_routes(db))
-        .recover(handle_rejection)
-        .with(warp::trace::request())
-        .with(cors);
+    HttpServer::new(move || {
+        let cors = Cors::default()
+            .allow_any_origin()
+            // .allowed_origin("https://www.obstacle.ovh")
+            .allowed_methods(vec!["GET", "POST"])
+            .allowed_headers(vec![header::ACCEPT, header::CONTENT_TYPE])
+            .max_age(3600);
 
-    // let key = include_bytes!("../../cert/localhost.decrypted.key");
-    // let cert = include_bytes!("../../cert/localhost.crt");
-
-    // warp::serve(routes).tls().cert(cert).key(key).run(([0, 0, 0, 0], port)).await;
-    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
-    Ok(())
+        App::new()
+            .wrap(cors)
+            .wrap(TracingLogger::default())
+            .app_data(Data::new(create_schema(db.clone())))
+            .app_data(Data::new(db.clone()))
+            .service(graphql::index_playground)
+            .service(graphql::index_graphql)
+            .service(http::overview)
+            .service(http::overview_compat)
+            .service(http::update_player)
+            .service(http::update_player_compat)
+            .service(http::update_map)
+            .service(http::update_map_compat)
+            .service(http::player_finished)
+            .service(http::player_finished_compat)
+    })
+    .bind(("0.0.0.0", port))?
+    .run()
+    .await
+    .context("Failed to run server")
 }
