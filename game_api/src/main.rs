@@ -3,7 +3,7 @@ use self::{
     graphql::create_schema,
 };
 use actix_cors::Cors;
-use actix_web::{web::Data, App, HttpServer};
+use actix_web::{web::{Data, self, JsonConfig}, App, HttpServer, HttpResponse};
 use anyhow::Context;
 use deadpool::Runtime;
 use sqlx::mysql;
@@ -88,21 +88,28 @@ async fn main() -> anyhow::Result<()> {
             .allowed_headers(vec!["accept", "content-type", "authorization"])
             .max_age(3600);
 
+        let json_config = JsonConfig::default().limit(1024 * 16);
+
         App::new()
             .wrap(cors)
             .wrap(TracingLogger::default())
+            .app_data(json_config)
             .app_data(auth_state.clone())
             .app_data(Data::new(create_schema(db.clone())))
             .app_data(Data::new(db.clone()))
             .service(graphql::index_playground)
             .service(graphql::index_graphql)
             .service(http::overview)
+            .service(http::overview_compat)
             .service(http::update_player)
+            .service(http::update_player_compat)
             .service(http::update_map)
+            .service(http::update_map_compat)
             .service(http::player_finished)
             .service(http::new_player_finished)
             .service(http::gen_new_token)
             .service(http::new_token)
+            .default_service(web::to(|| async { HttpResponse::NotFound().body("Not found") }))
     })
     .bind(("0.0.0.0", port))?
     .run()

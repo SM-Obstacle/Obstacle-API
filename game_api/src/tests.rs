@@ -149,3 +149,16 @@ async fn state_already_received() {
     tx.send(()).unwrap();
     assert!(first_req.await.is_ok());
 }
+
+#[tokio::test]
+async fn too_large_payload() {
+    let c = Client::new();
+    let res = c
+        .post("http://localhost:3001/update_map")
+        .header("Content-Type", "application/json")
+        .body("{ \"".to_owned() + "eeeeeeee".repeat(2048).as_str() + "\": \"oui\" }")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
