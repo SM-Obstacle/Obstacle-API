@@ -1,17 +1,30 @@
-use crate::xml::{
-    self,
-    reply::{self, xml_elements},
+use std::future::Future;
+
+use crate::{
+    auth::{AuthState, SSender, TIMEOUT},
+    xml::reply,
 };
 use actix_web::{
-    get, post,
-    web::{Data, Json, Query},
-    Responder,
+    error::ParseError,
+    get,
+    http::header::{self, TryIntoHeaderValue},
+    post,
+    web::{Data, Header, Json, Query},
+    HttpMessage, HttpResponse, Responder,
 };
 use deadpool_redis::redis::AsyncCommands;
-use records_lib::escape::*;
+use records_lib::{escape::*, RecordsError};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::{mysql, FromRow};
-use std::vec::Vec;
+use tokio::sync::oneshot;
+use tokio::sync::{mpsc::channel, oneshot::error::RecvError};
+
+fn wrap_response_xml<T: Serialize>(res: T) -> impl Responder {
+    actix_web::dev::Response::ok()
+        .map_body(|_, _| reply::xml(&res))
+        .map_into_boxed_body()
+}
 
 #[derive(Deserialize)]
 pub struct OverviewQuery {
@@ -37,6 +50,13 @@ pub struct UpdateMapBody {
 }
 
 #[derive(Deserialize, Serialize)]
+pub struct NewPlayerFinishedBody {
+    pub state: String,
+    #[serde(flatten)]
+    pub finished: HasFinishedBody,
+}
+
+#[derive(Deserialize, Serialize)]
 pub struct HasFinishedBody {
     pub time: i32,
     #[serde(alias = "respawnCount")]
@@ -56,6 +76,13 @@ pub struct HasFinishedResponse {
     pub login: String,
     pub old: i32,
     pub new: i32,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct NewHasFinishedResponse {
+    pub token: String,
+    #[serde(flatten)]
+    pub finished: HasFinishedResponse,
 }
 
 #[derive(Clone, Deserialize, Serialize, sqlx::FromRow)]
@@ -200,7 +227,7 @@ async fn inner_overview_query(
 
     Ok::<_, records_lib::RecordsError>(
         actix_web::dev::Response::ok()
-            .map_body(|_, _| xml_elements(&ranked_records))
+            .map_body(|_, _| reply::xml_elements(&ranked_records))
             .map_into_boxed_body(),
     )
 }
@@ -230,14 +257,6 @@ async fn inner_update_player(
             .map_body(|_, _| reply::xml(&player))
             .map_into_boxed_body(),
     )
-}
-
-async fn _select_player(
-    db: records_lib::Database, player_id: u32,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let mut player = records_lib::select_player(&db, player_id).await?;
-    player.name = format!("{}", Escape(&player.name));
-    Ok(xml::reply::xml(&player))
 }
 
 #[post("/update_map")]
@@ -273,31 +292,132 @@ async fn inner_update_map(
     )
 }
 
-async fn _select_map(
-    db: records_lib::Database, map_id: u32,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let mut map = records_lib::select_map(&db, map_id).await?;
-    map.name = format!("{}", Escape(&map.name));
-    Ok(xml::reply::xml(&map))
+pub struct Authorization(String);
+
+impl TryIntoHeaderValue for Authorization {
+    type Error = header::InvalidHeaderValue;
+
+    fn try_into_value(self) -> Result<header::HeaderValue, Self::Error> {
+        header::HeaderValue::from_str(&self.0)
+    }
+}
+
+impl header::Header for Authorization {
+    fn name() -> header::HeaderName {
+        header::HeaderName::from_bytes(b"Authorization").unwrap()
+    }
+
+    fn parse<M: HttpMessage>(msg: &M) -> Result<Self, ParseError> {
+        let header = msg
+            .headers()
+            .get(Self::name())
+            .ok_or(ParseError::Incomplete)?;
+        let value = header.to_str().map_err(|_| ParseError::Header)?;
+        Ok(Authorization(value.to_string()))
+    }
+}
+
+#[derive(Deserialize, Debug)]
+struct MPServerRes {
+    login: String,
+    #[serde(rename = "nickname")]
+    _nickname: String,
+    #[serde(rename = "path")]
+    _path: String,
+}
+
+async fn check_mp_token(login: &str, token: &str) -> Result<bool, RecordsError> {
+    let client = reqwest::Client::new();
+
+    let res = client
+        .get("https://prod.live.maniaplanet.com/webservices/me")
+        .header("Accept", "application/json")
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await?;
+    let res: MPServerRes = match res.status() {
+        StatusCode::OK => res.json().await?,
+        _ => return Ok(false),
+    };
+
+    Ok(res.login == login)
+}
+
+async fn timeout_tx<F>(
+    os_rx: F, server_state: &AuthState, state: &str,
+) -> Result<SSender, RecordsError>
+where
+    F: Future<Output = Result<SSender, RecvError>>,
+{
+    match tokio::time::timeout(TIMEOUT, os_rx).await {
+        Ok(Ok(tx)) => Ok(tx),
+        Ok(Err(_)) => Err(RecordsError::Timeout),
+        Err(_elapsed) => {
+            server_state.remove_state(state.to_owned()).await;
+            Err(RecordsError::Timeout)
+        }
+    }
+}
+
+/// This is the endpoint called by the Obstacle Titlepack Script when a player finishes a map.
+/// 
+/// The Script should call this request with a random state, and open a ManiaPlanet page
+/// to the player on his browser, with the same state as query parameter. When he logs in,
+/// the page will redirect to the /new_token page, which redirects to the /gen_new_token endpoint.
+/// 
+/// The /gen_new_token and /new_player_finished endpoints will then synchronize, and generate a new
+/// token for the player if everything is correct.
+/// The generated token for the player is then returned to the Script, which will then store it
+/// in the player's profile. This token will be then used as an authorization for the /player_finished
+/// request.
+/// 
+/// Thus, this endpoint should be called before the /gen_new_token endpoint.
+#[post("/new_player_finished")]
+pub async fn new_player_finished(
+    server_state: Data<AuthState>, db: Data<records_lib::Database>,
+    body: Json<NewPlayerFinishedBody>,
+) -> Result<impl Responder, RecordsError> {
+    let body = body.into_inner();
+    let state = body.state;
+
+    let (tx, mut rx) = channel(10);
+    let tx = {
+        let (os_tx, os_rx) = oneshot::channel();
+        server_state.insert_state(state.clone(), os_tx, tx).await?;
+        timeout_tx(os_rx, &server_state, &state).await?
+    };
+
+    tx.send(body.finished.player_login.clone()).await?;
+
+    let token = match rx.recv().await {
+        Some(token) => token,
+        None => return Err(RecordsError::InvalidMPToken),
+    };
+    let finished = inner_player_finished(db, body.finished).await?;
+
+    Ok(wrap_response_xml(NewHasFinishedResponse {
+        token,
+        finished,
+    }))
 }
 
 #[post("/player_finished")]
 pub async fn player_finished(
-    db: Data<records_lib::Database>, body: Json<HasFinishedBody>,
-) -> impl Responder {
-    inner_player_finished(db, body).await
-}
-
-#[post("/api/Records/player-finished")]
-pub async fn player_finished_compat(
-    db: Data<records_lib::Database>, body: Json<HasFinishedBody>,
-) -> impl Responder {
-    inner_player_finished(db, body).await
+    authorization: Header<Authorization>, state: Data<AuthState>, db: Data<records_lib::Database>,
+    body: Json<HasFinishedBody>,
+) -> Result<impl Responder, RecordsError> {
+    let token = authorization.into_inner().0;
+    if state.check_token_for(&token, &body.player_login).await {
+        let finished = inner_player_finished(db, body.into_inner()).await?;
+        Ok(wrap_response_xml(finished))
+    } else {
+        Err(RecordsError::Unauthorized)
+    }
 }
 
 async fn inner_player_finished(
-    db: Data<records_lib::Database>, body: Json<HasFinishedBody>,
-) -> impl Responder {
+    db: Data<records_lib::Database>, body: HasFinishedBody,
+) -> Result<HasFinishedResponse, RecordsError> {
     let banned_players = ["xxel94toonzxx", "encht"];
     let is_banned = banned_players
         .iter()
@@ -308,7 +428,7 @@ async fn inner_player_finished(
     let player_id = records_lib::select_or_insert_player(&db, &body.player_login).await?;
 
     if is_banned {
-        return Err(records_lib::RecordsError::BannedPlayer);
+        return Err(RecordsError::BannedPlayer);
     }
 
     let (old, new) = records_lib::player_new_record(
@@ -322,16 +442,63 @@ async fn inner_player_finished(
     )
     .await?;
 
-    Ok::<_, records_lib::RecordsError>(
-        actix_web::dev::Response::ok()
-            .map_body(|_, _| {
-                reply::xml(&HasFinishedResponse {
-                    has_improved: old.as_ref().map_or(true, |old| new.time < old.time),
-                    login: body.into_inner().player_login,
-                    old: old.as_ref().map_or(new.time, |old| old.time),
-                    new: new.time,
-                })
-            })
-            .map_into_boxed_body(),
-    )
+    Ok(HasFinishedResponse {
+        has_improved: old.as_ref().map_or(true, |old| new.time < old.time),
+        login: body.player_login,
+        old: old.as_ref().map_or(new.time, |old| old.time),
+        new: new.time,
+    })
+}
+
+#[derive(Deserialize)]
+struct NewTokenBody {
+    #[serde(rename = "token_type")]
+    _token_type: String,
+    #[serde(rename = "expires_in")]
+    _expires_in: String,
+    access_token: String,
+    state: String,
+}
+
+/// This is the endpoint redirected by the /new_token page (with JavaScript).
+/// 
+/// It synchronizes with the previous /new_player_finished request with the same state.
+/// It checks that the given token is valid and then generates a new token for the player.
+/// The generated token is sent in response by the /new_player_finished request to the Script.
+#[post("gen_new_token")]
+async fn gen_new_token(
+    state: Data<AuthState>, body: Json<NewTokenBody>,
+) -> Result<impl Responder, RecordsError> {
+    let body = body.into_inner();
+
+    let (tx, mut rx) = channel(10);
+    let tx = {
+        let (os_tx, os_rx) = oneshot::channel();
+        state.exchange_tx(body.state.clone(), os_tx, tx).await?;
+        timeout_tx(os_rx, &state, &body.state).await?
+    };
+
+    let login = rx.recv().await.expect("channel disconnected");
+    if check_mp_token(&login, &body.access_token).await? {
+        let token = state.gen_token_for(login).await;
+        tx.send(token).await?;
+        state.remove_state(body.state).await;
+        Ok(HttpResponse::Ok())
+    } else {
+        Err(RecordsError::InvalidMPToken)
+    }
+}
+
+/// This is the endpoint that ManiaPlanet redirects to after the user has logged in
+///
+/// It will then call the /gen_new_token endpoint to actually generate a new token
+/// for the player.
+///
+/// From the Obstacle Script perspective, this is the endpoint that is called
+/// when the player has logged in ManiaPlanet after he finished a map.
+#[get("/new_token")]
+async fn new_token() -> impl Responder {
+    HttpResponse::Ok()
+        .content_type("text/html")
+        .body(include_str!("../public/new_token.html"))
 }

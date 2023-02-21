@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <h1>Loading...</h1>
+    <script>
+        ((w) => w.onload = () => {
+            const loading = document.querySelector('h1');
+
+            const params = document.location.hash.slice(1).split('&').reduce((acc, cur) => {
+                const [key, value] = cur.split('=');
+                acc[key] = value;
+                return acc;
+            }, {});
+
+            fetch('/gen_new_token', {
+                method: 'post',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(params),
+            }).then(res => {
+                if (res.ok) {
+                    loading.innerText = 'You are all set! You can close this window now.';
+                } else {
+                    loading.innerText = 'Something went wrong.';
+                }
+            });
+        })(window);
+    </script>
+</body>
+</html>

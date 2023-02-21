@@ -1,14 +1,21 @@
-use self::graphql::create_schema;
+use self::{
+    auth::{AuthState, UPDATE_RATE},
+    graphql::create_schema,
+};
 use actix_cors::Cors;
 use actix_web::{web::Data, App, HttpServer};
 use anyhow::Context;
 use deadpool::Runtime;
 use sqlx::mysql;
+use tokio::time::interval;
 use std::time::Duration;
 use tracing_actix_web::TracingLogger;
 use tracing_subscriber::fmt::format::FmtSpan;
-use warp::http::header;
 
+#[cfg(test)]
+mod tests;
+
+pub mod auth;
 pub mod graphql;
 pub mod http;
 pub mod xml;
@@ -62,29 +69,40 @@ async fn main() -> anyhow::Result<()> {
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
+    let auth_state = Data::new(AuthState::default());
+    let auth_update = auth_state.clone();
+    tokio::spawn(async move {
+        let mut int = interval(UPDATE_RATE);
+        int.tick().await;
+        loop {
+            int.tick().await;
+            auth_update.update().await;
+        }
+    });
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .allow_any_origin()
             // .allowed_origin("https://www.obstacle.ovh")
             .allowed_methods(vec!["GET", "POST"])
-            .allowed_headers(vec![header::ACCEPT, header::CONTENT_TYPE])
+            .allowed_headers(vec!["accept", "content-type", "authorization"])
             .max_age(3600);
 
         App::new()
             .wrap(cors)
             .wrap(TracingLogger::default())
+            .app_data(auth_state.clone())
             .app_data(Data::new(create_schema(db.clone())))
             .app_data(Data::new(db.clone()))
             .service(graphql::index_playground)
             .service(graphql::index_graphql)
             .service(http::overview)
-            .service(http::overview_compat)
             .service(http::update_player)
-            .service(http::update_player_compat)
             .service(http::update_map)
-            .service(http::update_map_compat)
             .service(http::player_finished)
-            .service(http::player_finished_compat)
+            .service(http::new_player_finished)
+            .service(http::gen_new_token)
+            .service(http::new_token)
     })
     .bind(("0.0.0.0", port))?
     .run()

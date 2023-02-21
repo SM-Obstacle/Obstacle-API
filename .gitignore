@@ -3,3 +3,5 @@ target
 schema_*
 python_*
 cert
+.idea
+Cargo.lock

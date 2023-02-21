@@ -12,10 +12,6 @@ pub mod reply {
         pin::Pin,
         task::{Context, Poll},
     };
-    use warp::{
-        http::{header, HeaderValue, StatusCode},
-        reply::{Reply, Response},
-    };
 
     pub fn xml<T>(val: &T) -> Xml
     where
@@ -78,23 +74,6 @@ pub mod reply {
     #[allow(missing_debug_implementations)]
     pub struct Xml {
         inner: Result<Vec<u8>, ()>,
-    }
-
-    impl Reply for Xml {
-        #[inline]
-        fn into_response(self) -> Response {
-            match self.inner {
-                Ok(body) => {
-                    let mut res = Response::new(body.into());
-                    res.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/xml; charset=utf-8"),
-                    );
-                    res
-                }
-                Err(()) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-        }
     }
 
     impl MessageBody for Xml {
