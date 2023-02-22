@@ -252,6 +252,11 @@ impl AuthState {
         if remove_client {
             let mut client_map = self.client_map.write().await;
             client_map.remove(token);
+            tracing::event! {
+                Level::INFO,
+                "Removed token `{}` from the client_map, {} token(s) in total",
+                token, client_map.len()
+            };
         }
 
         false
