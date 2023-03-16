@@ -1,7 +1,7 @@
 //! The authentication system.
 //!
 //! The authentication system is used to authenticate the client (which corresponds to
-//! the Obstacle Titlepack Script). The authentication system is used to prevent
+//! the Obstacle TitlePack Script). The authentication system is used to prevent
 //! unauthorized access to the API.
 //!
 //! The authentication system is based on the OAuth 2.0 protocol. It is only used when
@@ -20,8 +20,11 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use chrono::{DateTime, Utc};
 use rand::Rng;
 use records_lib::RecordsError;
+use tokio::sync::oneshot;
+use tokio::sync::oneshot::Sender;
+use tokio::time::timeout;
 use tokio::{
-    sync::{mpsc::Sender, oneshot, Mutex, RwLock},
+    sync::{Mutex, RwLock},
     time::Instant,
 };
 use tracing::Level;
@@ -36,6 +39,21 @@ pub const TIMEOUT: Duration = Duration::from_secs(60 * 5);
 ///
 /// This is used to remove expired tokens.
 pub const UPDATE_RATE: Duration = Duration::from_secs(60 * 60 * 24);
+
+#[derive(Debug)]
+struct State {
+    tx: Sender<String>,
+    instant: DateTime<Utc>,
+}
+
+impl From<Sender<String>> for State {
+    fn from(tx: Sender<String>) -> Self {
+        Self {
+            tx,
+            instant: Utc::now(),
+        }
+    }
+}
 
 /// A client is a user that has logged in.
 #[derive(Debug)]
@@ -55,43 +73,6 @@ impl From<String> for Client {
     }
 }
 
-/// The sender of the channel which connects the /new_player_finished endpoint
-/// to the /gen_new_token endpoint.
-pub type SSender = Sender<String>;
-
-/// The sender of the channel which synchronizes the /new_player_finished endpoint
-/// with the /gen_new_token endpoint.
-pub type OSSender = oneshot::Sender<SSender>;
-
-/// A synchronization state of the authentication system.
-///
-/// It stores an instant, so it can be used to clear the state map, in case
-/// a client does not send a request to the /gen_new_token endpoint, or has crashed before.
-#[derive(Debug)]
-struct State {
-    os_tx: OSSender,
-    tx: SSender,
-    instant: DateTime<Utc>,
-}
-
-impl State {
-    fn new(os_tx: OSSender, tx: SSender) -> Self {
-        Self {
-            os_tx,
-            tx,
-            instant: Utc::now(),
-        }
-    }
-
-    fn is_expired(&self) -> bool {
-        Utc::now().time() - self.instant.time() > chrono::Duration::from_std(TIMEOUT).unwrap()
-    }
-
-    fn into_channels(self) -> (OSSender, SSender) {
-        (self.os_tx, self.tx)
-    }
-}
-
 /// Holds the state of the authentication system.
 ///
 /// The state is used to prevent multiple requests to the /new_token endpoint
@@ -102,7 +83,6 @@ impl State {
 #[derive(Debug, Default)]
 pub struct AuthState {
     state_map: Arc<Mutex<HashMap<String, State>>>,
-    // Client Obstacle token as key
     client_map: Arc<RwLock<HashMap<String, Client>>>,
 }
 
@@ -117,71 +97,57 @@ impl AuthState {
             .filter(|(_, client)| client.instant.elapsed() > EXPIRES_IN)
             .map(|(token, _)| token.clone())
             .collect::<Vec<_>>();
+
         for token in &expired {
             client_map.remove(token);
         }
 
-        tracing::event! {
+        tracing::event!(
             Level::INFO,
             "Removed {} expired token(s) from the client_map, {} token(s) in total",
             expired.len(),
             client_map.len()
-        }
-
-        drop(client_map);
-
-        let mut state_map = self.state_map.lock().await;
-        let expired = state_map
-            .iter()
-            .filter(|(_, s)| s.is_expired())
-            .map(|(state, _)| state.clone())
-            .collect::<Vec<_>>();
-        for state in &expired {
-            state_map.remove(state);
-        }
-
-        tracing::event! {
-            Level::INFO,
-            "Removed {} expired state(s) from the state_map, {} state(s) in total",
-            expired.len(),
-            state_map.len()
-        }
+        );
     }
 
     /// Removes a state from the state map.
     pub async fn remove_state(&self, state: String) {
         let mut state_map = self.state_map.lock().await;
-        let state_info = state.to_string();
         state_map.remove(&state);
-        tracing::event! {
+        tracing::event!(
             Level::INFO,
             "Removed state `{}` from the state_map, {} state(s) in total",
-            state_info,
+            state,
             state_map.len()
-        }
+        );
     }
 
-    /// Inserts a state into the state map.
-    ///
-    /// If the state already exists, it returns an error.
-    ///
-    /// This method should be called from the /new_player_finished request.
-    pub async fn insert_state(
-        &self, state: String, os_tx: oneshot::Sender<SSender>, tx: SSender,
-    ) -> Result<(), RecordsError> {
-        let mut state_map = self.state_map.lock().await;
-        let state_info = state.clone();
-        if let Some(State { instant, .. }) = state_map.get(&state) {
-            return Err(RecordsError::StateAlreadyReceived(instant.clone()));
+    pub async fn get_inputs_path(&self, state: String) -> Result<String, RecordsError> {
+        let (tx, rx) = oneshot::channel();
+
+        {
+            let mut state_map = self.state_map.lock().await;
+            let state_info = state.clone();
+            if let Some(State { instant, .. }) = state_map.get(&state) {
+                return Err(RecordsError::StateAlreadyReceived(*instant));
+            }
+            state_map.insert(state.clone(), State::from(tx));
+            tracing::event!(
+                Level::INFO,
+                "Inserted state `{}` into the state_map, {} state(s) in total",
+                state_info,
+                state_map.len()
+            );
         }
-        state_map.insert(state, State::new(os_tx, tx));
-        tracing::event! {
-            Level::INFO,
-            "Inserted state `{}` into the state_map, {} state(s) in total",
-            state_info,
-            state_map.len()
-        };
-        Ok(())
+
+        match timeout(TIMEOUT, rx).await {
+            Ok(Ok(inputs_path)) => Ok(inputs_path),
+            _ => {
+                tracing::event!(Level::WARN, "State `{}` timed out", state);
+                self.remove_state(state).await;
+                Err(RecordsError::Timeout)
+            }
+        }
     }
 
     /// Sends the sender of the /new_player_finished request
@@ -192,22 +158,26 @@ impl AuthState {
     ///
     /// Thus, this method should be called from the /gen_new_token request, and so this request
     /// should be called after the /new_player_finished request has been called.
-    pub async fn exchange_tx(
-        &self, state: String, gen_token_os_tx: oneshot::Sender<SSender>, tx: SSender,
+    pub async fn inputs_received_for(
+        &self,
+        state: String,
+        inputs_path: String,
     ) -> Result<(), RecordsError> {
         let mut state_map = self.state_map.lock().await;
-        let (np_os_tx, np_tx) = match state_map.remove(&state).map(State::into_channels) {
-            Some((os_tx, np_tx)) => (os_tx, np_tx),
-            _ => return Err(RecordsError::MissingNewPlayerFinishReq),
-        };
-        np_os_tx.send(tx).unwrap();
-        gen_token_os_tx.send(np_tx).unwrap();
-        tracing::event! {
+
+        if let Some(State { tx, .. }) = state_map.remove(&state) {
+            tx.send(inputs_path)
+                .expect("/player_finished rx should not be dropped at this point");
+        } else {
+            return Err(RecordsError::MissingPlayerFinishedReq);
+        }
+
+        tracing::event!(
             Level::INFO,
             "Removed state `{}` from the state_map, {} state(s) in total",
             state,
             state_map.len()
-        }
+        );
         Ok(())
     }
 
@@ -216,26 +186,27 @@ impl AuthState {
     /// The new token is inserted in the client_map.
     pub async fn gen_token_for(&self, login: String) -> String {
         let mut client_map = self.client_map.write().await;
-        let mut token = rand::thread_rng()
+        let random = rand::thread_rng()
             .sample_iter(&rand::distributions::Alphanumeric)
             .take(30)
             .collect::<Vec<u8>>();
-        token.extend(Utc::now().timestamp().to_be_bytes());
-        token.extend(login.as_bytes());
-        let token = String::from_utf8(token).unwrap();
+        let random = String::from_utf8(random).expect("random token not utf8");
+        let token = format!("{}{random}{login}", Utc::now().timestamp());
         client_map.insert(token.clone(), Client::from(login.clone()));
-        tracing::event! {
+        tracing::event!(
             Level::INFO,
             "Inserted token `{}` for `{}` into the client_map, {} token(s) in total",
-            token, login, client_map.len()
-        };
+            token,
+            login,
+            client_map.len()
+        );
         token
     }
 
     /// Checks if the given token exists, corresponds to the given player login, and is still available.
-    /// 
+    ///
     /// If the given token exists and corresponds to the given player login, but the TTL is expired,
-    /// the token is removed from the clien_map.
+    /// the token is removed from the client_map.
     pub async fn check_token_for(&self, token: &str, login: &str) -> bool {
         let client_map = self.client_map.read().await;
         let remove_client = match client_map.get(token) {
@@ -252,11 +223,12 @@ impl AuthState {
         if remove_client {
             let mut client_map = self.client_map.write().await;
             client_map.remove(token);
-            tracing::event! {
+            tracing::event!(
                 Level::INFO,
                 "Removed token `{}` from the client_map, {} token(s) in total",
-                token, client_map.len()
-            };
+                token,
+                client_map.len()
+            );
         }
 
         false

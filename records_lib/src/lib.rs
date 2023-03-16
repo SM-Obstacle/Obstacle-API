@@ -9,6 +9,7 @@ use chrono::Utc;
 pub use database::*;
 use deadpool_redis::redis::AsyncCommands;
 pub use error::RecordsError;
+use serde::{Deserialize, Serialize};
 use sqlx::{mysql::MySqlRow, Row};
 
 /// Update a player login and nickname, it will create the player if it doesn't exists and returns its id
@@ -20,7 +21,9 @@ use sqlx::{mysql::MySqlRow, Row};
 /// * `name` - The name of the player
 ///
 pub async fn update_player(
-    db: &Database, login: &str, name: Option<&str>,
+    db: &Database,
+    login: &str,
+    name: Option<&str>,
 ) -> Result<u32, RecordsError> {
     let name = name.unwrap_or(login);
 
@@ -96,7 +99,10 @@ pub async fn select_player(db: &Database, id: u32) -> Result<Player, RecordsErro
 /// * `author_login` - The login of the map creator
 ///
 pub async fn update_map(
-    db: &Database, game_id: &str, name: Option<&str>, author_login: Option<&str>,
+    db: &Database,
+    game_id: &str,
+    name: Option<&str>,
+    author_login: Option<&str>,
 ) -> Result<u32, RecordsError> {
     let name = name.unwrap_or("Unknown map");
 
@@ -196,7 +202,9 @@ pub async fn count_records_map(db: &Database, map_id: u32) -> Result<i64, Record
 /// * `player_id` - The player id
 ///
 pub async fn select_record(
-    db: &Database, map_id: u32, player_id: u32,
+    db: &Database,
+    map_id: u32,
+    player_id: u32,
 ) -> Result<Record, RecordsError> {
     sqlx::query_as!(
         Record,
@@ -210,7 +218,9 @@ pub async fn select_record(
 }
 
 pub async fn update_redis_leaderboard(
-    db: &Database, key: &str, map_id: u32,
+    db: &Database,
+    key: &str,
+    map_id: u32,
 ) -> Result<i64, RecordsError> {
     let mut redis_conn = db.redis_pool.get().await.unwrap();
     let redis_count: i64 = redis_conn.zcount(key, "-inf", "+inf").await.unwrap();
@@ -234,6 +244,16 @@ pub async fn update_redis_leaderboard(
     Ok(mysql_count)
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename(serialize = "response"))]
+pub struct HasFinishedResponse {
+    #[serde(rename = "newBest")]
+    pub has_improved: bool,
+    pub login: String,
+    pub old: i32,
+    pub new: i32,
+}
+
 /// Update a record to the database
 ///
 /// # Arguments
@@ -245,14 +265,21 @@ pub async fn update_redis_leaderboard(
 /// * `respawn_count` - The new record's respawn count
 ///
 pub async fn player_new_record(
-    db: &Database, map_game_id: &str, map_id: u32, player_id: u32, time: i32, respawn_count: i32,
+    db: &Database,
+    login: String,
+    map_game_id: String,
+    map_id: u32,
+    player_id: u32,
+    time: i32,
+    respawn_count: i32,
     flags: u32,
-) -> Result<(Option<Record>, Record), RecordsError> {
+    inputs_path: String,
+) -> Result<HasFinishedResponse, RecordsError> {
     let mut redis_conn = db.redis_pool.get().await.unwrap();
 
     let old_record = sqlx::query_as!(
         Record,
-        "SELECT * FROM records WHERE map_id = ? AND player_id = ?",
+        "SELECT * FROM records WHERE map_id = ? AND player_id = ? ORDER BY record_date DESC LIMIT 1",
         map_id,
         player_id
     )
@@ -261,56 +288,86 @@ pub async fn player_new_record(
 
     let now = Utc::now().naive_utc();
 
-    if let Some(old_record) = old_record {
-        let mut new_record = old_record.clone();
-        new_record.time = time;
-        new_record.respawn_count = respawn_count;
-        new_record.try_count += 1;
-        new_record.updated_at = now;
-        new_record.flags = flags;
+    let (old, new, has_improved) = if let Some(Record { time: old, .. }) = old_record {
+        if time < old {
+            let inputs_expiry = None::<u32>;
 
-        if time < old_record.time {
             // Update redis record
             let key = format!("l0:{}", map_game_id);
             let _added: i64 = redis_conn.zadd(&key, player_id, time).await.unwrap_or(0);
             let _count = update_redis_leaderboard(db, &key, map_id).await?;
 
-            sqlx::query!("UPDATE records SET time = ?, respawn_count = ?, try_count = ?, updated_at = ?, flags = ? WHERE id = ?",
-                        new_record.time,
-                        new_record.respawn_count,
-                        new_record.try_count,
-                        new_record.updated_at,
-                        new_record.flags,
-                        new_record.id)
+            sqlx::query!("INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags, inputs_path, inputs_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                player_id,
+                map_id,
+                time,
+                respawn_count,
+                now,
+                flags,
+                inputs_path,
+                inputs_expiry
+            )
                 .execute(&db.mysql_pool)
                 .await?;
         }
-
-        Ok((Some(old_record), new_record))
+        (old, time, time < old)
     } else {
+        let inputs_expiry = None::<u32>;
+
         sqlx::query!(
-            "INSERT INTO records (player_id, map_id, time, respawn_count, try_count, created_at, updated_at, flags) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, player_id, map_id, time, respawn_count, try_count, created_at, updated_at, flags",
+            "INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags, inputs_path, inputs_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             player_id,
             map_id,
             time,
             respawn_count,
-            1,
             now,
-            now,
-            flags
+            flags,
+            inputs_path,
+            inputs_expiry,
         )
-            .map(|row: MySqlRow|  { Ok((None, Record {
-                id: row.try_get(0).unwrap(),
-                player_id: row.try_get(1).unwrap(),
-                map_id: row.try_get(2).unwrap(),
-                time: row.try_get(3).unwrap(),
-                respawn_count: row.try_get(4).unwrap(),
-                try_count: row.try_get(5).unwrap(),
-                created_at: row.try_get(6).unwrap(),
-                updated_at: row.try_get(7).unwrap(),
-                flags: row.try_get(8).unwrap(),
-            })) })
-        .fetch_one(&db.mysql_pool)
-        .await?
-    }
+            .execute(&db.mysql_pool)
+            .await?;
+
+        (time, time, true)
+    };
+
+    Ok(HasFinishedResponse {
+        has_improved,
+        login,
+        old,
+        new,
+    })
+}
+
+pub async fn get_player_from_login(
+    db: &Database,
+    player_login: &str,
+) -> Result<Option<u32>, RecordsError> {
+    let r = sqlx::query_scalar!("SELECT id FROM players WHERE login = ?", player_login)
+        .fetch_optional(&db.mysql_pool)
+        .await?;
+    Ok(r)
+}
+
+pub async fn check_banned(
+    db: &Database,
+    player_id: u32,
+) -> Result<Option<Banishment>, RecordsError> {
+    // TODO: set a trigger on insert on banishments table to check that a player is banned at most once at a time
+    let r = sqlx::query_as::<_, Banishment>(
+        "SELECT * FROM banishments WHERE player_id = ? AND (SYSDATE() < date_ban + duration OR duration = -1)"
+    )
+    .bind(player_id)
+    .fetch_optional(&db.mysql_pool).await?;
+    Ok(r)
+}
+
+pub async fn get_map_from_game_id(
+    db: &actix_web::web::Data<Database>,
+    map_game_id: &str,
+) -> Result<Option<u32>, RecordsError> {
+    let r = sqlx::query_scalar!("SELECT id FROM maps WHERE game_id = ?", map_game_id)
+        .fetch_optional(&db.mysql_pool)
+        .await?;
+    Ok(r)
 }

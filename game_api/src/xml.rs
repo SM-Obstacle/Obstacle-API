@@ -87,7 +87,8 @@ pub mod reply {
         }
 
         fn poll_next(
-            mut self: Pin<&mut Self>, cx: &mut Context<'_>,
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
         ) -> Poll<Option<Result<web::Bytes, Self::Error>>> {
             if let Ok(ref mut body) = self.inner {
                 <Vec<u8> as MessageBody>::poll_next(Pin::new(body), cx).map_err(|_| "".to_owned())

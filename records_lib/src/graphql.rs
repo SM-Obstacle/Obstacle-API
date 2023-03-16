@@ -1,6 +1,6 @@
 use async_graphql::{connection, dataloader, ID};
 use deadpool_redis::redis::AsyncCommands;
-use sqlx::{mysql, FromRow, MySqlPool, Row};
+use sqlx::{mysql, query_as, query_scalar, FromRow, MySqlPool, Row};
 use std::{collections::HashMap, sync::Arc, vec::Vec};
 
 use crate::models::*;
@@ -22,7 +22,10 @@ pub fn decode_id(id: Option<&ID>) -> Option<u32> {
 }
 
 pub fn connections_append_query_string_page(
-    query: &mut String, has_where_clause: bool, after: Option<u32>, before: Option<u32>,
+    query: &mut String,
+    has_where_clause: bool,
+    after: Option<u32>,
+    before: Option<u32>,
 ) {
     if before.is_some() || after.is_some() {
         query.push_str(if !has_where_clause { "WHERE " } else { "and " });
@@ -37,7 +40,9 @@ pub fn connections_append_query_string_page(
 }
 
 pub fn connections_append_query_string_order(
-    query: &mut String, first: Option<usize>, last: Option<usize>,
+    query: &mut String,
+    first: Option<usize>,
+    last: Option<usize>,
 ) {
     if first.is_some() {
         query.push_str("ORDER BY id ASC LIMIT ? "); // first
@@ -47,8 +52,12 @@ pub fn connections_append_query_string_order(
 }
 
 pub fn connections_append_query_string(
-    query: &mut String, has_where_clause: bool, after: Option<u32>, before: Option<u32>,
-    first: Option<usize>, last: Option<usize>,
+    query: &mut String,
+    has_where_clause: bool,
+    after: Option<u32>,
+    before: Option<u32>,
+    first: Option<usize>,
+    last: Option<usize>,
 ) {
     connections_append_query_string_page(query, has_where_clause, after, before);
     connections_append_query_string_order(query, first, last);
@@ -61,7 +70,9 @@ pub type SqlQuery<'q> = sqlx::query::Query<
 >;
 
 pub fn connections_bind_query_parameters_page(
-    mut query: SqlQuery, after: Option<u32>, before: Option<u32>,
+    mut query: SqlQuery,
+    after: Option<u32>,
+    before: Option<u32>,
 ) -> SqlQuery {
     match (before, after) {
         (Some(before), Some(after)) => query = query.bind(before).bind(after),
@@ -73,7 +84,9 @@ pub fn connections_bind_query_parameters_page(
 }
 
 pub fn connections_bind_query_parameters_order(
-    mut query: SqlQuery, first: Option<usize>, last: Option<usize>,
+    mut query: SqlQuery,
+    first: Option<usize>,
+    last: Option<usize>,
 ) -> SqlQuery {
     // Actual limits are N+1 to check if previous/next pages
     if let Some(first) = first {
@@ -86,7 +99,10 @@ pub fn connections_bind_query_parameters_order(
 }
 
 pub fn connections_bind_query_parameters(
-    mut query: SqlQuery, after: Option<u32>, before: Option<u32>, first: Option<usize>,
+    mut query: SqlQuery,
+    after: Option<u32>,
+    before: Option<u32>,
+    first: Option<usize>,
     last: Option<usize>,
 ) -> SqlQuery {
     query = connections_bind_query_parameters_page(query, after, before);
@@ -95,7 +111,9 @@ pub fn connections_bind_query_parameters(
 }
 
 pub fn connections_pages_info(
-    results_count: usize, first: Option<usize>, last: Option<usize>,
+    results_count: usize,
+    first: Option<usize>,
+    last: Option<usize>,
 ) -> (bool, bool) {
     let mut has_previous_page = false;
     let mut has_next_page = false;
@@ -124,8 +142,8 @@ pub enum Node {
 
 #[async_graphql::Object]
 impl Player {
-    async fn id(&self) -> async_graphql::ID {
-        async_graphql::ID(format!("v0:Player:{}", self.id))
+    async fn id(&self) -> ID {
+        ID(format!("v0:Player:{}", self.id))
     }
 
     async fn login(&self) -> String {
@@ -136,9 +154,32 @@ impl Player {
         self.name.clone()
     }
 
+    async fn banishments(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<Banishment>> {
+        let db = ctx.data_unchecked::<MySqlPool>();
+        Ok(query_as("SELECT * FROM banishments WHERE player_id = ?")
+            .bind(self.id)
+            .fetch_all(db)
+            .await?)
+    }
+
+    async fn role(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Role> {
+        let db = ctx.data_unchecked::<MySqlPool>();
+        Ok(query_as("SELECT * FROM role WHERE id = ?")
+            .bind(self.role)
+            .fetch_one(db)
+            .await?)
+    }
+
     async fn maps(
-        &self, ctx: &async_graphql::Context<'_>, after: Option<String>, before: Option<String>,
-        first: Option<i32>, last: Option<i32>,
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
     ) -> async_graphql::Result<connection::Connection<ID, Map>> {
         connection::query(
             after,
@@ -189,17 +230,18 @@ impl Player {
     }
 
     async fn records(
-        &self, ctx: &async_graphql::Context<'_>,
+        &self,
+        ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<crate::database::Database>();
         let redis_pool = ctx.data_unchecked::<crate::database::RedisPool>();
-        let mysql_pool = ctx.data_unchecked::<crate::database::MySqlPool>();
+        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
         let mut redis_conn = redis_pool.get().await.unwrap();
 
         // Query the records with these ids
-        let query = sqlx::query_as!(
+        let query = query_as!(
             Record,
-            "SELECT * FROM records WHERE player_id = ? ORDER BY updated_at DESC LIMIT 100",
+            "SELECT * FROM records WHERE player_id = ? ORDER BY record_date DESC LIMIT 100",
             self.id
         );
 
@@ -234,16 +276,24 @@ impl Player {
 
 #[async_graphql::Object]
 impl Map {
-    async fn id(&self) -> async_graphql::ID {
-        async_graphql::ID(format!("v0:Map:{}", self.id))
+    async fn id(&self) -> ID {
+        ID(format!("v0:Map:{}", self.id))
     }
 
     async fn game_id(&self) -> String {
         self.game_id.clone()
     }
 
-    async fn player_id(&self) -> async_graphql::ID {
-        async_graphql::ID(format!("v0:Player:{}", self.player_id))
+    async fn player_id(&self) -> ID {
+        ID(format!("v0:Player:{}", self.player_id))
+    }
+
+    async fn cps_number(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i64> {
+        Ok(ctx
+            .data_unchecked::<dataloader::DataLoader<CpsNumberLoader>>()
+            .load_one(self.id)
+            .await?
+            .unwrap_or(0))
     }
 
     async fn player(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Player> {
@@ -257,12 +307,61 @@ impl Map {
         self.name.clone()
     }
 
+    async fn medal_for(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        login: String,
+    ) -> async_graphql::Result<Option<MedalPrice>> {
+        let db = ctx.data_unchecked::<MySqlPool>();
+
+        let player_id = query_scalar!("SELECT id FROM players WHERE login = ?", login)
+            .fetch_one(db)
+            .await?;
+
+        Ok(
+            query_as("SELECT * FROM prizes WHERE map_id = ? AND player_id = ? ORDER BY medal DESC")
+                .bind(self.id)
+                .bind(player_id)
+                .fetch_optional(db)
+                .await?,
+        )
+    }
+
+    async fn ratings(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<Rating>> {
+        let db = ctx.data_unchecked();
+        Ok(query_as("SELECT * FROM rating WHERE map_id = ?")
+            .bind(self.id)
+            .fetch_all(db)
+            .await?)
+    }
+
+    async fn average_rating(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<PlayerRating>> {
+        let db = ctx.data_unchecked();
+        let fetch_all = query_as(
+            r#"SELECT CAST(0 AS UNSIGNED) AS "player_id", map_id, kind,
+            AVG(rating) AS "rating" FROM player_rating
+            WHERE map_id = ? GROUP BY kind ORDER BY kind"#,
+        )
+        .bind(self.id)
+        .fetch_all(db)
+        .await?;
+        println!("{fetch_all:?}");
+        Ok(fetch_all)
+    }
+
     async fn records(
-        &self, ctx: &async_graphql::Context<'_>,
+        &self,
+        ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<crate::database::Database>();
         let redis_pool = ctx.data_unchecked::<crate::database::RedisPool>();
-        let mysql_pool = ctx.data_unchecked::<crate::database::MySqlPool>();
+        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
         let mut redis_conn = redis_pool.get().await.unwrap();
 
         let key = format!("l0:{}", self.game_id);
@@ -335,6 +434,22 @@ impl RankedRecord {
             .ok_or_else(|| async_graphql::Error::new("Player not found."))
     }
 
+    async fn cps_times(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<CheckpointTimes>> {
+        let db = &ctx.data_unchecked::<crate::database::Database>().mysql_pool;
+
+        Ok(query_as!(
+            CheckpointTimes,
+            "SELECT * FROM checkpoint_times WHERE record_id = ? AND map_id = ? ORDER BY cp_num",
+            self.record.id,
+            self.record.map_id,
+        )
+        .fetch_all(db)
+        .await?)
+    }
+
     async fn time(&self) -> i32 {
         self.record.time
     }
@@ -347,12 +462,8 @@ impl RankedRecord {
         self.record.respawn_count
     }
 
-    async fn created_at(&self) -> chrono::NaiveDateTime {
-        self.record.created_at
-    }
-
-    async fn updated_at(&self) -> chrono::NaiveDateTime {
-        self.record.updated_at
+    async fn record_date(&self) -> chrono::NaiveDateTime {
+        self.record.record_date
     }
 
     async fn flags(&self) -> u32 {
@@ -360,16 +471,134 @@ impl RankedRecord {
     }
 }
 
-pub struct PlayerLoader(crate::Database);
+#[async_graphql::Object]
+impl Banishment {
+    async fn id(&self) -> u32 {
+        self.inner.id
+    }
 
-impl PlayerLoader {
-    pub fn new(db: crate::Database) -> Self {
-        Self(db)
+    async fn date_ban(&self) -> chrono::NaiveDateTime {
+        self.inner.date_ban
+    }
+
+    async fn duration(&self) -> Option<u32> {
+        self.inner.duration
+    }
+
+    async fn was_reprieved(&self) -> bool {
+        self.was_reprieved
+    }
+
+    async fn reason(&self) -> Option<&str> {
+        self.inner.reason.as_deref()
+    }
+
+    async fn player(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Player> {
+        ctx.data_unchecked::<dataloader::DataLoader<PlayerLoader>>()
+            .load_one(self.inner.player_id)
+            .await?
+            .ok_or_else(|| async_graphql::Error::new("Bannished player not found."))
+    }
+
+    async fn banished_by(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Player> {
+        ctx.data_unchecked::<dataloader::DataLoader<PlayerLoader>>()
+            .load_one(self.inner.banished_by)
+            .await?
+            .ok_or_else(|| async_graphql::Error::new("Bannisher player not found."))
     }
 }
 
+#[async_graphql::Object]
+impl MedalPrice {
+    async fn id(&self) -> u32 {
+        self.id
+    }
+
+    async fn price_date(&self) -> chrono::NaiveDateTime {
+        self.price_date
+    }
+
+    async fn medal(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Medal> {
+        let db = ctx.data_unchecked::<MySqlPool>();
+        Ok(query_as("SELECT * FROM medal_type WHERE id = ?")
+            .bind(self.medal)
+            .fetch_one(db)
+            .await?)
+    }
+
+    async fn map(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Map> {
+        ctx.data_unchecked::<dataloader::DataLoader<MapLoader>>()
+            .load_one(self.map_id)
+            .await?
+            .ok_or_else(|| async_graphql::Error::new("Voter player not found."))
+    }
+
+    async fn player(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Player> {
+        ctx.data_unchecked::<dataloader::DataLoader<PlayerLoader>>()
+            .load_one(self.player_id)
+            .await?
+            .ok_or_else(|| async_graphql::Error::new("Voter player not found."))
+    }
+}
+
+#[async_graphql::Object]
+impl Rating {
+    async fn ratings(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<PlayerRating>> {
+        let db = ctx.data_unchecked();
+        Ok(
+            query_as("SELECT * FROM player_rating WHERE player_id = ? AND map_id = ?")
+                .bind(self.player_id)
+                .bind(self.map_id)
+                .fetch_all(db)
+                .await?,
+        )
+    }
+
+    async fn player(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Player> {
+        ctx.data_unchecked::<dataloader::DataLoader<PlayerLoader>>()
+            .load_one(self.player_id)
+            .await?
+            .ok_or_else(|| async_graphql::Error::new("Voter player not found."))
+    }
+
+    async fn map(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Map> {
+        ctx.data_unchecked::<dataloader::DataLoader<MapLoader>>()
+            .load_one(self.map_id)
+            .await?
+            .ok_or_else(|| async_graphql::Error::new("Voter player not found."))
+    }
+
+    async fn rating_date(&self) -> chrono::NaiveDateTime {
+        self.rating_date
+    }
+
+    async fn denominator(&self) -> u8 {
+        self.denominator
+    }
+}
+
+#[async_graphql::Object]
+impl PlayerRating {
+    async fn kind(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<RatingKind> {
+        let db = ctx.data_unchecked();
+        Ok(query_as("SELECT * FROM rating_kind WHERE id = ?")
+            .bind(self.kind)
+            .fetch_one(db)
+            .await?)
+    }
+
+    async fn rating(&self) -> f32 {
+        self.rating
+    }
+}
+
+pub struct PlayerLoader(pub MySqlPool);
+
 #[async_graphql::async_trait::async_trait]
-impl async_graphql::dataloader::Loader<u32> for PlayerLoader {
+impl dataloader::Loader<u32> for PlayerLoader {
     type Value = Player;
     type Error = Arc<sqlx::Error>;
 
@@ -393,23 +622,17 @@ impl async_graphql::dataloader::Loader<u32> for PlayerLoader {
                 let player = Player::from_row(&row).unwrap();
                 (player.id, player)
             })
-            .fetch_all(&self.0.mysql_pool)
+            .fetch_all(&self.0)
             .await?
             .into_iter()
-            .collect::<HashMap<_, _>>())
+            .collect())
     }
 }
 
-pub struct MapLoader(MySqlPool);
-
-impl MapLoader {
-    pub fn new(mysql_pool: MySqlPool) -> Self {
-        Self(mysql_pool)
-    }
-}
+pub struct MapLoader(pub MySqlPool);
 
 #[async_graphql::async_trait::async_trait]
-impl async_graphql::dataloader::Loader<u32> for MapLoader {
+impl dataloader::Loader<u32> for MapLoader {
     type Value = Map;
     type Error = Arc<sqlx::Error>;
 
@@ -436,6 +659,43 @@ impl async_graphql::dataloader::Loader<u32> for MapLoader {
             .fetch_all(&self.0)
             .await?
             .into_iter()
-            .collect::<HashMap<_, _>>())
+            .collect())
+    }
+}
+
+pub struct CpsNumberLoader(pub MySqlPool);
+
+#[async_graphql::async_trait::async_trait]
+impl dataloader::Loader<u32> for CpsNumberLoader {
+    type Value = i64;
+
+    type Error = Arc<sqlx::Error>;
+
+    async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
+        let query = format!(
+            "SELECT COUNT(*) FROM checkpoint WHERE map_id IN ({})",
+            keys.iter()
+                .map(|_| "?".to_owned())
+                .collect::<Vec<String>>()
+                .join(",")
+        );
+
+        let mut query = sqlx::query(&query);
+
+        for key in keys {
+            query = query.bind(key);
+        }
+
+        Ok(keys
+            .iter()
+            .copied()
+            .zip(
+                query
+                    .map(|row| row.get(0))
+                    .fetch_all(&self.0)
+                    .await?
+                    .into_iter(),
+            )
+            .collect())
     }
 }

@@ -3,17 +3,17 @@ use self::{
     graphql::create_schema,
 };
 use actix_cors::Cors;
-use actix_web::{web::{Data, self, JsonConfig}, App, HttpServer, HttpResponse};
+use actix_web::{
+    web::{self, Data, JsonConfig},
+    App, HttpResponse, HttpServer,
+};
 use anyhow::Context;
 use deadpool::Runtime;
 use sqlx::mysql;
-use tokio::time::interval;
 use std::time::Duration;
+use tokio::time::interval;
 use tracing_actix_web::TracingLogger;
 use tracing_subscriber::fmt::format::FmtSpan;
-
-#[cfg(test)]
-mod tests;
 
 pub mod auth;
 pub mod graphql;
@@ -27,24 +27,32 @@ async fn main() -> anyhow::Result<()> {
     let filter = std::env::var("RECORDS_API_LOG")
         .unwrap_or_else(|_| "tracing=info,warp=info,game_api=info".to_owned());
 
-    // let mut port = 3000 as u16;
-    let mut port = 3001 as u16;
+    #[cfg(feature = "localhost_test")]
+    let mut port = 3001u16;
+    #[cfg(not(feature = "localhost_test"))]
+    let mut port = 3000u16;
     if let Ok(s) = std::env::var("RECORDS_API_PORT") {
         if let Ok(env_port) = s.parse::<u16>() {
             port = env_port;
         }
     };
 
-    let mysql_pool = mysql::MySqlPoolOptions::new()
-        .acquire_timeout(Duration::new(10, 0))
+    let mysql_pool = mysql::MySqlPoolOptions::new().acquire_timeout(Duration::new(10, 0));
+    #[cfg(feature = "localhost_test")]
+    let mysql_pool = mysql_pool
         .connect("mysql://records_api:api@localhost/obs_records")
-        // .connect("mysql://root:root@localhost/obstacle_records")
+        .await?;
+    #[cfg(not(feature = "localhost_test"))]
+    let mysql_pool = mysql_pool
+        .connect("mysql://root:root@localhost/obstacle_records")
         .await?;
 
     let redis_pool = {
         let cfg = deadpool_redis::Config {
-            // url: Some("redis://10.0.0.1/".to_string()),
+            #[cfg(feature = "localhost_test")]
             url: Some("redis://127.0.0.1:6379/".to_string()),
+            #[cfg(not(feature = "localhost_test"))]
+            url: Some("redis://10.0.0.1/".to_string()),
             // url: Some("redis://localhost/".to_string()),
             connection: None,
             pool: None,
@@ -82,11 +90,13 @@ async fn main() -> anyhow::Result<()> {
 
     HttpServer::new(move || {
         let cors = Cors::default()
-            .allow_any_origin()
-            // .allowed_origin("https://www.obstacle.ovh")
             .allowed_methods(vec!["GET", "POST"])
             .allowed_headers(vec!["accept", "content-type", "authorization"])
             .max_age(3600);
+        #[cfg(feature = "localhost_test")]
+        let cors = cors.allow_any_origin();
+        #[cfg(not(feature = "localhost_test"))]
+        let cors = cors.allowed_origin("https://www.obstacle.ovh");
 
         let json_config = JsonConfig::default().limit(1024 * 16);
 
@@ -100,16 +110,14 @@ async fn main() -> anyhow::Result<()> {
             .service(graphql::index_playground)
             .service(graphql::index_graphql)
             .service(http::overview)
-            .service(http::overview_compat)
             .service(http::update_player)
-            .service(http::update_player_compat)
             .service(http::update_map)
-            .service(http::update_map_compat)
             .service(http::player_finished)
-            .service(http::new_player_finished)
-            .service(http::gen_new_token)
-            .service(http::new_token)
-            .default_service(web::to(|| async { HttpResponse::NotFound().body("Not found") }))
+            .service(http::player_finished_inputs)
+            .service(http::get_token)
+            .default_service(web::to(|| async {
+                HttpResponse::NotFound().body("Not found")
+            }))
     })
     .bind(("0.0.0.0", port))?
     .run()

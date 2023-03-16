@@ -3,7 +3,7 @@ use actix_web::{get, post, HttpResponse, Responder};
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use async_graphql::{connection, dataloader, ID};
 use async_graphql_actix_web::GraphQLRequest;
-use sqlx::{mysql, FromRow, MySqlPool, Row};
+use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
 use std::vec::Vec;
 
 use deadpool_redis::redis::AsyncCommands;
@@ -15,9 +15,23 @@ pub struct QueryRoot;
 
 #[async_graphql::Object]
 impl QueryRoot {
+    async fn banishments(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<Banishment>> {
+        let db = ctx.data_unchecked::<MySqlPool>();
+        Ok(query_as::<_, Banishment>("SELECT * FROM banishments")
+            .fetch_all(db)
+            .await?)
+    }
+
     async fn players(
-        &self, ctx: &async_graphql::Context<'_>, after: Option<String>, before: Option<String>,
-        first: Option<i32>, last: Option<i32>,
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
     ) -> async_graphql::Result<connection::Connection<ID, Player>> {
         connection::query(
             after,
@@ -62,8 +76,12 @@ impl QueryRoot {
     }
 
     async fn maps(
-        &self, ctx: &async_graphql::Context<'_>, after: Option<String>, before: Option<String>,
-        first: Option<i32>, last: Option<i32>,
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
     ) -> async_graphql::Result<connection::Connection<ID, Map>> {
         connection::query(
             after,
@@ -150,7 +168,9 @@ impl QueryRoot {
     // Old website
 
     async fn map(
-        &self, ctx: &async_graphql::Context<'_>, game_id: String,
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        game_id: String,
     ) -> async_graphql::Result<Map> {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
         let query = sqlx::query_as!(
@@ -162,7 +182,9 @@ impl QueryRoot {
     }
 
     async fn player(
-        &self, ctx: &async_graphql::Context<'_>, login: String,
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        login: String,
     ) -> async_graphql::Result<Player> {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
         let query = sqlx::query_as!(Player, "SELECT * FROM players WHERE login = ? ", login);
@@ -170,7 +192,8 @@ impl QueryRoot {
     }
 
     async fn records(
-        &self, ctx: &async_graphql::Context<'_>,
+        &self,
+        ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<records_lib::Database>();
         let redis_pool = ctx.data_unchecked::<records_lib::RedisPool>();
@@ -180,7 +203,7 @@ impl QueryRoot {
         // Query the records with these ids
         let query = sqlx::query_as!(
             Record,
-            "SELECT * FROM records ORDER BY updated_at DESC LIMIT 100"
+            "SELECT * FROM records ORDER BY record_date DESC LIMIT 100"
         );
 
         let mut records = query
@@ -232,16 +255,21 @@ pub fn create_schema(db: records_lib::Database) -> Schema {
     )
     .extension(async_graphql::extensions::ApolloTracing)
     .data(dataloader::DataLoader::new(
-        PlayerLoader::new(db.clone()),
+        PlayerLoader(db.mysql_pool.clone()),
         tokio::spawn,
     ))
     .data(dataloader::DataLoader::new(
-        MapLoader::new(db.mysql_pool.clone()),
+        MapLoader(db.mysql_pool.clone()),
+        tokio::spawn,
+    ))
+    .data(dataloader::DataLoader::new(
+        CpsNumberLoader(db.mysql_pool.clone()),
         tokio::spawn,
     ))
     .data(db.mysql_pool.clone())
     .data(db.redis_pool.clone())
     .data(db)
+    .limit_depth(16)
     .finish();
 
     #[cfg(feature = "output_gql_schema")]
