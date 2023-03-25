@@ -1,13 +1,31 @@
 use chrono::{DateTime, Utc};
 use deadpool::managed::PoolError;
+pub use deadpool_redis::Pool as RedisPool;
+pub use sqlx::MySqlPool;
 use std::io;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 
-use crate::models::Banishment;
+use self::models::Banishment;
+
+mod admin;
+mod auth;
+mod graphql;
+mod http;
+mod map;
+pub mod models;
+mod player;
+mod redis;
+mod utils;
+
+pub use auth::{AuthState, UPDATE_RATE};
+pub use graphql::graphql_route;
+pub use http::api_route;
 
 #[derive(Error, Debug)]
 pub enum RecordsError {
+    #[error(transparent)]
+    XmlError(#[from] serde_xml_rs::Error),
     #[error(transparent)]
     IOError(#[from] io::Error),
     #[error(transparent)]
@@ -42,6 +60,9 @@ pub enum RecordsError {
 impl actix_web::ResponseError for RecordsError {
     fn error_response(&self) -> actix_web::HttpResponse {
         match self {
+            Self::XmlError(err) => {
+                actix_web::HttpResponse::InternalServerError().body(err.to_string())
+            }
             Self::IOError(err) => {
                 actix_web::HttpResponse::InternalServerError().body(err.to_string())
             }
@@ -90,4 +111,12 @@ impl<T> From<SendError<T>> for RecordsError {
     fn from(err: SendError<T>) -> Self {
         Self::Unknown(err.to_string())
     }
+}
+
+pub type RecordsResult<T> = Result<T, RecordsError>;
+
+#[derive(Clone)]
+pub struct Database {
+    pub mysql_pool: MySqlPool,
+    pub redis_pool: RedisPool,
 }

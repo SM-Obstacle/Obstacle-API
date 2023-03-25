@@ -1,4 +1,4 @@
-use records_lib::models::*;
+use game_api::models::*;
 use sqlx::mysql;
 use std::collections::HashMap;
 use std::fs::File;

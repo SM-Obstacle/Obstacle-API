@@ -19,7 +19,6 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use rand::Rng;
-use records_lib::RecordsError;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Sender;
 use tokio::time::timeout;
@@ -29,8 +28,10 @@ use tokio::{
 };
 use tracing::Level;
 
-/// The client's token expires in 1 year.
-const EXPIRES_IN: Duration = Duration::from_secs(60 * 60 * 24 * 30 * 365);
+use crate::{RecordsError, RecordsResult};
+
+/// The client's token expires in 12 hours.
+const EXPIRES_IN: Duration = Duration::from_secs(60 * 60 * 12);
 
 /// The state expires in 5 minutes.
 pub const TIMEOUT: Duration = Duration::from_secs(60 * 5);
@@ -122,7 +123,7 @@ impl AuthState {
         );
     }
 
-    pub async fn get_inputs_path(&self, state: String) -> Result<String, RecordsError> {
+    pub async fn get_inputs_path(&self, state: String) -> RecordsResult<String> {
         let (tx, rx) = oneshot::channel();
 
         {
@@ -162,7 +163,7 @@ impl AuthState {
         &self,
         state: String,
         inputs_path: String,
-    ) -> Result<(), RecordsError> {
+    ) -> RecordsResult<()> {
         let mut state_map = self.state_map.lock().await;
 
         if let Some(State { tx, .. }) = state_map.remove(&state) {

@@ -1,27 +1,18 @@
-use self::{
-    auth::{AuthState, UPDATE_RATE},
-    graphql::create_schema,
-};
 use actix_cors::Cors;
 use actix_web::{
-    web::{self, Data, JsonConfig},
+    web::{self, Data},
     App, HttpResponse, HttpServer,
 };
-use anyhow::Context;
 use deadpool::Runtime;
+use game_api::{api_route, graphql_route, AuthState, Database, RecordsResult, UPDATE_RATE};
 use sqlx::mysql;
 use std::time::Duration;
 use tokio::time::interval;
 use tracing_actix_web::TracingLogger;
 use tracing_subscriber::fmt::format::FmtSpan;
 
-pub mod auth;
-pub mod graphql;
-pub mod http;
-pub mod xml;
-
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> RecordsResult<()> {
     // Filter traces based on the RUST_LOG env var, or, if it's not set,
     // default to show the output of the example.
     let filter = std::env::var("RECORDS_API_LOG")
@@ -60,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
         cfg.create_pool(Some(Runtime::Tokio1)).unwrap()
     };
 
-    let db = records_lib::Database {
+    let db = Database {
         mysql_pool,
         redis_pool,
     };
@@ -91,36 +82,26 @@ async fn main() -> anyhow::Result<()> {
     HttpServer::new(move || {
         let cors = Cors::default()
             .allowed_methods(vec!["GET", "POST"])
-            .allowed_headers(vec!["accept", "content-type", "authorization"])
+            .allowed_headers(vec!["accept", "content-type"])
             .max_age(3600);
         #[cfg(feature = "localhost_test")]
         let cors = cors.allow_any_origin();
         #[cfg(not(feature = "localhost_test"))]
         let cors = cors.allowed_origin("https://www.obstacle.ovh");
 
-        let json_config = JsonConfig::default().limit(1024 * 16);
-
         App::new()
             .wrap(cors)
             .wrap(TracingLogger::default())
-            .app_data(json_config)
             .app_data(auth_state.clone())
-            .app_data(Data::new(create_schema(db.clone())))
-            .app_data(Data::new(db.clone()))
-            .service(graphql::index_playground)
-            .service(graphql::index_graphql)
-            .service(http::overview)
-            .service(http::update_player)
-            .service(http::update_map)
-            .service(http::player_finished)
-            .service(http::player_finished_inputs)
-            .service(http::get_token)
+            .service(graphql_route(db.clone()))
+            .service(api_route(db.clone()))
             .default_service(web::to(|| async {
                 HttpResponse::NotFound().body("Not found")
             }))
     })
     .bind(("0.0.0.0", port))?
     .run()
-    .await
-    .context("Failed to run server")
+    .await?;
+
+    Ok(())
 }

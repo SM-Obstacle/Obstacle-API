@@ -11,7 +11,6 @@ pub struct Player {
     pub id: u32,
     pub login: String,
     pub name: String,
-    #[serde(skip_serializing)]
     pub join_date: Option<chrono::NaiveDateTime>,
     pub country: String,
     pub admins_note: Option<String>,
@@ -22,7 +21,6 @@ pub struct Player {
 pub struct PlayerIps {
     pub player_id: u32,
     pub ip_hash: Vec<u8>,
-    #[serde(skip_serializing)]
     pub ip_date: chrono::NaiveDateTime,
 }
 
@@ -41,7 +39,6 @@ pub struct Record {
     pub map_id: u32,
     pub time: i32,
     pub respawn_count: i32,
-    #[serde(skip_serializing)]
     pub record_date: chrono::NaiveDateTime,
     pub flags: u32,
     pub inputs_path: String,
@@ -82,7 +79,6 @@ impl<'r> FromRow<'r, MySqlRow> for Role {
 #[derive(Serialize, FromRow, Clone, Debug)]
 pub struct BanishmentInner {
     pub id: u32,
-    #[serde(skip_serializing)]
     pub date_ban: chrono::NaiveDateTime,
     pub duration: Option<u32>,
     pub reason: Option<String>,
@@ -172,12 +168,10 @@ impl<'r> FromRow<'r, MySqlRow> for Medal {
 
 #[derive(Serialize, FromRow, Clone, Debug)]
 pub struct MedalPrice {
-    pub id: u32,
-    #[serde(skip_serializing)]
-    pub price_date: chrono::NaiveDateTime,
     pub medal: u8,
     pub map_id: u32,
     pub player_id: u32,
+    pub price_date: chrono::NaiveDateTime,
 }
 
 #[derive(Serialize, PartialEq, Eq, Clone, Copy, Debug, Enum)]
@@ -210,9 +204,7 @@ impl<'r> FromRow<'r, MySqlRow> for RatingKind {
 pub struct Rating {
     pub player_id: u32,
     pub map_id: u32,
-    #[serde(skip)]
     pub rating_date: chrono::NaiveDateTime,
-    pub denominator: u8,
 }
 
 #[derive(Serialize, FromRow, Clone, Debug)]
