@@ -44,8 +44,10 @@ pub enum RecordsError {
     MissingPlayerFinishedReq,
     #[error("invalid ManiaPlanet access token on /gen_new_token request")]
     InvalidMPToken,
-    #[error("player not found in database")]
+    #[error("player not found in database: `{0}`")]
     PlayerNotFound(String),
+    #[error("player not banned: `{0}`")]
+    PlayerNotBanned(String),
     #[error("map not found in database")]
     MapNotFound(String),
 
@@ -55,6 +57,10 @@ pub enum RecordsError {
     UnknownMedal(u8, String),
     #[error("unknown rating kind with id `{0}` and name `{1}`")]
     UnknownRatingKind(u8, String),
+    #[error("no rating found to update for player with login: `{0}` and map with uid: `{1}`")]
+    NoRatingFound(String, String),
+    #[error("invalid rates (too many, or repeated rate)")]
+    InvalidRates,
 }
 
 impl actix_web::ResponseError for RecordsError {
@@ -66,7 +72,9 @@ impl actix_web::ResponseError for RecordsError {
             Self::IOError(err) => {
                 actix_web::HttpResponse::InternalServerError().body(err.to_string())
             }
-            Self::Unauthorized => actix_web::HttpResponse::Unauthorized().finish(),
+            Self::Unauthorized => {
+                actix_web::HttpResponse::Unauthorized().body("unauthorized action")
+            }
             Self::BannedPlayer(ban) => {
                 actix_web::HttpResponse::Forbidden().body(format!("banned player: {ban}"))
             }
@@ -83,6 +91,8 @@ impl actix_web::ResponseError for RecordsError {
             Self::Unknown(s) => actix_web::HttpResponse::InternalServerError().body(s.clone()),
             Self::PlayerNotFound(login) => actix_web::HttpResponse::BadRequest()
                 .body(format!("player `{login}` not found in database")),
+            Self::PlayerNotBanned(login) => actix_web::HttpResponse::BadRequest()
+                .body(format!("player `{login}` is not banned")),
             Self::MapNotFound(uid) => actix_web::HttpResponse::BadRequest()
                 .body(format!("map with uid `{uid}` not found in database")),
             Self::UnknownRole(id, name) => actix_web::HttpResponse::InternalServerError()
@@ -91,6 +101,11 @@ impl actix_web::ResponseError for RecordsError {
                 .body(format!("unknown medal name `{id}`: `{name}`")),
             Self::UnknownRatingKind(id, kind) => actix_web::HttpResponse::InternalServerError()
                 .body(format!("unknown rating kind name `{id}`: `{kind}`")),
+            Self::NoRatingFound(login, map_uid) => actix_web::HttpResponse::BadRequest()
+                .body(format!(
+                "no rating found to update for player with login: `{login}` and map with uid: `{map_uid}`",
+            )),
+            Self::InvalidRates => actix_web::HttpResponse::BadRequest().body("invalid rates (too many, or repeated rate)")
         }
     }
 }

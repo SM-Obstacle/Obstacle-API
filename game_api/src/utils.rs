@@ -2,26 +2,32 @@ use std::io::Write;
 
 use actix_web::{HttpResponse, Responder};
 use serde::Serialize;
-use serde_xml_rs::{to_string, Serializer};
+use serde_xml_rs::{to_writer, Serializer};
 
 use crate::RecordsResult;
 
-pub fn wrap_xml_seq<T: Serialize>(s: &[T]) -> RecordsResult<impl Responder> {
-    let mut buf = Vec::with_capacity(16 * 1024);
-    buf.write(br#"<?xml version="1.0" encoding="UTF-8"?>"#)?;
-    buf.write(b"<response>")?;
+const XML_BUF_CAP: usize = 16 * 1024;
+
+pub fn xml_seq<T: Serialize>(field_name: Option<&str>, s: &[T]) -> RecordsResult<String> {
+    let mut buf = Vec::with_capacity(XML_BUF_CAP);
+    if let Some(field_name) = field_name {
+        write!(buf, "<{}>", field_name)?;
+    }
     let mut ser = Serializer::new(&mut buf);
     for elem in s {
         elem.serialize(&mut ser)?;
     }
-    buf.write(b"</response>")?;
-    Ok(HttpResponse::Ok()
-        .content_type("application/xml; charset=utf-8")
-        .body(String::from_utf8(buf).unwrap()))
+    if let Some(field_name) = field_name {
+        write!(buf, "</{}>", field_name)?;
+    }
+    Ok(String::from_utf8(buf).unwrap())
 }
 
 pub fn wrap_xml<T: Serialize>(s: &T) -> RecordsResult<impl Responder> {
-    let out = to_string(s)?;
+    let mut buf = Vec::with_capacity(XML_BUF_CAP);
+    buf.write(br#"<?xml version="1.0" encoding="UTF-8"?>"#)?;
+    to_writer(&mut buf, s)?;
+    let out = String::from_utf8(buf).expect("xml serializing produced non utf8 chars");
     Ok(HttpResponse::Ok()
         .content_type("application/xml; charset=utf-8")
         .body(out))
@@ -58,4 +64,13 @@ pub fn escaped(input: &str) -> String {
     }
 
     out
+}
+
+pub fn any_repeated<T: PartialEq>(slice: &[T]) -> bool {
+    for (i, t) in slice.iter().enumerate() {
+        if slice.split_at(i + 1).1.iter().any(|x| x == t) {
+            return true;
+        }
+    }
+    false
 }

@@ -19,8 +19,8 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use rand::Rng;
-use tokio::sync::oneshot;
-use tokio::sync::oneshot::Sender;
+use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot::{self, Sender};
 use tokio::time::timeout;
 use tokio::{
     sync::{Mutex, RwLock},
@@ -28,7 +28,8 @@ use tokio::{
 };
 use tracing::Level;
 
-use crate::{RecordsError, RecordsResult};
+use crate::models::Role;
+use crate::{Database, RecordsError, RecordsResult};
 
 /// The client's token expires in 12 hours.
 const EXPIRES_IN: Duration = Duration::from_secs(60 * 60 * 12);
@@ -208,17 +209,33 @@ impl AuthState {
     ///
     /// If the given token exists and corresponds to the given player login, but the TTL is expired,
     /// the token is removed from the client_map.
-    pub async fn check_token_for(&self, token: &str, login: &str) -> bool {
-        let client_map = self.client_map.read().await;
-        let remove_client = match client_map.get(token) {
-            Some(client) if client.login == login => {
-                if client.instant.elapsed() >= EXPIRES_IN {
-                    true
-                } else {
-                    return true;
+    pub async fn check_auth_for<B: ExtractAuthFields>(
+        &self,
+        db: &Database,
+        min_req_role: Role,
+        body: &B,
+    ) -> RecordsResult<()> {
+        let AuthFields { token, login } = body.get_auth_fields();
+        let remove_client = {
+            let client_map = self.client_map.read().await;
+            match client_map.get(token) {
+                Some(client) if &client.login == login => {
+                    let client_role = sqlx::query_as::<_, Role>(
+                        "SELECT * FROM role
+                    WHERE id = (SELECT role FROM players WHERE login = ?)",
+                    )
+                    .bind(&client.login)
+                    .fetch_one(&db.mysql_pool)
+                    .await?;
+
+                    if client.instant.elapsed() >= EXPIRES_IN || min_req_role > client_role {
+                        true
+                    } else {
+                        return Ok(());
+                    }
                 }
+                _ => false,
             }
-            _ => false,
         };
 
         if remove_client {
@@ -232,6 +249,16 @@ impl AuthState {
             );
         }
 
-        false
+        Err(RecordsError::Unauthorized)
     }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AuthFields<'a> {
+    pub token: &'a str,
+    pub login: &'a str,
+}
+
+pub trait ExtractAuthFields {
+    fn get_auth_fields(&self) -> AuthFields;
 }

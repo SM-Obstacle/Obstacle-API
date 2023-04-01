@@ -91,7 +91,6 @@ impl Map {
         .bind(self.id)
         .fetch_all(db)
         .await?;
-        println!("{fetch_all:?}");
         Ok(fetch_all)
     }
 

@@ -51,7 +51,7 @@ pub struct RankedRecord {
     pub record: Record,
 }
 
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug, Enum)]
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug, Enum, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum Role {
     Player,
@@ -141,6 +141,7 @@ pub struct CheckpointTimes {
 }
 
 #[derive(Serialize, PartialEq, Eq, Clone, Copy, Debug, Enum)]
+#[non_exhaustive]
 pub enum Medal {
     Bronze,
     Silver,
@@ -175,6 +176,7 @@ pub struct MedalPrice {
 }
 
 #[derive(Serialize, PartialEq, Eq, Clone, Copy, Debug, Enum)]
+#[non_exhaustive]
 pub enum RatingKind {
     Route,
     Deco,

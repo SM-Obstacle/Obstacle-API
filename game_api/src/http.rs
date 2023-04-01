@@ -1,10 +1,12 @@
 use actix_web::web::JsonConfig;
 use actix_web::{web, Scope};
 
+use crate::auth::{AuthFields, ExtractAuthFields};
 use crate::map::UpdateMapBody;
+use crate::models::Role;
 use crate::player::UpdatePlayerBody;
-use crate::utils::{escaped, wrap_xml_seq};
-use crate::{map, player, redis, Database};
+use crate::utils::{escaped, wrap_xml, xml_seq};
+use crate::{admin, map, player, redis, AuthState, Database, RecordsResult};
 use actix_web::{
     web::{Data, Json},
     Responder,
@@ -15,17 +17,30 @@ use sqlx::{mysql, FromRow};
 
 fn player_scope() -> Scope {
     web::scope("/player")
+        .route("/is_banned", web::get().to(player::is_banned))
         .route("/finished", web::post().to(player::player_finished))
         .route("/register_inputs", web::post().to(player::register_inputs))
         .route("/get_token", web::post().to(player::get_token))
+        .route("/info", web::get().to(player::info))
 }
 
 fn admin_scope() -> Scope {
     web::scope("/admin")
+        .route("/del_note", web::post().to(admin::del_note))
+        .route("/set_role", web::post().to(admin::set_role))
+        .route("/banishments", web::get().to(admin::banishments))
+        .route("/ban", web::post().to(admin::ban))
+        .route("/unban", web::post().to(admin::unban))
+        .route("/player_note", web::get().to(admin::player_note))
 }
 
 fn map_scope() -> Scope {
     web::scope("/map")
+        .route("/player_rating", web::get().to(map::player_rating))
+        .route("/ratings", web::get().to(map::ratings))
+        .route("/rating", web::get().to(map::rating))
+        .route("/rate", web::post().to(map::rate))
+        .route("/reset_ratings", web::post().to(map::reset_ratings))
 }
 
 pub fn api_route(db: Database) -> Scope {
@@ -46,6 +61,15 @@ struct UpdateBody {
     login: String,
     player: UpdatePlayerBody,
     map: UpdateMapBody,
+}
+
+impl ExtractAuthFields for UpdateBody {
+    fn get_auth_fields(&self) -> AuthFields {
+        AuthFields {
+            token: &self.secret,
+            login: &self.login,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, sqlx::FromRow)]
@@ -96,8 +120,6 @@ async fn append_range(
         params
     );
 
-    println!("QUERY: {query}");
-
     let mut query = sqlx::query(&query);
 
     query = query.bind(map_id);
@@ -126,12 +148,16 @@ async fn append_range(
     }
 }
 
-async fn update(db: Data<Database>, body: Json<UpdateBody>) -> impl Responder {
-    // Insert map and player if they dont exist yet
+async fn update(
+    db: Data<Database>,
+    state: Data<AuthState>,
+    body: Json<UpdateBody>,
+) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    println!("updating map");
+    state.check_auth_for(&db, Role::Player, &body).await?;
+
+    // Insert map and player if they dont exist yet
     let map_id = map::get_or_insert(&db, &body.map).await?;
-    println!("updating player");
     let player_id = player::update_or_insert(&db, &body.login, body.player).await?;
 
     let mut redis_conn = db.redis_pool.get().await.unwrap();
@@ -206,5 +232,5 @@ async fn update(db: Data<Database>, body: Json<UpdateBody>) -> impl Responder {
         }
     }
 
-    wrap_xml_seq(&ranked_records)
+    wrap_xml(&xml_seq(Some("response"), &ranked_records)?)
 }

@@ -13,10 +13,12 @@ use deadpool_redis::redis::AsyncCommands;
 use rand::{distributions::Alphanumeric, Rng};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 
 use crate::{
-    auth::AuthState,
-    models::{Banishment, Record},
+    admin,
+    auth::{AuthFields, AuthState, ExtractAuthFields},
+    models::{Banishment, Map, Player, Record, Role},
     redis,
     utils::wrap_xml,
     Database, RecordsError, RecordsResult,
@@ -37,8 +39,6 @@ pub async fn update_or_insert(
         .fetch_optional(&db.mysql_pool)
         .await?
     {
-        println!("player exists, we update");
-
         sqlx::query!(
             "UPDATE players SET name = ?, country = ? WHERE id = ?",
             body.nickname,
@@ -50,8 +50,6 @@ pub async fn update_or_insert(
 
         return Ok(id);
     }
-
-    println!("player doesnt exist, we insert");
 
     let id = sqlx::query_scalar(
         "INSERT INTO players
@@ -88,6 +86,15 @@ pub struct HasFinishedBody {
     pub cps: Vec<CheckpointTime>,
 }
 
+impl ExtractAuthFields for HasFinishedBody {
+    fn get_auth_fields(&self) -> AuthFields {
+        AuthFields {
+            token: &self.secret,
+            login: &self.player_login,
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(rename(serialize = "response"))]
 pub struct HasFinishedResponse {
@@ -103,16 +110,11 @@ pub async fn player_finished(
     db: Data<Database>,
     body: Json<HasFinishedBody>,
 ) -> RecordsResult<impl Responder> {
-    if state
-        .check_token_for(&body.secret, &body.player_login)
-        .await
-    {
-        let inputs_path = state.get_inputs_path(body.state.clone()).await?;
-        let finished = inner_player_finished(db, body.into_inner(), inputs_path).await?;
-        wrap_xml(&finished)
-    } else {
-        Err(RecordsError::Unauthorized)
-    }
+    let body = body.into_inner();
+    state.check_auth_for(&db, Role::Player, &body).await?;
+    let inputs_path = state.get_inputs_path(body.state.clone()).await?;
+    let finished = inner_player_finished(db, body, inputs_path).await?;
+    wrap_xml(&finished)
 }
 
 #[derive(MultipartForm)]
@@ -151,8 +153,9 @@ pub async fn register_inputs(
 pub async fn get_player_from_login(
     db: &Database,
     player_login: &str,
-) -> Result<Option<u32>, RecordsError> {
-    let r = sqlx::query_scalar!("SELECT id FROM players WHERE login = ?", player_login)
+) -> Result<Option<Player>, RecordsError> {
+    let r = sqlx::query_as("SELECT * FROM players WHERE login = ?")
+        .bind(player_login)
         .fetch_optional(&db.mysql_pool)
         .await?;
     Ok(r)
@@ -162,9 +165,9 @@ pub async fn check_banned(
     db: &Database,
     player_id: u32,
 ) -> Result<Option<Banishment>, RecordsError> {
-    let r = sqlx::query_as::<_, Banishment>(
+    let r = sqlx::query_as(
         "SELECT * FROM banishments
-        WHERE player_id = ? AND (SYSDATE() < date_ban + duration OR duration = -1)",
+        WHERE player_id = ? AND (date_ban + INTERVAL duration SECOND > NOW() OR duration = -1)",
     )
     .bind(player_id)
     .fetch_optional(&db.mysql_pool)
@@ -175,8 +178,9 @@ pub async fn check_banned(
 pub async fn get_map_from_game_id(
     db: &actix_web::web::Data<Database>,
     map_game_id: &str,
-) -> Result<Option<u32>, RecordsError> {
-    let r = sqlx::query_scalar!("SELECT id FROM maps WHERE game_id = ?", map_game_id)
+) -> Result<Option<Map>, RecordsError> {
+    let r = sqlx::query_as("SELECT * FROM maps WHERE game_id = ?")
+        .bind(map_game_id)
         .fetch_optional(&db.mysql_pool)
         .await?;
     Ok(r)
@@ -187,7 +191,7 @@ async fn inner_player_finished(
     body: HasFinishedBody,
     inputs_path: String,
 ) -> RecordsResult<HasFinishedResponse> {
-    let Some(player_id) = get_player_from_login(&db, &body.player_login).await? else {
+    let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.player_login).await? else {
         return Err(RecordsError::PlayerNotFound(body.player_login));
     };
 
@@ -195,7 +199,7 @@ async fn inner_player_finished(
         return Err(RecordsError::BannedPlayer(ban));
     }
 
-    let Some(map_id) = get_map_from_game_id(&db, &body.map_game_id).await? else {
+    let Some(Map { id: map_id, .. }) = get_map_from_game_id(&db, &body.map_game_id).await? else {
         return Err(RecordsError::MapNotFound(body.map_game_id));
     };
 
@@ -315,4 +319,88 @@ pub async fn get_token(
     } else {
         Err(RecordsError::InvalidMPToken)
     }
+}
+
+#[derive(Deserialize)]
+pub struct IsBannedBody {
+    secret: String,
+    login: String,
+}
+
+impl ExtractAuthFields for IsBannedBody {
+    fn get_auth_fields(&self) -> AuthFields {
+        AuthFields {
+            token: &self.secret,
+            login: &self.login,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct IsBannedResponse {
+    banned: bool,
+    current_ban: Option<admin::Banishment>,
+}
+
+pub async fn is_banned(
+    db: Data<Database>,
+    state: Data<AuthState>,
+    body: Json<IsBannedBody>,
+) -> RecordsResult<impl Responder> {
+    let body = body.into_inner();
+    state.check_auth_for(&db, Role::Player, &body).await?;
+
+    let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.login).await? else {
+        return Err(RecordsError::PlayerNotFound(body.login));
+    };
+
+    let current_ban = admin::is_banned(&db, player_id).await?;
+    wrap_xml(&IsBannedResponse {
+        banned: current_ban.is_some(),
+        current_ban,
+    })
+}
+
+#[derive(Deserialize)]
+pub struct InfoBody {
+    secret: String,
+    login: String,
+}
+
+impl ExtractAuthFields for InfoBody {
+    fn get_auth_fields(&self) -> AuthFields {
+        AuthFields {
+            token: &self.secret,
+            login: &self.login,
+        }
+    }
+}
+
+#[derive(Serialize, FromRow)]
+struct InfoResponse {
+    id: u32,
+    login: String,
+    name: String,
+    join_date: Option<chrono::NaiveDateTime>,
+    country: String,
+    role_name: String,
+}
+
+pub async fn info(
+    db: Data<Database>,
+    state: Data<AuthState>,
+    body: Json<InfoBody>,
+) -> RecordsResult<impl Responder> {
+    let body = body.into_inner();
+    state.check_auth_for(&db, Role::Player, &body).await?;
+
+    let Some(info) = sqlx::query_as::<_, InfoResponse>(
+        "SELECT *, (SELECT role_name FROM role WHERE id = role) as role_name
+        FROM players WHERE login = ?")
+    .bind(&body.login)
+    .fetch_optional(&db.mysql_pool).await? else {
+        return Err(RecordsError::PlayerNotFound(body.login));
+    };
+
+    wrap_xml(&info)
 }
