@@ -14,10 +14,12 @@ use rand::{distributions::Alphanumeric, Rng};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use tokio::time::timeout;
+use tracing::Level;
 
 use crate::{
     admin,
-    auth::{AuthFields, AuthState, ExtractAuthFields},
+    auth::{AuthFields, AuthState, ExtractAuthFields, TIMEOUT},
     models::{Banishment, Map, Player, Record, Role},
     redis,
     utils::wrap_xml,
@@ -167,7 +169,7 @@ pub async fn check_banned(
 ) -> Result<Option<Banishment>, RecordsError> {
     let r = sqlx::query_as(
         "SELECT * FROM banishments
-        WHERE player_id = ? AND (date_ban + INTERVAL duration SECOND > NOW() OR duration = -1)",
+        WHERE player_id = ? AND (date_ban + INTERVAL duration SECOND > NOW() OR duration IS NULL)",
     )
     .bind(player_id)
     .fetch_optional(&db.mysql_pool)
@@ -281,11 +283,9 @@ async fn check_mp_token(login: &str, token: String) -> RecordsResult<bool> {
     let client = reqwest::Client::new();
 
     let res = client
-        .get("https://prod.live.maniaplanet.com/ingame/auth")
-        .header(
-            "Maniaplanet-Auth",
-            format!(r#"Login="{login}", Token="{token}""#),
-        )
+        .get("https://prod.live.maniaplanet.com/webservices/me")
+        .header("Accept", "application/json")
+        .header("Authorization", format!("Bearer {token}"))
         .send()
         .await?;
     let MPServerRes { res_login } = match res.status() {
@@ -299,7 +299,7 @@ async fn check_mp_token(login: &str, token: String) -> RecordsResult<bool> {
 #[derive(Deserialize)]
 pub struct GetTokenBody {
     login: String,
-    token: String,
+    state: String,
 }
 
 #[derive(Serialize)]
@@ -313,12 +313,56 @@ pub async fn get_token(
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
 
-    if check_mp_token(&body.login, body.token).await? {
-        let token = state.gen_token_for(body.login).await;
-        wrap_xml(&GetTokenResponse { token })
-    } else {
-        Err(RecordsError::InvalidMPToken)
+    // retrieve access_token from browser redirection
+    let (tx, rx) = state.connect_with_browser(body.state.clone()).await?;
+    let access_token = match timeout(TIMEOUT, rx).await {
+        Ok(Ok(access_token)) => access_token,
+        _ => {
+            tracing::event!(
+                Level::WARN,
+                "Token state `{}` timed out, removing it",
+                body.state.clone()
+            );
+            state.remove_state(body.state).await;
+            return Err(RecordsError::Timeout);
+        }
+    };
+
+    let err_msg = "/get_token rx should not be dropped at this point";
+
+    // check access_token and generate new token for player ...
+    if !check_mp_token(&body.login, access_token).await? {
+        tx.send("INVALID_TOKEN".to_owned()).expect(err_msg);
+        return Err(RecordsError::InvalidMPToken);
     }
+
+    let token = state.gen_token_for(body.login).await;
+    tx.send("OK".to_owned()).expect(err_msg);
+
+    wrap_xml(&GetTokenResponse { token })
+}
+
+#[derive(Deserialize)]
+pub struct GiveTokenBody {
+    access_token: String,
+    state: String,
+}
+
+pub async fn post_give_token(
+    state: Data<AuthState>,
+    body: Json<GiveTokenBody>,
+) -> RecordsResult<impl Responder> {
+    let body = body.into_inner();
+    state
+        .browser_connected_for(body.state, body.access_token)
+        .await?;
+    Ok(HttpResponse::Ok())
+}
+
+pub async fn get_give_token() -> impl Responder {
+    HttpResponse::Ok()
+        .content_type("text/html")
+        .body(include_str!("../public/give_token.html"))
 }
 
 #[derive(Deserialize)]

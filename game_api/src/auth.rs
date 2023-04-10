@@ -20,7 +20,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use chrono::{DateTime, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot::{self, Sender};
+use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio::time::timeout;
 use tokio::{
     sync::{Mutex, RwLock},
@@ -43,15 +43,32 @@ pub const TIMEOUT: Duration = Duration::from_secs(60 * 5);
 pub const UPDATE_RATE: Duration = Duration::from_secs(60 * 60 * 24);
 
 #[derive(Debug)]
-struct State {
+struct InputsState {
     tx: Sender<String>,
     instant: DateTime<Utc>,
 }
 
-impl From<Sender<String>> for State {
+impl From<Sender<String>> for InputsState {
     fn from(tx: Sender<String>) -> Self {
         Self {
             tx,
+            instant: Utc::now(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TokenState {
+    tx: Sender<String>,
+    rx: Receiver<String>,
+    instant: DateTime<Utc>,
+}
+
+impl TokenState {
+    fn new(tx: Sender<String>, rx: Receiver<String>) -> Self {
+        Self {
+            tx,
+            rx,
             instant: Utc::now(),
         }
     }
@@ -84,7 +101,8 @@ impl From<String> for Client {
 /// prevent the same client from logging in multiple times.
 #[derive(Debug, Default)]
 pub struct AuthState {
-    state_map: Arc<Mutex<HashMap<String, State>>>,
+    inputs_states_map: Arc<Mutex<HashMap<String, InputsState>>>,
+    token_states_map: Arc<Mutex<HashMap<String, TokenState>>>,
     client_map: Arc<RwLock<HashMap<String, Client>>>,
 }
 
@@ -114,7 +132,7 @@ impl AuthState {
 
     /// Removes a state from the state map.
     pub async fn remove_state(&self, state: String) {
-        let mut state_map = self.state_map.lock().await;
+        let mut state_map = self.inputs_states_map.lock().await;
         state_map.remove(&state);
         tracing::event!(
             Level::INFO,
@@ -128,15 +146,15 @@ impl AuthState {
         let (tx, rx) = oneshot::channel();
 
         {
-            let mut state_map = self.state_map.lock().await;
+            let mut state_map = self.inputs_states_map.lock().await;
             let state_info = state.clone();
-            if let Some(State { instant, .. }) = state_map.get(&state) {
+            if let Some(InputsState { instant, .. }) = state_map.get(&state) {
                 return Err(RecordsError::StateAlreadyReceived(*instant));
             }
-            state_map.insert(state.clone(), State::from(tx));
+            state_map.insert(state.clone(), InputsState::from(tx));
             tracing::event!(
                 Level::INFO,
-                "Inserted state `{}` into the state_map, {} state(s) in total",
+                "Inserted state `{}` into the inputs_state_map, {} state(s) in total",
                 state_info,
                 state_map.len()
             );
@@ -145,11 +163,42 @@ impl AuthState {
         match timeout(TIMEOUT, rx).await {
             Ok(Ok(inputs_path)) => Ok(inputs_path),
             _ => {
-                tracing::event!(Level::WARN, "State `{}` timed out", state);
+                tracing::event!(
+                    Level::WARN,
+                    "Inputs state `{}` timed out, removing it",
+                    state
+                );
                 self.remove_state(state).await;
                 Err(RecordsError::Timeout)
             }
         }
+    }
+
+    pub async fn connect_with_browser(
+        &self,
+        state: String,
+    ) -> RecordsResult<(Sender<String>, Receiver<String>)> {
+        // cross channels
+        let (tx1, rx1) = oneshot::channel();
+        let (tx2, rx2) = oneshot::channel();
+
+        // store channel in the state_map
+        {
+            let mut state_map = self.token_states_map.lock().await;
+            let state_info = state.clone();
+            if let Some(TokenState { instant, .. }) = state_map.get(&state) {
+                return Err(RecordsError::StateAlreadyReceived(*instant));
+            }
+            state_map.insert(state.clone(), TokenState::new(tx2, rx1));
+            tracing::event!(
+                Level::INFO,
+                "Inserted state `{}` into the token_state_map, {} state(s) in total",
+                state_info,
+                state_map.len()
+            );
+        }
+
+        Ok((tx1, rx2))
     }
 
     /// Sends the sender of the /new_player_finished request
@@ -165,9 +214,9 @@ impl AuthState {
         state: String,
         inputs_path: String,
     ) -> RecordsResult<()> {
-        let mut state_map = self.state_map.lock().await;
+        let mut state_map = self.inputs_states_map.lock().await;
 
-        if let Some(State { tx, .. }) = state_map.remove(&state) {
+        if let Some(InputsState { tx, .. }) = state_map.remove(&state) {
             tx.send(inputs_path)
                 .expect("/player_finished rx should not be dropped at this point");
         } else {
@@ -176,10 +225,46 @@ impl AuthState {
 
         tracing::event!(
             Level::INFO,
-            "Removed state `{}` from the state_map, {} state(s) in total",
+            "Removed state `{}` from the inputs_state_map, {} state(s) in total",
             state,
             state_map.len()
         );
+        Ok(())
+    }
+
+    pub async fn browser_connected_for(
+        &self,
+        state: String,
+        access_token: String,
+    ) -> RecordsResult<()> {
+        let mut state_map = self.token_states_map.lock().await;
+
+        if let Some(TokenState { tx, rx, .. }) = state_map.remove(&state) {
+            tx.send(access_token)
+                .expect("/player/get_token rx should not be dropped at this point");
+
+            match timeout(TIMEOUT, rx).await {
+                Ok(Ok(res)) => match res.as_str() {
+                    "OK" => {}
+                    "INVALID_TOKEN" => return Err(RecordsError::InvalidMPToken),
+                    _ => unreachable!(),
+                },
+                _ => {
+                    tracing::event!(Level::WARN, "Token state `{}` timed out", state);
+                    return Err(RecordsError::Timeout);
+                }
+            };
+        } else {
+            return Err(RecordsError::MissingGetTokenReq);
+        }
+
+        tracing::event!(
+            Level::INFO,
+            "Removed state `{}` from the token_state_map, {} state(s) in total",
+            state,
+            state_map.len()
+        );
+
         Ok(())
     }
 

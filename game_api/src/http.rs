@@ -17,10 +17,15 @@ use sqlx::{mysql, FromRow};
 
 fn player_scope() -> Scope {
     web::scope("/player")
-        .route("/is_banned", web::get().to(player::is_banned))
+        .route("/is_banned", web::post().to(player::is_banned))
         .route("/finished", web::post().to(player::player_finished))
         .route("/register_inputs", web::post().to(player::register_inputs))
         .route("/get_token", web::post().to(player::get_token))
+        .service(
+            web::resource("/give_token")
+                .route(web::post().to(player::post_give_token))
+                .route(web::get().to(player::get_give_token)),
+        )
         .route("/info", web::get().to(player::info))
 }
 

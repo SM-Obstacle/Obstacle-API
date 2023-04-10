@@ -42,6 +42,8 @@ pub enum RecordsError {
     StateAlreadyReceived(DateTime<Utc>),
     #[error("missing the /new_player_finished request")]
     MissingPlayerFinishedReq,
+    #[error("missing the /player/get_token request")]
+    MissingGetTokenReq,
     #[error("invalid ManiaPlanet access token on /gen_new_token request")]
     InvalidMPToken,
     #[error("player not found in database: `{0}`")]
@@ -83,6 +85,9 @@ impl actix_web::ResponseError for RecordsError {
                 .body(format!("state already received at {instant:?}")),
             Self::MissingPlayerFinishedReq => {
                 actix_web::HttpResponse::BadRequest().body("missing /player_finished request")
+            }
+            Self::MissingGetTokenReq => {
+                actix_web::HttpResponse::BadRequest().body("missing /player/get_token request")
             }
             Self::InvalidMPToken => {
                 actix_web::HttpResponse::BadRequest().body("invalid MP access token")
