@@ -177,7 +177,7 @@ pub async fn banishments(
             id, date_ban, duration, was_reprieved, reason,
             (SELECT login FROM players WHERE id = banished_by) AS banished_by,
             id IN (SELECT id FROM banishments WHERE player_id = ?
-                AND (date_ban + INTERVAL duration SECOND > NOW() OR duration = -1)) AS is_current
+                AND (date_ban + INTERVAL duration SECOND > NOW() OR duration IS NULL)) AS is_current
         FROM banishments
         WHERE player_id = ?",
     )
@@ -270,7 +270,7 @@ pub async fn is_banned(db: &Database, player_id: u32) -> RecordsResult<Option<Ba
         "SELECT id, date_ban, duration, was_reprieved, reason,
         (SELECT login FROM players WHERE id = banished_by) as banished_by
         FROM banishments
-        WHERE player_id = ? AND (date_ban + INTERVAL duration SECOND > NOW() OR duration = -1)",
+        WHERE player_id = ? AND (date_ban + INTERVAL duration SECOND > NOW() OR duration IS NULL)",
     )
     .bind(player_id)
     .fetch_optional(&db.mysql_pool)
