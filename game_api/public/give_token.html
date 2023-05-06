@@ -3,7 +3,7 @@
 <body>
     <h1>Loading...</h1>
     <script>
-        ((w) => w.onload = () => {
+        (() => window.onload = () => {
             const loading = document.querySelector('h1');
 
             const params = document.location.hash.slice(1).split('&').reduce((acc, cur) => {
@@ -18,14 +18,15 @@
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(params),
-            }).then(res => {
+            }).then(async res => {
                 if (res.ok) {
-                    loading.innerText = 'You are all set! You can close this window now.';
+                    loading.innerText = 'You are all set! You can close this tab now.';
                 } else {
                     loading.innerText = 'Something went wrong. Please contact the developers (e.g. @ahmadbky or @MiLTanT on discord).';
+                    console.log(await res.text());
                 }
             });
-        })(window);
+        })();
     </script>
 </body>
 </html>

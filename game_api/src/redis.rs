@@ -10,7 +10,7 @@ pub async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64>
 
 pub async fn update_leaderboard(db: &Database, key: &str, map_id: u32) -> RecordsResult<i64> {
     let mut redis_conn = db.redis_pool.get().await.unwrap();
-    let redis_count: i64 = redis_conn.zcount(key, "-inf", "+inf").await.unwrap();
+    let redis_count: i64 = redis_conn.zcount(key, "-inf", "+inf").await?;
     let mysql_count: i64 = count_records_map(db, map_id).await?;
 
     if redis_count != mysql_count {

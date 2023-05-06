@@ -3,8 +3,11 @@ use actix_web::{
     web::{self, Data},
     App, HttpResponse, HttpServer,
 };
+use actix_web_grants::GrantsMiddleware;
 use deadpool::Runtime;
-use game_api::{api_route, graphql_route, AuthState, Database, RecordsResult, UPDATE_RATE};
+use game_api::{
+    api_route, auth_extractor, graphql_route, AuthState, Database, RecordsResult, UPDATE_RATE,
+};
 use sqlx::mysql;
 use std::time::Duration;
 use tokio::time::interval;
@@ -93,8 +96,10 @@ async fn main() -> RecordsResult<()> {
             .wrap(cors)
             .wrap(TracingLogger::default())
             .app_data(auth_state.clone())
+            .app_data(Data::new(db.clone()))
+            .wrap(GrantsMiddleware::with_extractor(auth_extractor))
             .service(graphql_route(db.clone()))
-            .service(api_route(db.clone()))
+            .service(api_route())
             .default_service(web::to(|| async {
                 HttpResponse::NotFound().body("Not found")
             }))

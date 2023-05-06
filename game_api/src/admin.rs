@@ -21,18 +21,8 @@ struct AdminRequest {
 
 #[derive(Deserialize)]
 pub struct DelNoteBody {
-    secret: String,
     #[serde(flatten)]
     req: AdminRequest,
-}
-
-impl ExtractAuthFields for DelNoteBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.req.admin_login,
-        }
-    }
 }
 
 #[derive(Serialize)]
@@ -46,7 +36,6 @@ pub async fn del_note(
     body: Json<DelNoteBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Admin, &body).await?;
     sqlx::query!(
         "UPDATE players SET admins_note = NULL WHERE login = ?",
         body.req.player_login
@@ -59,19 +48,9 @@ pub async fn del_note(
 
 #[derive(Deserialize)]
 pub struct SetRoleBody {
-    secret: String,
     #[serde(flatten)]
     req: AdminRequest,
     role: u8,
-}
-
-impl ExtractAuthFields for SetRoleBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.req.admin_login,
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -86,7 +65,6 @@ pub async fn set_role(
     body: Json<SetRoleBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Admin, &body).await?;
     sqlx::query!(
         "UPDATE players SET role = ? WHERE login = ?",
         body.role,
@@ -107,18 +85,8 @@ pub async fn set_role(
 
 #[derive(Deserialize)]
 pub struct BanishmentsBody {
-    secret: String,
     #[serde(flatten)]
     req: AdminRequest,
-}
-
-impl ExtractAuthFields for BanishmentsBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.req.admin_login,
-        }
-    }
 }
 
 #[derive(Serialize, FromRow)]
@@ -132,6 +100,7 @@ struct BanishmentInner {
 
 #[derive(Serialize)]
 pub struct Banishment {
+    #[serde(flatten)]
     inner: BanishmentInner,
     was_reprieved: bool,
     is_current: bool,
@@ -166,7 +135,6 @@ pub async fn banishments(
     body: Json<BanishmentsBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Moderator, &body).await?;
 
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
         return Err(RecordsError::PlayerNotFound(body.req.player_login));
@@ -195,7 +163,6 @@ pub async fn banishments(
 
 #[derive(Deserialize)]
 pub struct BanBody {
-    secret: String,
     #[serde(flatten)]
     req: AdminRequest,
     duration: Option<u32>,
@@ -208,22 +175,12 @@ struct BanResponse {
     ban: Banishment,
 }
 
-impl ExtractAuthFields for BanBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.req.admin_login,
-        }
-    }
-}
-
 pub async fn ban(
     db: Data<Database>,
     state: Data<AuthState>,
     body: Json<BanBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Admin, &body).await?;
 
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
         return Err(RecordsError::PlayerNotFound(body.req.player_login));
@@ -281,18 +238,8 @@ pub async fn is_banned(db: &Database, player_id: u32) -> RecordsResult<Option<Ba
 
 #[derive(Deserialize)]
 pub struct UnbanBody {
-    secret: String,
     #[serde(flatten)]
     req: AdminRequest,
-}
-
-impl ExtractAuthFields for UnbanBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.req.admin_login,
-        }
-    }
 }
 
 #[derive(Serialize)]
@@ -307,7 +254,6 @@ pub async fn unban(
     body: Json<UnbanBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Admin, &body).await?;
 
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
         return Err(RecordsError::PlayerNotFound(body.req.player_login));
@@ -340,18 +286,8 @@ pub async fn unban(
 
 #[derive(Deserialize)]
 pub struct PlayerNoteBody {
-    secret: String,
     #[serde(flatten)]
     req: AdminRequest,
-}
-
-impl ExtractAuthFields for PlayerNoteBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.req.admin_login,
-        }
-    }
 }
 
 #[derive(Serialize)]
@@ -366,7 +302,6 @@ pub async fn player_note(
     body: Json<PlayerNoteBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Admin, &body).await?;
 
     let Some(admins_note) = sqlx::query_scalar!(
         "SELECT admins_note FROM players WHERE login = ?", body.req.player_login)

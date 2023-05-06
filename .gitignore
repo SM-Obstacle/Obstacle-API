@@ -5,3 +5,4 @@ python_*
 cert
 .idea
 Cargo.lock
+inputs

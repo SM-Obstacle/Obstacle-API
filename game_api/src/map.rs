@@ -7,7 +7,7 @@ use crate::{
 };
 use actix_web::{
     web::{Data, Json, Query},
-    Responder,
+    HttpResponse, Responder,
 };
 use futures::{future::try_join_all, stream, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -23,9 +23,16 @@ struct MapAuthor {
 #[derive(Deserialize)]
 pub struct UpdateMapBody {
     name: String,
-    #[serde(alias = "maniaplanetMapId")]
     pub map_uid: String,
     author: MapAuthor,
+}
+
+pub async fn insert(
+    db: Data<Database>,
+    body: Json<UpdateMapBody>,
+) -> RecordsResult<impl Responder> {
+    let _ = get_or_insert(&db, &body).await?;
+    Ok(HttpResponse::NoContent().finish())
 }
 
 pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult<u32> {
@@ -36,12 +43,13 @@ pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult
         return Ok(id);
     }
 
-    let player_id = player::update_or_insert(
+    let player_id = player::get_or_insert(
         db,
         &body.author.login,
         UpdatePlayerBody {
             nickname: body.author.nickname.clone(),
             country: body.author.zone_path.clone(),
+            login: "".to_string(),
         },
     )
     .await?;
@@ -62,18 +70,8 @@ pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult
 
 #[derive(Deserialize)]
 pub struct PlayerRatingBody {
-    secret: String,
     login: String,
     map_id: String,
-}
-
-impl ExtractAuthFields for PlayerRatingBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.login,
-        }
-    }
 }
 
 #[derive(Serialize, FromRow)]
@@ -103,7 +101,6 @@ pub async fn player_rating(
     body: Json<PlayerRatingBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Player, &body).await?;
 
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.login).await? else {
         return Err(RecordsError::PlayerNotFound(body.login));
@@ -323,19 +320,9 @@ impl PartialEq for PlayerRate {
 
 #[derive(Deserialize)]
 pub struct RateBody {
-    secret: String,
     login: String,
     map_id: String,
     ratings: Vec<PlayerRate>,
-}
-
-impl ExtractAuthFields for RateBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.login,
-        }
-    }
 }
 
 #[derive(Serialize)]
@@ -354,7 +341,6 @@ pub async fn rate(
     body: Json<RateBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Player, &body).await?;
 
     let Some(Player { id: player_id, login: player_login, .. }) = sqlx::query_as(
         "SELECT * FROM players WHERE login = ?")
@@ -511,18 +497,8 @@ pub async fn rate(
 
 #[derive(Deserialize)]
 pub struct ResetRatingsBody {
-    secret: String,
     admin_login: String,
     map_id: String,
-}
-
-impl ExtractAuthFields for ResetRatingsBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.admin_login,
-        }
-    }
 }
 
 #[derive(Serialize)]
@@ -538,7 +514,6 @@ pub async fn reset_ratings(
     body: Json<ResetRatingsBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Admin, &body).await?;
 
     let Some((map_id, map_name, author_login)) = sqlx::query_as(
         "SELECT m.id, m.name, login

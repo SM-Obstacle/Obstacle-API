@@ -15,10 +15,19 @@
 //! The generated token has a time-to-live of 1 year. After this time, the player will have
 //! to log in again to ManiaPlanet to get a new token.
 
+use std::convert::Infallible;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use actix_web::dev::ServiceRequest;
+use actix_web::error::ParseError;
+use actix_web::guard::{Guard, GuardContext};
+use actix_web::http::header::{Header, TryIntoHeaderValue};
+use actix_web::web::Data;
+use actix_web::{Error, HttpMessage};
 use chrono::{DateTime, Utc};
+use deadpool_redis::redis::{cmd, AsyncCommands};
 use rand::Rng;
+use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio::time::timeout;
@@ -32,7 +41,8 @@ use crate::models::Role;
 use crate::{Database, RecordsError, RecordsResult};
 
 /// The client's token expires in 12 hours.
-const EXPIRES_IN: Duration = Duration::from_secs(60 * 60 * 12);
+// const EXPIRES_IN: Duration = Duration::from_secs(60 * 60 * 12);
+const EXPIRES_IN: Duration = Duration::from_secs(15);
 
 /// The state expires in 5 minutes.
 pub const TIMEOUT: Duration = Duration::from_secs(60 * 5);
@@ -220,7 +230,7 @@ impl AuthState {
             tx.send(inputs_path)
                 .expect("/player_finished rx should not be dropped at this point");
         } else {
-            return Err(RecordsError::MissingPlayerFinishedReq);
+            return Err(RecordsError::MissingPlayerFinishedReq(state));
         }
 
         tracing::event!(
@@ -266,28 +276,6 @@ impl AuthState {
         );
 
         Ok(())
-    }
-
-    /// Generates a new token for the given player described by his ManiaPlanet login.
-    ///
-    /// The new token is inserted in the client_map.
-    pub async fn gen_token_for(&self, login: String) -> String {
-        let mut client_map = self.client_map.write().await;
-        let random = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
-            .take(30)
-            .collect::<Vec<u8>>();
-        let random = String::from_utf8(random).expect("random token not utf8");
-        let token = format!("{}{random}{login}", Utc::now().timestamp());
-        client_map.insert(token.clone(), Client::from(login.clone()));
-        tracing::event!(
-            Level::INFO,
-            "Inserted token `{}` for `{}` into the client_map, {} token(s) in total",
-            token,
-            login,
-            client_map.len()
-        );
-        token
     }
 
     /// Checks if the given token exists, corresponds to the given player login, and is still available.
@@ -338,6 +326,45 @@ impl AuthState {
     }
 }
 
+pub async fn gen_token_for(db: &Database, login: String) -> RecordsResult<String> {
+    let token = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(256)
+        .collect::<Vec<u8>>();
+    let token = String::from_utf8(token).expect("random token not utf8");
+    let mut connection = db.redis_pool.get().await?;
+    let key = format!("token:{login}");
+
+    cmd("SET")
+        .arg(&key)
+        .arg(&token)
+        .arg("EX")
+        .arg(EXPIRES_IN.as_secs())
+        .query_async(&mut connection)
+        .await?;
+    Ok(token)
+}
+
+async fn get_permissions_for(db: &Database, login: &str, token: &str) -> RecordsResult<Vec<Role>> {
+    let mut connection = db.redis_pool.get().await?;
+    let key = format!("token:{login}");
+    let stored_token: Option<String> = connection.get(&key).await?;
+    match stored_token {
+        Some(t) if t == token => (),
+        _ => return Ok(Vec::new()),
+    }
+
+    let roles = sqlx::query_as(
+        "SELECT * FROM role WHERE id <= (SELECT role FROM players WHERE login = ?)
+            ORDER BY id ASC",
+    )
+    .bind(&login)
+    .fetch_all(&db.mysql_pool)
+    .await?;
+
+    Ok(roles)
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct AuthFields<'a> {
     pub token: &'a str,
@@ -346,4 +373,27 @@ pub struct AuthFields<'a> {
 
 pub trait ExtractAuthFields {
     fn get_auth_fields(&self) -> AuthFields;
+}
+
+pub async fn auth_extractor(req: &ServiceRequest) -> Result<Vec<Role>, Error> {
+    fn extract_header<'a>(req: &'a ServiceRequest, header: &str) -> Result<Option<&'a str>, Error> {
+        req.headers()
+            .get(header)
+            .map(|value| value.to_str())
+            .transpose()
+            .map_err(|_| Error::from(RecordsError::Unauthorized))
+    }
+
+    let db = req
+        .app_data::<Data<Database>>()
+        .expect("Database not set as app data");
+
+    let Some(login) = extract_header(req, "PlayerLogin")? else {
+        return Ok(Vec::new());
+    };
+    let Some(token) = extract_header(req, "Authorization")? else {
+        return Ok(Vec::new());
+    };
+
+    Ok(get_permissions_for(&db, login, token).await?)
 }

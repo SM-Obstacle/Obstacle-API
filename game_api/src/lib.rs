@@ -1,5 +1,7 @@
+use actix_web::error::HttpError;
 use chrono::{DateTime, Utc};
 use deadpool::managed::PoolError;
+use deadpool_redis::redis::RedisError;
 pub use deadpool_redis::Pool as RedisPool;
 pub use sqlx::MySqlPool;
 use std::io;
@@ -18,7 +20,7 @@ mod player;
 mod redis;
 mod utils;
 
-pub use auth::{AuthState, UPDATE_RATE};
+pub use auth::{auth_extractor, AuthState, UPDATE_RATE};
 pub use graphql::graphql_route;
 pub use http::api_route;
 
@@ -40,8 +42,8 @@ pub enum RecordsError {
     Timeout,
     #[error("the state has already been received by the server")]
     StateAlreadyReceived(DateTime<Utc>),
-    #[error("missing the /new_player_finished request")]
-    MissingPlayerFinishedReq,
+    #[error("missing the /player/finished request with state `{0}`")]
+    MissingPlayerFinishedReq(String),
     #[error("missing the /player/get_token request")]
     MissingGetTokenReq,
     #[error("invalid ManiaPlanet access token on /gen_new_token request")]
@@ -83,8 +85,8 @@ impl actix_web::ResponseError for RecordsError {
             Self::Timeout => actix_web::HttpResponse::RequestTimeout().finish(),
             Self::StateAlreadyReceived(instant) => actix_web::HttpResponse::BadRequest()
                 .body(format!("state already received at {instant:?}")),
-            Self::MissingPlayerFinishedReq => {
-                actix_web::HttpResponse::BadRequest().body("missing /player_finished request")
+            Self::MissingPlayerFinishedReq(s) => {
+                actix_web::HttpResponse::BadRequest().body(format!("missing /player/finished request with state `{s}`"))
             }
             Self::MissingGetTokenReq => {
                 actix_web::HttpResponse::BadRequest().body("missing /player/get_token request")
@@ -93,7 +95,9 @@ impl actix_web::ResponseError for RecordsError {
                 actix_web::HttpResponse::BadRequest().body("invalid MP access token")
             }
             Self::MySql(err) => actix_web::HttpResponse::BadRequest().body(err.to_string()),
-            Self::Unknown(s) => actix_web::HttpResponse::InternalServerError().body(s.clone()),
+            Self::Unknown(s) => actix_web::HttpResponse::InternalServerError().body(format!(
+                "unknown error: `{s}`",
+            )),
             Self::PlayerNotFound(login) => actix_web::HttpResponse::BadRequest()
                 .body(format!("player `{login}` not found in database")),
             Self::PlayerNotBanned(login) => actix_web::HttpResponse::BadRequest()
@@ -129,6 +133,12 @@ impl From<reqwest::Error> for RecordsError {
 
 impl<T> From<SendError<T>> for RecordsError {
     fn from(err: SendError<T>) -> Self {
+        Self::Unknown(err.to_string())
+    }
+}
+
+impl From<RedisError> for RecordsError {
+    fn from(err: RedisError) -> Self {
         Self::Unknown(err.to_string())
     }
 }

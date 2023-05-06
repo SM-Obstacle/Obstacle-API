@@ -1,5 +1,7 @@
+use actix_web::dev::ServiceRequest;
 use actix_web::web::JsonConfig;
 use actix_web::{web, Scope};
+use actix_web_grants::PermissionGuard;
 
 use crate::auth::{AuthFields, ExtractAuthFields};
 use crate::map::UpdateMapBody;
@@ -17,9 +19,18 @@ use sqlx::{mysql, FromRow};
 
 fn player_scope() -> Scope {
     web::scope("/player")
-        .route("/is_banned", web::post().to(player::is_banned))
-        .route("/finished", web::post().to(player::player_finished))
-        .route("/register_inputs", web::post().to(player::register_inputs))
+        .route(
+            "/update",
+            web::post()
+                .guard(PermissionGuard::new(Role::Player))
+                .to(player::update),
+        )
+        .route(
+            "/finished",
+            web::post()
+                .guard(PermissionGuard::new(Role::Player))
+                .to(player::player_finished),
+        )
         .route("/get_token", web::post().to(player::get_token))
         .service(
             web::resource("/give_token")
@@ -31,6 +42,7 @@ fn player_scope() -> Scope {
 
 fn admin_scope() -> Scope {
     web::scope("/admin")
+        .guard(PermissionGuard::new(Role::Admin))
         .route("/del_note", web::post().to(admin::del_note))
         .route("/set_role", web::post().to(admin::set_role))
         .route("/banishments", web::get().to(admin::banishments))
@@ -41,20 +53,29 @@ fn admin_scope() -> Scope {
 
 fn map_scope() -> Scope {
     web::scope("/map")
-        .route("/player_rating", web::get().to(map::player_rating))
-        .route("/ratings", web::get().to(map::ratings))
-        .route("/rating", web::get().to(map::rating))
-        .route("/rate", web::post().to(map::rate))
-        .route("/reset_ratings", web::post().to(map::reset_ratings))
+        .route("/insert", web::post().to(map::insert))
+        .service(
+            web::scope("")
+                .guard(PermissionGuard::new(Role::Player))
+                .route("/player_rating", web::get().to(map::player_rating))
+                .route("/ratings", web::get().to(map::ratings))
+                .route("/rating", web::get().to(map::rating))
+                .route("/rate", web::post().to(map::rate))
+                .route(
+                    "/reset_ratings",
+                    web::post()
+                        .guard(PermissionGuard::new(Role::Admin))
+                        .to(map::reset_ratings),
+                ),
+        )
 }
 
-pub fn api_route(db: Database) -> Scope {
+pub fn api_route() -> Scope {
     let json_config = JsonConfig::default().limit(1024 * 16);
 
     web::scope("")
         .app_data(json_config)
-        .app_data(Data::new(db))
-        .route("/update", web::post().to(update))
+        .route("/overview", web::get().to(update))
         .service(player_scope())
         .service(map_scope())
         .service(admin_scope())
@@ -62,19 +83,9 @@ pub fn api_route(db: Database) -> Scope {
 
 #[derive(Deserialize)]
 struct UpdateBody {
-    secret: String,
     login: String,
     player: UpdatePlayerBody,
     map: UpdateMapBody,
-}
-
-impl ExtractAuthFields for UpdateBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.login,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, sqlx::FromRow)]
@@ -159,7 +170,6 @@ async fn update(
     body: Json<UpdateBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Player, &body).await?;
 
     // Insert map and player if they dont exist yet
     let map_id = map::get_or_insert(&db, &body.map).await?;

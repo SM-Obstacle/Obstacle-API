@@ -3,7 +3,7 @@ use std::{
     io::{BufWriter, Write},
 };
 
-use actix_multipart::form::{text::Text, MultipartForm};
+use actix_multipart::form::{json::Json as FormJson, text::Text, MultipartForm};
 use actix_web::{
     web::{Data, Json},
     HttpResponse, Responder,
@@ -19,7 +19,7 @@ use tracing::Level;
 
 use crate::{
     admin,
-    auth::{AuthFields, AuthState, ExtractAuthFields, TIMEOUT},
+    auth::{self, AuthFields, AuthState, ExtractAuthFields, TIMEOUT},
     models::{Banishment, Map, Player, Record, Role},
     redis,
     utils::wrap_xml,
@@ -28,8 +28,51 @@ use crate::{
 
 #[derive(Deserialize)]
 pub struct UpdatePlayerBody {
+    pub login: String,
     pub nickname: String,
     pub country: String,
+}
+
+pub async fn get_or_insert(
+    db: &Database,
+    login: &str,
+    body: UpdatePlayerBody,
+) -> RecordsResult<u32> {
+    if let Some(id) = sqlx::query_scalar!("SELECT id FROM players WHERE login = ?", login)
+        .fetch_optional(&db.mysql_pool)
+        .await?
+    {
+        return Ok(id);
+    }
+
+    let id = sqlx::query_scalar(
+        "INSERT INTO players
+        (login, name, join_date, country, admins_note, role)
+        VALUES (?, ?, SYSDATE(), ?, NULL, 1) RETURNING id",
+    )
+    .bind(login)
+    .bind(body.nickname)
+    .bind(body.country)
+    .fetch_one(&db.mysql_pool)
+    .await?;
+
+    Ok(id)
+}
+
+pub async fn update(
+    db: Data<Database>,
+    state: Data<AuthState>,
+    body: Json<UpdatePlayerBody>,
+) -> RecordsResult<impl Responder> {
+    let body = body.into_inner();
+
+    let player_id = update_or_insert(&db, &body.login.clone(), body).await?;
+    let current_ban = admin::is_banned(&db, player_id).await?;
+
+    Ok(HttpResponse::Ok().json(IsBannedResponse {
+        banned: current_ban.is_some(),
+        current_ban,
+    }))
 }
 
 pub async fn update_or_insert(
@@ -67,34 +110,15 @@ pub async fn update_or_insert(
     Ok(id)
 }
 
-#[derive(Deserialize, Serialize)]
-pub struct CheckpointTime {
-    pub cp_num: u32,
-    pub time: i32,
-}
-
-#[derive(Deserialize, Serialize)]
+#[derive(MultipartForm)]
 pub struct HasFinishedBody {
-    pub secret: String,
-    pub state: String,
-    pub time: i32,
-    #[serde(alias = "respawnCount")]
-    pub respawn_count: i32,
-    #[serde(alias = "playerId")]
-    pub player_login: String,
-    #[serde(alias = "mapId")]
-    pub map_game_id: String,
-    pub flags: Option<u32>,
-    pub cps: Vec<CheckpointTime>,
-}
-
-impl ExtractAuthFields for HasFinishedBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.player_login,
-        }
-    }
+    pub time: Text<i32>,
+    pub respawn_count: Text<i32>,
+    pub login: Text<String>,
+    pub map_uid: Text<String>,
+    pub flags: Option<Text<u32>>,
+    pub cps: Vec<Text<i32>>,
+    pub inputs: Text<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -110,16 +134,30 @@ pub struct HasFinishedResponse {
 pub async fn player_finished(
     state: Data<AuthState>,
     db: Data<Database>,
-    body: Json<HasFinishedBody>,
+    body: MultipartForm<HasFinishedBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Player, &body).await?;
-    let inputs_path = state.get_inputs_path(body.state.clone()).await?;
-    let finished = inner_player_finished(db, body, inputs_path).await?;
+
+    let pre_path = "inputs";
+    let random = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(10)
+        .collect::<Vec<u8>>();
+    let random = String::from_utf8(random).expect("random inputs file name not utf8");
+    let path = format!("{pre_path}/{}{random}", Utc::now().timestamp());
+    fs::create_dir_all(pre_path)?;
+    let mut f = BufWriter::with_capacity(32 * 1024, File::create(&path)?);
+    for chunk in body.inputs.as_bytes().chunks(10) {
+        f.write_all(chunk)?;
+    }
+    f.flush()?;
+
+    let finished = inner_player_finished(db, body, path).await?;
     wrap_xml(&finished)
 }
 
 #[derive(MultipartForm)]
+#[multipart(deny_unknown_fields)]
 pub struct PlayerInputs {
     state: Text<String>,
     inputs: Text<String>,
@@ -130,18 +168,13 @@ pub async fn register_inputs(
     body: MultipartForm<PlayerInputs>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    let pre_path = "/var/www/html/inputs";
+    let pre_path = "inputs";
     let random = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(10)
         .collect::<Vec<u8>>();
     let random = String::from_utf8(random).expect("random inputs file name not utf8");
     let path = format!("{pre_path}/{}{random}", Utc::now().timestamp());
-
-    state
-        .inputs_received_for(body.state.0, path.clone())
-        .await?;
-
     fs::create_dir_all(pre_path)?;
     let mut f = BufWriter::with_capacity(32 * 1024, File::create(path)?);
     for chunk in body.inputs.as_bytes().chunks(10) {
@@ -193,16 +226,16 @@ async fn inner_player_finished(
     body: HasFinishedBody,
     inputs_path: String,
 ) -> RecordsResult<HasFinishedResponse> {
-    let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.player_login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.player_login));
+    let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.login).await? else {
+        return Err(RecordsError::PlayerNotFound(body.login.0));
     };
 
     if let Some(ban) = check_banned(&db, player_id).await? {
         return Err(RecordsError::BannedPlayer(ban));
     }
 
-    let Some(Map { id: map_id, .. }) = get_map_from_game_id(&db, &body.map_game_id).await? else {
-        return Err(RecordsError::MapNotFound(body.map_game_id));
+    let Some(Map { id: map_id, .. }) = get_map_from_game_id(&db, &body.map_uid).await? else {
+        return Err(RecordsError::MapNotFound(body.map_uid.0));
     };
 
     let mut redis_conn = db.redis_pool.get().await.unwrap();
@@ -220,13 +253,13 @@ async fn inner_player_finished(
     let now = Utc::now().naive_utc();
 
     let (old, new, has_improved) = if let Some(Record { time: old, .. }) = old_record {
-        if body.time < old {
+        if body.time.0 < old {
             let inputs_expiry = None::<u32>;
 
             // Update redis record
-            let key = format!("l0:{}", body.map_game_id);
+            let key = format!("l0:{}", body.map_uid.0);
             let _added: i64 = redis_conn
-                .zadd(&key, player_id, body.time)
+                .zadd(&key, player_id, body.time.0)
                 .await
                 .unwrap_or(0);
             let _count = redis::update_leaderboard(&db, &key, map_id).await?;
@@ -234,17 +267,17 @@ async fn inner_player_finished(
             sqlx::query!("INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags, inputs_path, inputs_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     player_id,
                     map_id,
-                    body.time,
-                    body.respawn_count,
+                    body.time.0,
+                    body.respawn_count.0,
                     now,
-                    body.flags,
+                    body.flags.map(|f| f.0),
                     inputs_path,
                     inputs_expiry
                 )
                     .execute(&db.mysql_pool)
                     .await?;
         }
-        (old, body.time, body.time < old)
+        (old, body.time.0, body.time.0 < old)
     } else {
         let inputs_expiry = None::<u32>;
 
@@ -252,22 +285,22 @@ async fn inner_player_finished(
                 "INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags, inputs_path, inputs_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 player_id,
                 map_id,
-                body.time,
-                body.respawn_count,
+                body.time.0,
+                body.respawn_count.0,
                 now,
-                body.flags,
+                body.flags.map(|f| f.0),
                 inputs_path,
                 inputs_expiry,
             )
                 .execute(&db.mysql_pool)
                 .await?;
 
-        (body.time, body.time, true)
+        (body.time.0, body.time.0, true)
     };
 
     Ok(HasFinishedResponse {
         has_improved,
-        login: body.player_login,
+        login: body.login.0,
         old,
         new,
     })
@@ -308,6 +341,7 @@ struct GetTokenResponse {
 }
 
 pub async fn get_token(
+    db: Data<Database>,
     state: Data<AuthState>,
     body: Json<GetTokenBody>,
 ) -> RecordsResult<impl Responder> {
@@ -336,7 +370,7 @@ pub async fn get_token(
         return Err(RecordsError::InvalidMPToken);
     }
 
-    let token = state.gen_token_for(body.login).await;
+    let token = auth::gen_token_for(&db, body.login).await?;
     tx.send("OK".to_owned()).expect(err_msg);
 
     wrap_xml(&GetTokenResponse { token })
@@ -367,17 +401,7 @@ pub async fn get_give_token() -> impl Responder {
 
 #[derive(Deserialize)]
 pub struct IsBannedBody {
-    secret: String,
     login: String,
-}
-
-impl ExtractAuthFields for IsBannedBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.login,
-        }
-    }
 }
 
 #[derive(Serialize)]
@@ -392,7 +416,6 @@ pub async fn is_banned(
     body: Json<IsBannedBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Player, &body).await?;
 
     let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.login).await? else {
         return Err(RecordsError::PlayerNotFound(body.login));
@@ -407,17 +430,7 @@ pub async fn is_banned(
 
 #[derive(Deserialize)]
 pub struct InfoBody {
-    secret: String,
     login: String,
-}
-
-impl ExtractAuthFields for InfoBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            token: &self.secret,
-            login: &self.login,
-        }
-    }
 }
 
 #[derive(Serialize, FromRow)]
@@ -436,7 +449,6 @@ pub async fn info(
     body: Json<InfoBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state.check_auth_for(&db, Role::Player, &body).await?;
 
     let Some(info) = sqlx::query_as::<_, InfoResponse>(
         "SELECT *, (SELECT role_name FROM role WHERE id = role) as role_name
