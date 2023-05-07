@@ -3,7 +3,7 @@ use std::{
     io::{BufWriter, Write},
 };
 
-use actix_multipart::form::{json::Json as FormJson, text::Text, MultipartForm};
+use actix_multipart::form::{text::Text, MultipartForm};
 use actix_web::{
     web::{Data, Json},
     HttpResponse, Responder,
@@ -19,10 +19,10 @@ use tracing::Level;
 
 use crate::{
     admin,
-    auth::{self, AuthFields, AuthState, ExtractAuthFields, TIMEOUT},
+    auth::{self, AuthHeader, AuthState, TIMEOUT},
     models::{Banishment, Map, Player, Record, Role},
     redis,
-    utils::wrap_xml,
+    utils::json,
     Database, RecordsError, RecordsResult,
 };
 
@@ -61,18 +61,22 @@ pub async fn get_or_insert(
 
 pub async fn update(
     db: Data<Database>,
-    state: Data<AuthState>,
+    auth: AuthHeader,
     body: Json<UpdatePlayerBody>,
 ) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Player).await?;
+
     let body = body.into_inner();
+    let login = body.login.clone();
 
     let player_id = update_or_insert(&db, &body.login.clone(), body).await?;
     let current_ban = admin::is_banned(&db, player_id).await?;
 
-    Ok(HttpResponse::Ok().json(IsBannedResponse {
+    json(IsBannedResponse {
+        login,
         banned: current_ban.is_some(),
         current_ban,
-    }))
+    })
 }
 
 pub async fn update_or_insert(
@@ -124,7 +128,6 @@ pub struct HasFinishedBody {
 #[derive(Deserialize, Serialize)]
 #[serde(rename(serialize = "response"))]
 pub struct HasFinishedResponse {
-    #[serde(rename = "newBest")]
     pub has_improved: bool,
     pub login: String,
     pub old: i32,
@@ -132,10 +135,12 @@ pub struct HasFinishedResponse {
 }
 
 pub async fn player_finished(
-    state: Data<AuthState>,
+    auth: AuthHeader,
     db: Data<Database>,
     body: MultipartForm<HasFinishedBody>,
 ) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Player).await?;
+
     let body = body.into_inner();
 
     let pre_path = "inputs";
@@ -153,36 +158,7 @@ pub async fn player_finished(
     f.flush()?;
 
     let finished = inner_player_finished(db, body, path).await?;
-    wrap_xml(&finished)
-}
-
-#[derive(MultipartForm)]
-#[multipart(deny_unknown_fields)]
-pub struct PlayerInputs {
-    state: Text<String>,
-    inputs: Text<String>,
-}
-
-pub async fn register_inputs(
-    state: Data<AuthState>,
-    body: MultipartForm<PlayerInputs>,
-) -> RecordsResult<impl Responder> {
-    let body = body.into_inner();
-    let pre_path = "inputs";
-    let random = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(10)
-        .collect::<Vec<u8>>();
-    let random = String::from_utf8(random).expect("random inputs file name not utf8");
-    let path = format!("{pre_path}/{}{random}", Utc::now().timestamp());
-    fs::create_dir_all(pre_path)?;
-    let mut f = BufWriter::with_capacity(32 * 1024, File::create(path)?);
-    for chunk in body.inputs.as_bytes().chunks(10) {
-        f.write_all(chunk)?;
-    }
-    f.flush()?;
-
-    Ok(HttpResponse::NoContent())
+    json(finished)
 }
 
 pub async fn get_player_from_login(
@@ -373,7 +349,7 @@ pub async fn get_token(
     let token = auth::gen_token_for(&db, body.login).await?;
     tx.send("OK".to_owned()).expect(err_msg);
 
-    wrap_xml(&GetTokenResponse { token })
+    json(GetTokenResponse { token })
 }
 
 #[derive(Deserialize)]
@@ -399,33 +375,11 @@ pub async fn get_give_token() -> impl Responder {
         .body(include_str!("../public/give_token.html"))
 }
 
-#[derive(Deserialize)]
-pub struct IsBannedBody {
-    login: String,
-}
-
 #[derive(Serialize)]
 struct IsBannedResponse {
+    login: String,
     banned: bool,
     current_ban: Option<admin::Banishment>,
-}
-
-pub async fn is_banned(
-    db: Data<Database>,
-    state: Data<AuthState>,
-    body: Json<IsBannedBody>,
-) -> RecordsResult<impl Responder> {
-    let body = body.into_inner();
-
-    let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.login));
-    };
-
-    let current_ban = admin::is_banned(&db, player_id).await?;
-    wrap_xml(&IsBannedResponse {
-        banned: current_ban.is_some(),
-        current_ban,
-    })
 }
 
 #[derive(Deserialize)]
@@ -458,5 +412,5 @@ pub async fn info(
         return Err(RecordsError::PlayerNotFound(body.login));
     };
 
-    wrap_xml(&info)
+    json(info)
 }

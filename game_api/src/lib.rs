@@ -20,7 +20,7 @@ mod player;
 mod redis;
 mod utils;
 
-pub use auth::{auth_extractor, AuthState, UPDATE_RATE};
+pub use auth::{AuthState, UPDATE_RATE};
 pub use graphql::graphql_route;
 pub use http::api_route;
 

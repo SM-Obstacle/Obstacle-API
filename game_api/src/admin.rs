@@ -6,10 +6,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{mysql::MySqlRow, FromRow, Row};
 
 use crate::{
-    auth::{AuthFields, ExtractAuthFields},
     models::{Player, Role},
     player,
-    utils::{wrap_xml, xml_seq},
+    utils::json,
     AuthState, Database, RecordsError, RecordsResult,
 };
 
@@ -27,6 +26,7 @@ pub struct DelNoteBody {
 
 #[derive(Serialize)]
 struct DelNoteResponse {
+    #[serde(flatten)]
     req: AdminRequest,
 }
 
@@ -43,7 +43,7 @@ pub async fn del_note(
     .execute(&db.mysql_pool)
     .await?;
 
-    wrap_xml(&DelNoteResponse { req: body.req })
+    json(DelNoteResponse { req: body.req })
 }
 
 #[derive(Deserialize)]
@@ -55,6 +55,7 @@ pub struct SetRoleBody {
 
 #[derive(Serialize, Deserialize)]
 struct SetRoleResponse {
+    #[serde(flatten)]
     req: AdminRequest,
     role: String,
 }
@@ -77,7 +78,7 @@ pub async fn set_role(
         .fetch_one(&db.mysql_pool)
         .await?;
 
-    wrap_xml(&SetRoleResponse {
+    json(SetRoleResponse {
         req: body.req,
         role,
     })
@@ -124,9 +125,9 @@ impl<'r> FromRow<'r, MySqlRow> for Banishment {
 
 #[derive(Serialize)]
 struct BanishmentsResponse {
+    #[serde(flatten)]
     req: AdminRequest,
-    // = Vec<Banishment>, but sequence serializing is fucked up
-    banishments: String,
+    banishments: Vec<Banishment>,
 }
 
 pub async fn banishments(
@@ -140,7 +141,7 @@ pub async fn banishments(
         return Err(RecordsError::PlayerNotFound(body.req.player_login));
     };
 
-    let bans = sqlx::query_as(
+    let banishments = sqlx::query_as(
         "SELECT
             id, date_ban, duration, was_reprieved, reason,
             (SELECT login FROM players WHERE id = banished_by) AS banished_by,
@@ -154,8 +155,7 @@ pub async fn banishments(
     .fetch_all(&db.mysql_pool)
     .await?;
 
-    let banishments = xml_seq::<Banishment>(None, &bans)?;
-    wrap_xml(&BanishmentsResponse {
+    json(BanishmentsResponse {
         req: body.req,
         banishments,
     })
@@ -171,6 +171,7 @@ pub struct BanBody {
 
 #[derive(Serialize)]
 struct BanResponse {
+    #[serde(flatten)]
     req: AdminRequest,
     ban: Banishment,
 }
@@ -219,7 +220,7 @@ pub async fn ban(
     .fetch_one(&db.mysql_pool)
     .await?;
 
-    wrap_xml(&BanResponse { req: body.req, ban })
+    json(BanResponse { req: body.req, ban })
 }
 
 pub async fn is_banned(db: &Database, player_id: u32) -> RecordsResult<Option<Banishment>> {
@@ -244,6 +245,7 @@ pub struct UnbanBody {
 
 #[derive(Serialize)]
 struct UnbanResponse {
+    #[serde(flatten)]
     inner: AdminRequest,
     ban: Banishment,
 }
@@ -278,7 +280,7 @@ pub async fn unban(
         .execute(&db.mysql_pool)
         .await?;
 
-    wrap_xml(&UnbanResponse {
+    json(UnbanResponse {
         inner: body.req,
         ban,
     })
@@ -309,7 +311,7 @@ pub async fn player_note(
         return Err(RecordsError::PlayerNotFound(body.req.player_login));
     };
 
-    wrap_xml(&PlayerNoteResponse {
+    json(PlayerNoteResponse {
         player_login: body.req.player_login,
         admins_note,
     })

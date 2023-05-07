@@ -1,13 +1,11 @@
 use actix_web::dev::ServiceRequest;
 use actix_web::web::JsonConfig;
 use actix_web::{web, Scope};
-use actix_web_grants::PermissionGuard;
 
-use crate::auth::{AuthFields, ExtractAuthFields};
 use crate::map::UpdateMapBody;
 use crate::models::Role;
 use crate::player::UpdatePlayerBody;
-use crate::utils::{escaped, wrap_xml, xml_seq};
+use crate::utils::{escaped, json};
 use crate::{admin, map, player, redis, AuthState, Database, RecordsResult};
 use actix_web::{
     web::{Data, Json},
@@ -19,18 +17,8 @@ use sqlx::{mysql, FromRow};
 
 fn player_scope() -> Scope {
     web::scope("/player")
-        .route(
-            "/update",
-            web::post()
-                .guard(PermissionGuard::new(Role::Player))
-                .to(player::update),
-        )
-        .route(
-            "/finished",
-            web::post()
-                .guard(PermissionGuard::new(Role::Player))
-                .to(player::player_finished),
-        )
+        .route("/update", web::post().to(player::update))
+        .route("/finished", web::post().to(player::player_finished))
         .route("/get_token", web::post().to(player::get_token))
         .service(
             web::resource("/give_token")
@@ -42,7 +30,6 @@ fn player_scope() -> Scope {
 
 fn admin_scope() -> Scope {
     web::scope("/admin")
-        .guard(PermissionGuard::new(Role::Admin))
         .route("/del_note", web::post().to(admin::del_note))
         .route("/set_role", web::post().to(admin::set_role))
         .route("/banishments", web::get().to(admin::banishments))
@@ -54,20 +41,11 @@ fn admin_scope() -> Scope {
 fn map_scope() -> Scope {
     web::scope("/map")
         .route("/insert", web::post().to(map::insert))
-        .service(
-            web::scope("")
-                .guard(PermissionGuard::new(Role::Player))
-                .route("/player_rating", web::get().to(map::player_rating))
-                .route("/ratings", web::get().to(map::ratings))
-                .route("/rating", web::get().to(map::rating))
-                .route("/rate", web::post().to(map::rate))
-                .route(
-                    "/reset_ratings",
-                    web::post()
-                        .guard(PermissionGuard::new(Role::Admin))
-                        .to(map::reset_ratings),
-                ),
-        )
+        .route("/player_rating", web::get().to(map::player_rating))
+        .route("/ratings", web::get().to(map::ratings))
+        .route("/rating", web::get().to(map::rating))
+        .route("/rate", web::post().to(map::rate))
+        .route("/reset_ratings", web::post().to(map::reset_ratings))
 }
 
 pub fn api_route() -> Scope {
@@ -247,5 +225,11 @@ async fn update(
         }
     }
 
-    wrap_xml(&xml_seq(Some("response"), &ranked_records)?)
+    #[derive(Serialize)]
+    struct Response {
+        response: Vec<RankedRecord>,
+    }
+    json(Response {
+        response: ranked_records,
+    })
 }

@@ -1,8 +1,7 @@
 use crate::{
-    auth::{AuthFields, ExtractAuthFields},
     models::{self, Map, Player, Role},
     player::{self, UpdatePlayerBody},
-    utils::{any_repeated, wrap_xml, xml_seq},
+    utils::{any_repeated, json},
     AuthState, Database, RecordsError, RecordsResult,
 };
 use actix_web::{
@@ -32,7 +31,7 @@ pub async fn insert(
     body: Json<UpdateMapBody>,
 ) -> RecordsResult<impl Responder> {
     let _ = get_or_insert(&db, &body).await?;
-    Ok(HttpResponse::NoContent().finish())
+    Ok(HttpResponse::Ok().finish())
 }
 
 pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult<u32> {
@@ -83,8 +82,7 @@ struct Rating {
 #[derive(Serialize)]
 struct PlayerRating {
     rating_date: chrono::NaiveDateTime,
-    // = Vec<Rating> but seq xml serializing is fucked up
-    ratings: String,
+    ratings: Vec<Rating>,
 }
 
 #[derive(Serialize)]
@@ -129,8 +127,6 @@ pub async fn player_rating(
             .fetch_all(&db.mysql_pool)
             .await?;
 
-            let ratings = xml_seq::<Rating>(None, &ratings)?;
-
             Some(PlayerRating {
                 rating_date,
                 ratings,
@@ -149,7 +145,7 @@ pub async fn player_rating(
     .fetch_one(&db.mysql_pool)
     .await?;
 
-    wrap_xml(&PlayerRatingResponse {
+    json(PlayerRatingResponse {
         player_login: body.login,
         map_name,
         author_login,
@@ -159,34 +155,22 @@ pub async fn player_rating(
 
 #[derive(Deserialize)]
 pub struct RatingsBody {
-    secret: String,
     login: String,
     map_id: String,
-}
-
-impl ExtractAuthFields for RatingsBody {
-    fn get_auth_fields(&self) -> AuthFields {
-        AuthFields {
-            login: &self.login,
-            token: &self.secret,
-        }
-    }
 }
 
 #[derive(Serialize)]
 struct PlayerGroupedRatings {
     player_login: String,
     rating_date: chrono::NaiveDateTime,
-    // = Vec<Rating>
-    ratings: String,
+    ratings: Vec<Rating>,
 }
 
 #[derive(Serialize)]
 struct RatingsResponse {
     map_name: String,
     author_login: String,
-    // = Vec<PlayerGroupedRatings>
-    players_ratings: String,
+    players_ratings: Vec<PlayerGroupedRatings>,
 }
 
 pub async fn ratings(
@@ -212,7 +196,7 @@ pub async fn ratings(
         (Role::Admin, login)
     };
 
-    state.check_auth_for(&db, role, &body).await?;
+    // state.check_auth_for(&db, role, &body).await?;
 
     let players_ratings = sqlx::query_as!(
         models::Rating,
@@ -240,8 +224,6 @@ pub async fn ratings(
         .fetch_all(&db.mysql_pool)
         .await?;
 
-        let ratings = xml_seq(None, &ratings)?;
-
         RecordsResult::Ok(PlayerGroupedRatings {
             player_login,
             rating_date: rating.rating_date,
@@ -251,9 +233,9 @@ pub async fn ratings(
     .collect::<Vec<_>>()
     .await;
 
-    let players_ratings = xml_seq(None, &try_join_all(players_ratings).await?)?;
+    let players_ratings = try_join_all(players_ratings).await?;
 
-    wrap_xml(&RatingsResponse {
+    json(RatingsResponse {
         map_name: map.name,
         author_login,
         players_ratings,
@@ -269,8 +251,7 @@ pub struct RatingBody {
 struct RatingResponse {
     map_name: String,
     author_login: String,
-    // = Vec<Rating>
-    ratings: String,
+    ratings: Vec<Rating>,
 }
 
 pub async fn rating(db: Data<Database>, body: Query<RatingBody>) -> RecordsResult<impl Responder> {
@@ -297,9 +278,7 @@ pub async fn rating(db: Data<Database>, body: Query<RatingBody>) -> RecordsResul
     .fetch_all(&db.mysql_pool)
     .await?;
 
-    let ratings = xml_seq::<Rating>(None, &ratings)?;
-
-    wrap_xml(&RatingResponse {
+    json(RatingResponse {
         map_name,
         author_login,
         ratings,
@@ -331,8 +310,7 @@ struct RateResponse {
     map_name: String,
     author_login: String,
     rating_date: chrono::NaiveDateTime,
-    // = Vec<Rating>
-    ratings: String,
+    ratings: Vec<Rating>,
 }
 
 pub async fn rate(
@@ -382,12 +360,12 @@ pub async fn rate(
             return Err(RecordsError::NoRatingFound(body.login, body.map_id));
         };
 
-        return wrap_xml(&RateResponse {
+        return json(RateResponse {
             player_login,
             map_name,
             author_login,
             rating_date,
-            ratings: "<ratings/>".to_owned(),
+            ratings: Vec::new(),
         });
     }
 
@@ -484,9 +462,9 @@ pub async fn rate(
         .collect::<Vec<_>>()
         .await;
 
-    let ratings = xml_seq::<Rating>(None, &try_join_all(ratings).await?)?;
+    let ratings = try_join_all(ratings).await?;
 
-    wrap_xml(&RateResponse {
+    json(RateResponse {
         player_login,
         map_name,
         author_login,
@@ -535,7 +513,7 @@ pub async fn reset_ratings(
         .execute(&db.mysql_pool)
         .await?;
 
-    wrap_xml(&ResetRatingsResponse {
+    json(ResetRatingsResponse {
         admin_login: body.admin_login,
         map_name,
         author_login,
