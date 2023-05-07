@@ -67,6 +67,8 @@ async fn main() -> RecordsResult<()> {
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
+    let auth_state = Data::new(AuthState::default());
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .allowed_methods(vec!["GET", "POST"])
@@ -80,7 +82,7 @@ async fn main() -> RecordsResult<()> {
         App::new()
             .wrap(cors)
             .wrap(TracingLogger::default())
-            .app_data(Data::new(AuthState::default()))
+            .app_data(auth_state.clone())
             .app_data(Data::new(db.clone()))
             .service(graphql_route(db.clone()))
             .service(api_route())
