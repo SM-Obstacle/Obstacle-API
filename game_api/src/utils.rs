@@ -6,7 +6,7 @@ pub fn json<T: Serialize, E>(obj: T) -> Result<impl Responder, E> {
 }
 
 pub fn escaped(input: &str) -> String {
-    let mut out = input.to_owned();
+    let mut out = String::new();
 
     let pile_o_bits = input;
     let mut last = 0;

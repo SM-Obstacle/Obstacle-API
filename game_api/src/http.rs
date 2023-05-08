@@ -1,14 +1,10 @@
-use actix_web::web::JsonConfig;
+use actix_web::web::{JsonConfig, Query};
 use actix_web::{web, Scope};
 
-use crate::map::UpdateMapBody;
-use crate::player::UpdatePlayerBody;
+use crate::models::{Map, Player};
 use crate::utils::{escaped, json};
-use crate::{admin, map, player, redis, AuthState, Database, RecordsResult};
-use actix_web::{
-    web::{Data, Json},
-    Responder,
-};
+use crate::{admin, map, player, redis, Database, RecordsError, RecordsResult};
+use actix_web::{web::Data, Responder};
 use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::{mysql, FromRow};
@@ -51,25 +47,25 @@ pub fn api_route() -> Scope {
 
     web::scope("")
         .app_data(json_config)
-        .route("/overview", web::get().to(update))
+        .route("/overview", web::get().to(overview))
         .service(player_scope())
         .service(map_scope())
         .service(admin_scope())
 }
 
 #[derive(Deserialize)]
-struct UpdateBody {
+struct OverviewQuery {
+    #[serde(alias = "playerId")]
     login: String,
-    player: UpdatePlayerBody,
-    map: UpdateMapBody,
+    #[serde(alias = "mapId")]
+    map_uid: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, sqlx::FromRow)]
 #[serde(rename = "records")]
 pub struct RankedRecord {
     pub rank: u32,
-    #[serde(rename = "playerId")]
-    pub player_login: String,
+    pub login: String,
     pub nickname: String,
     pub time: i32,
 }
@@ -102,12 +98,13 @@ async fn append_range(
         .join(",");
 
     let query = format!(
-        "SELECT CAST(0 AS UNSIGNED) as rank,
-            players.login AS player_login,
+        "SELECT CAST(ROW_NUMBER() OVER (ORDER BY time ASC) AS UNSIGNED) AS rank,
+            players.login AS login,
             players.name AS nickname,
-            time
+            MIN(time) as time
         FROM records INNER JOIN players ON records.player_id = players.id
         WHERE map_id = ? AND player_id IN ({})
+        GROUP BY player_id
         ORDER BY time ASC",
         params
     );
@@ -119,42 +116,33 @@ async fn append_range(
         query = query.bind(id);
     }
 
-    let records = query
-        .map(|row: mysql::MySqlRow| {
-            let mut record = RankedRecord::from_row(&row).unwrap();
-            record.nickname = escaped(&record.nickname);
-            record
-        })
-        .fetch_all(&db.mysql_pool)
-        .await
-        .unwrap()
-        .into_iter()
-        .collect::<Vec<_>>();
-
-    // transform start from 0-based to 1-based
-    let mut rank = start + 1;
-    for mut record in records {
-        record.rank = rank;
-        ranked_records.push(record);
-        rank += 1;
-    }
+    ranked_records.extend(
+        query
+            .map(|row: mysql::MySqlRow| {
+                let mut record = RankedRecord::from_row(&row).unwrap();
+                record.nickname = escaped(&record.nickname);
+                record
+            })
+            .fetch_all(&db.mysql_pool)
+            .await.unwrap(),
+    );
 }
 
-async fn update(
-    db: Data<Database>,
-    state: Data<AuthState>,
-    body: Json<UpdateBody>,
-) -> RecordsResult<impl Responder> {
+async fn overview(db: Data<Database>, body: Query<OverviewQuery>) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
 
     // Insert map and player if they dont exist yet
-    let map_id = map::get_or_insert(&db, &body.map).await?;
-    let player_id = player::update_or_insert(&db, &body.login, body.player).await?;
+    let Some(Map { id: map_id, .. }) = player::get_map_from_game_id(&db, &body.map_uid).await? else {
+        return Err(RecordsError::MapNotFound(body.map_uid));
+    };
+    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.login).await? else {
+        return Err(RecordsError::PlayerNotFound(body.login));
+    };
 
     let mut redis_conn = db.redis_pool.get().await.unwrap();
 
     // Update redis if needed
-    let key = format!("l0:{}", body.map.map_uid);
+    let key = format!("l0:{}", body.map_uid);
     let count = redis::update_leaderboard(&db, &key, map_id).await? as u32;
 
     let mut ranked_records: Vec<RankedRecord> = vec![];

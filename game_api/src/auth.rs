@@ -211,13 +211,33 @@ impl FromRequest for AuthHeader {
                 .and_then(|h| h.to_str().map(str::to_string).ok())
         };
 
-        let (Some(login), Some(token)) = (
-            ext_header("PlayerLogin"),
-            ext_header("Authorization"))
-        else {
-            return ready(Err(RecordsError::Unauthorized));
-        };
+        #[cfg(feature = "release")]
+        {
+            let (Some(agent), Some(login), Some(token)) = (
+                ext_header("User-Agent"), 
+                ext_header("PlayerLogin"),
+                ext_header("Authorization"))
+            else {
+                return ready(Err(RecordsError::Unauthorized));
+            };
 
-        ready(Ok(Self { login, token }))
+            if !agent.starts_with("ManiaPlanet/") {
+                return ready(Err(RecordsError::Unauthorized));
+            }
+
+            ready(Ok(Self { login, token }))
+        }
+
+        #[cfg(not(feature = "release"))]
+        {
+            let (Some(login), Some(token)) = (
+                ext_header("PlayerLogin"),
+                ext_header("Authorization"))
+            else {
+                return ready(Err(RecordsError::Unauthorized));
+            };
+
+            ready(Ok(Self { login, token }))
+        }
     }
 }
