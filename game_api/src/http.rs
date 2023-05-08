@@ -1,9 +1,7 @@
-use actix_web::dev::ServiceRequest;
 use actix_web::web::JsonConfig;
 use actix_web::{web, Scope};
 
 use crate::map::UpdateMapBody;
-use crate::models::Role;
 use crate::player::UpdatePlayerBody;
 use crate::utils::{escaped, json};
 use crate::{admin, map, player, redis, AuthState, Database, RecordsResult};

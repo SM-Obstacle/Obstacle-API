@@ -32,8 +32,8 @@ use crate::models::Role;
 use crate::{Database, RecordsError, RecordsResult};
 
 /// The client's token expires in 12 hours.
-// const EXPIRES_IN: Duration = Duration::from_secs(60 * 60 * 12);
-const EXPIRES_IN: Duration = Duration::from_secs(15);
+const EXPIRES_IN: Duration = Duration::from_secs(60 * 60 * 12);
+//const EXPIRES_IN: Duration = Duration::from_secs(15);
 
 /// The state expires in 5 minutes.
 pub const TIMEOUT: Duration = Duration::from_secs(60 * 5);

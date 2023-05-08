@@ -114,15 +114,14 @@ pub async fn update_or_insert(
     Ok(id)
 }
 
-#[derive(MultipartForm)]
+#[derive(Deserialize)]
 pub struct HasFinishedBody {
-    pub time: Text<i32>,
-    pub respawn_count: Text<i32>,
-    pub login: Text<String>,
-    pub map_uid: Text<String>,
-    pub flags: Option<Text<u32>>,
-    pub cps: Vec<Text<i32>>,
-    pub inputs: Text<String>,
+    pub time: i32,
+    pub respawn_count: i32,
+    pub login: String,
+    pub map_uid: String,
+    pub flags: Option<u32>,
+    pub cps: Vec<i32>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -137,27 +136,13 @@ pub struct HasFinishedResponse {
 pub async fn player_finished(
     auth: AuthHeader,
     db: Data<Database>,
-    body: MultipartForm<HasFinishedBody>,
+    body: Json<HasFinishedBody>,
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Player).await?;
 
     let body = body.into_inner();
 
-    let pre_path = "inputs";
-    let random = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(10)
-        .collect::<Vec<u8>>();
-    let random = String::from_utf8(random).expect("random inputs file name not utf8");
-    let path = format!("{pre_path}/{}{random}", Utc::now().timestamp());
-    fs::create_dir_all(pre_path)?;
-    let mut f = BufWriter::with_capacity(32 * 1024, File::create(&path)?);
-    for chunk in body.inputs.as_bytes().chunks(10) {
-        f.write_all(chunk)?;
-    }
-    f.flush()?;
-
-    let finished = inner_player_finished(db, body, path).await?;
+    let finished = inner_player_finished(db, body).await?;
     json(finished)
 }
 
@@ -200,10 +185,9 @@ pub async fn get_map_from_game_id(
 async fn inner_player_finished(
     db: Data<Database>,
     body: HasFinishedBody,
-    inputs_path: String,
 ) -> RecordsResult<HasFinishedResponse> {
     let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.login.0));
+        return Err(RecordsError::PlayerNotFound(body.login));
     };
 
     if let Some(ban) = check_banned(&db, player_id).await? {
@@ -211,7 +195,7 @@ async fn inner_player_finished(
     }
 
     let Some(Map { id: map_id, .. }) = get_map_from_game_id(&db, &body.map_uid).await? else {
-        return Err(RecordsError::MapNotFound(body.map_uid.0));
+        return Err(RecordsError::MapNotFound(body.map_uid));
     };
 
     let mut redis_conn = db.redis_pool.get().await.unwrap();
@@ -229,54 +213,46 @@ async fn inner_player_finished(
     let now = Utc::now().naive_utc();
 
     let (old, new, has_improved) = if let Some(Record { time: old, .. }) = old_record {
-        if body.time.0 < old {
-            let inputs_expiry = None::<u32>;
-
+        if body.time < old {
             // Update redis record
-            let key = format!("l0:{}", body.map_uid.0);
+            let key = format!("l0:{}", body.map_uid);
             let _added: i64 = redis_conn
-                .zadd(&key, player_id, body.time.0)
+                .zadd(&key, player_id, body.time)
                 .await
                 .unwrap_or(0);
             let _count = redis::update_leaderboard(&db, &key, map_id).await?;
 
-            sqlx::query!("INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags, inputs_path, inputs_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            sqlx::query!("INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags) VALUES (?, ?, ?, ?, ?, ?)",
                     player_id,
                     map_id,
-                    body.time.0,
-                    body.respawn_count.0,
+                    body.time,
+                    body.respawn_count,
                     now,
-                    body.flags.map(|f| f.0),
-                    inputs_path,
-                    inputs_expiry
+                    body.flags,
                 )
                     .execute(&db.mysql_pool)
                     .await?;
         }
-        (old, body.time.0, body.time.0 < old)
+        (old, body.time, body.time < old)
     } else {
-        let inputs_expiry = None::<u32>;
-
         sqlx::query!(
-                "INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags, inputs_path, inputs_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags) VALUES (?, ?, ?, ?, ?, ?)",
                 player_id,
                 map_id,
-                body.time.0,
-                body.respawn_count.0,
+                body.time,
+                body.respawn_count,
                 now,
-                body.flags.map(|f| f.0),
-                inputs_path,
-                inputs_expiry,
+                body.flags,
             )
                 .execute(&db.mysql_pool)
                 .await?;
 
-        (body.time.0, body.time.0, true)
+        (body.time, body.time, true)
     };
 
     Ok(HasFinishedResponse {
         has_improved,
-        login: body.login.0,
+        login: body.login,
         old,
         new,
     })
