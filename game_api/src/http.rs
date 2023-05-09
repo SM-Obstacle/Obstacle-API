@@ -131,7 +131,6 @@ async fn append_range(
 async fn overview(db: Data<Database>, body: Query<OverviewQuery>) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
 
-    // Insert map and player if they dont exist yet
     let Some(Map { id: map_id, .. }) = player::get_map_from_game_id(&db, &body.map_uid).await? else {
         return Err(RecordsError::MapNotFound(body.map_uid));
     };

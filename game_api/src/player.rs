@@ -189,11 +189,6 @@ async fn inner_player_finished(
     let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.login).await? else {
         return Err(RecordsError::PlayerNotFound(body.login));
     };
-
-    if let Some(ban) = check_banned(&db, player_id).await? {
-        return Err(RecordsError::BannedPlayer(ban));
-    }
-
     let Some(Map { id: map_id, .. }) = get_map_from_game_id(&db, &body.map_uid).await? else {
         return Err(RecordsError::MapNotFound(body.map_uid));
     };
@@ -210,7 +205,47 @@ async fn inner_player_finished(
     .fetch_optional(&db.mysql_pool)
     .await?;
 
-    let now = Utc::now().naive_utc();
+    async fn insert_record(
+        db: &Database,
+        player_id: u32,
+        map_id: u32,
+        body: &HasFinishedBody,
+    ) -> RecordsResult<()> {
+        let now = Utc::now().naive_utc();
+
+        let record_id: u32 = sqlx::query_scalar(
+            "INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags)
+            VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+        )
+        .bind(player_id)
+        .bind(map_id)
+        .bind(body.time)
+        .bind(body.respawn_count)
+        .bind(now)
+        .bind(body.flags)
+        .fetch_one(&db.mysql_pool)
+        .await?;
+
+        let cps_times = body
+            .cps
+            .iter()
+            .enumerate()
+            .map(|(i, t)| format!("({i}, {map_id}, {record_id}, {t})"))
+            .collect::<Vec<String>>()
+            .join(", ");
+
+        sqlx::query(
+            format!(
+                "INSERT INTO checkpoint_times (cp_num, map_id, record_id, time)
+                VALUES {cps_times}"
+            )
+            .as_str(),
+        )
+        .execute(&db.mysql_pool)
+        .await?;
+
+        Ok(())
+    }
 
     let (old, new, has_improved) = if let Some(Record { time: old, .. }) = old_record {
         if body.time < old {
@@ -222,31 +257,11 @@ async fn inner_player_finished(
                 .unwrap_or(0);
             let _count = redis::update_leaderboard(&db, &key, map_id).await?;
 
-            sqlx::query!("INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags) VALUES (?, ?, ?, ?, ?, ?)",
-                    player_id,
-                    map_id,
-                    body.time,
-                    body.respawn_count,
-                    now,
-                    body.flags,
-                )
-                    .execute(&db.mysql_pool)
-                    .await?;
+            insert_record(&db, player_id, map_id, &body).await?;
         }
         (old, body.time, body.time < old)
     } else {
-        sqlx::query!(
-                "INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags) VALUES (?, ?, ?, ?, ?, ?)",
-                player_id,
-                map_id,
-                body.time,
-                body.respawn_count,
-                now,
-                body.flags,
-            )
-                .execute(&db.mysql_pool)
-                .await?;
-
+        insert_record(&db, player_id, map_id, &body).await?;
         (body.time, body.time, true)
     };
 
