@@ -311,8 +311,11 @@ fn create_schema(db: Database) -> Schema {
             .unwrap();
     }
 
-    println!("Schema:");
-    println!("{}", &schema.sdl());
+    #[cfg(feature = "localhost_test")]
+    {
+        println!("----------- Schema:");
+        println!("{}", &schema.sdl());
+    }
 
     schema
 }
