@@ -1,8 +1,9 @@
 use crate::{
+    auth::{self, AuthHeader},
     models::{self, Map, Player, Role},
     player::{self, UpdatePlayerBody},
     utils::{any_repeated, json},
-    AuthState, Database, RecordsError, RecordsResult,
+    Database, RecordsError, RecordsResult,
 };
 use actix_web::{
     web::{Data, Json, Query},
@@ -95,9 +96,10 @@ struct PlayerRatingResponse {
 
 pub async fn player_rating(
     db: Data<Database>,
-    state: Data<AuthState>,
+    auth: AuthHeader,
     body: Json<PlayerRatingBody>,
 ) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Player).await?;
     let body = body.into_inner();
 
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.login).await? else {
@@ -175,7 +177,7 @@ struct RatingsResponse {
 
 pub async fn ratings(
     db: Data<Database>,
-    state: Data<AuthState>,
+    auth: AuthHeader,
     body: Json<RatingsBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
@@ -196,7 +198,7 @@ pub async fn ratings(
         (Role::Admin, login)
     };
 
-    // state.check_auth_for(&db, role, &body).await?;
+    auth::check_auth_for(&db, auth, role).await?;
 
     let players_ratings = sqlx::query_as!(
         models::Rating,
@@ -315,9 +317,10 @@ struct RateResponse {
 
 pub async fn rate(
     db: Data<Database>,
-    state: Data<AuthState>,
+    auth: AuthHeader,
     body: Json<RateBody>,
 ) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Player).await?;
     let body = body.into_inner();
 
     let Some(Player { id: player_id, login: player_login, .. }) = sqlx::query_as(
@@ -488,9 +491,10 @@ struct ResetRatingsResponse {
 
 pub async fn reset_ratings(
     db: Data<Database>,
-    state: Data<AuthState>,
+    auth: AuthHeader,
     body: Json<ResetRatingsBody>,
 ) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Admin).await?;
     let body = body.into_inner();
 
     let Some((map_id, map_name, author_login)) = sqlx::query_as(

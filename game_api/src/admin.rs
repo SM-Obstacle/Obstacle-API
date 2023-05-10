@@ -1,15 +1,16 @@
 use actix_web::{
-    web::{Data, Json},
+    web::{Data, Json, Query},
     Responder,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{mysql::MySqlRow, FromRow, Row};
 
 use crate::{
+    auth::{self, AuthHeader},
     models::{Player, Role},
     player,
     utils::json,
-    AuthState, Database, RecordsError, RecordsResult,
+    Database, RecordsError, RecordsResult,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -32,9 +33,10 @@ struct DelNoteResponse {
 
 pub async fn del_note(
     db: Data<Database>,
-    state: Data<AuthState>,
+    auth: AuthHeader,
     body: Json<DelNoteBody>,
 ) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Admin).await?;
     let body = body.into_inner();
     sqlx::query!(
         "UPDATE players SET admins_note = NULL WHERE login = ?",
@@ -62,9 +64,10 @@ struct SetRoleResponse {
 
 pub async fn set_role(
     db: Data<Database>,
-    state: Data<AuthState>,
+    auth: AuthHeader,
     body: Json<SetRoleBody>,
 ) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Admin).await?;
     let body = body.into_inner();
     sqlx::query!(
         "UPDATE players SET role = ? WHERE login = ?",
@@ -132,9 +135,10 @@ struct BanishmentsResponse {
 
 pub async fn banishments(
     db: Data<Database>,
-    state: Data<AuthState>,
-    body: Json<BanishmentsBody>,
+    auth: AuthHeader,
+    body: Query<BanishmentsBody>,
 ) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Admin).await?;
     let body = body.into_inner();
 
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
@@ -178,9 +182,10 @@ struct BanResponse {
 
 pub async fn ban(
     db: Data<Database>,
-    state: Data<AuthState>,
+    auth: AuthHeader,
     body: Json<BanBody>,
 ) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Admin).await?;
     let body = body.into_inner();
 
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
@@ -252,9 +257,10 @@ struct UnbanResponse {
 
 pub async fn unban(
     db: Data<Database>,
-    state: Data<AuthState>,
+    auth: AuthHeader,
     body: Json<UnbanBody>,
 ) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Admin).await?;
     let body = body.into_inner();
 
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
@@ -300,9 +306,10 @@ struct PlayerNoteResponse {
 
 pub async fn player_note(
     db: Data<Database>,
-    state: Data<AuthState>,
+    auth: AuthHeader,
     body: Json<PlayerNoteBody>,
 ) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Admin).await?;
     let body = body.into_inner();
 
     let Some(admins_note) = sqlx::query_scalar!(

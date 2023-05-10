@@ -29,7 +29,7 @@ use tokio::time::timeout;
 use tracing::Level;
 
 use crate::models::Role;
-use crate::{Database, RecordsError, RecordsResult};
+use crate::{player, Database, RecordsError, RecordsResult};
 
 /// The client's token expires in 12 hours.
 const EXPIRES_IN: Duration = Duration::from_secs(60 * 60 * 12);
@@ -181,9 +181,17 @@ pub async fn check_auth_for(
         _ => return Err(RecordsError::Unauthorized),
     }
 
+    let player = player::get_player_from_login(&db, &login)
+        .await?
+        .expect("invalid player in redis server");
+
+    if let Some(ban) = player::check_banned(&db, player.id).await? {
+        return Err(RecordsError::BannedPlayer(ban));
+    };
+
     let role: Role =
-        sqlx::query_as("SELECT * FROM role WHERE id = (SELECT role FROM players WHERE login = ?)")
-            .bind(&login)
+        sqlx::query_as("SELECT * FROM role WHERE id = (SELECT role FROM players WHERE id = ?)")
+            .bind(player.id)
             .fetch_one(&db.mysql_pool)
             .await?;
 

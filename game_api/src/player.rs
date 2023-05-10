@@ -1,16 +1,9 @@
-use std::{
-    fs::{self, File},
-    io::{BufWriter, Write},
-};
-
-use actix_multipart::form::{text::Text, MultipartForm};
 use actix_web::{
-    web::{Data, Json},
+    web::{Data, Json, Query},
     HttpResponse, Responder,
 };
 use chrono::Utc;
 use deadpool_redis::redis::AsyncCommands;
-use rand::{distributions::Alphanumeric, Rng};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -388,11 +381,7 @@ struct InfoResponse {
     role_name: String,
 }
 
-pub async fn info(
-    db: Data<Database>,
-    state: Data<AuthState>,
-    body: Json<InfoBody>,
-) -> RecordsResult<impl Responder> {
+pub async fn info(db: Data<Database>, body: Query<InfoBody>) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
 
     let Some(info) = sqlx::query_as::<_, InfoResponse>(
