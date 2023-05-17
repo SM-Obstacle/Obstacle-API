@@ -6,6 +6,8 @@ use actix_web::{
 use deadpool::Runtime;
 use game_api::{api_route, graphql_route, AuthState, Database, RecordsResult};
 use sqlx::mysql;
+#[cfg(not(feature = "localhost_test"))]
+use std::env::var;
 use std::time::Duration;
 use tracing_actix_web::TracingLogger;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -33,17 +35,14 @@ async fn main() -> RecordsResult<()> {
         .connect("mysql://records_api:api@localhost/obs_records")
         .await?;
     #[cfg(not(feature = "localhost_test"))]
-    let mysql_pool = mysql_pool
-        .connect("mysql://root:root@localhost/obstacle_records")
-        .await?;
+    let mysql_pool = mysql_pool.connect(var("DATABASE_URL")?).await?;
 
     let redis_pool = {
         let cfg = deadpool_redis::Config {
             #[cfg(feature = "localhost_test")]
             url: Some("redis://127.0.0.1:6379/".to_string()),
             #[cfg(not(feature = "localhost_test"))]
-            url: Some("redis://10.0.0.1/".to_string()),
-            // url: Some("redis://localhost/".to_string()),
+            url: Some(var("REDIS_URL")?),
             connection: None,
             pool: None,
         };
@@ -77,7 +76,9 @@ async fn main() -> RecordsResult<()> {
         #[cfg(feature = "localhost_test")]
         let cors = cors.allow_any_origin();
         #[cfg(not(feature = "localhost_test"))]
-        let cors = cors.allowed_origin("https://www.obstacle.ovh");
+        let cors = cors
+            .allowed_origin("https://www.obstacle.ovh")
+            .allowed_origin(var("RECORDS_API_HOST")?);
 
         App::new()
             .wrap(cors)
