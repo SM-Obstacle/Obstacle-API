@@ -1,4 +1,4 @@
-use crate::{models::Record, Database, RecordsResult};
+use crate::{Database, RecordsResult};
 use deadpool_redis::redis::AsyncCommands;
 
 pub async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
@@ -14,18 +14,20 @@ pub async fn update_leaderboard(db: &Database, key: &str, map_id: u32) -> Record
     let mysql_count: i64 = count_records_map(db, map_id).await?;
 
     if redis_count != mysql_count {
-        let all_map_records =
-            sqlx::query_as!(Record, "SELECT * FROM records WHERE map_id = ?", map_id)
-                .fetch_all(&db.mysql_pool)
-                .await?;
+        let all_map_records: Vec<(u32, i32)> = sqlx::query_as(
+            "SELECT player_id, MIN(time) AS time FROM records
+                WHERE map_id = ?
+                GROUP BY player_id
+                ORDER BY time ASC",
+        )
+        .bind(map_id)
+        .fetch_all(&db.mysql_pool)
+        .await?;
 
         let _removed_count: i64 = redis_conn.del(key).await.unwrap_or(0);
 
         for record in all_map_records {
-            let _: i64 = redis_conn
-                .zadd(key, record.player_id, record.time)
-                .await
-                .unwrap_or(0);
+            let _: i64 = redis_conn.zadd(key, record.0, record.1).await.unwrap_or(0);
         }
     }
 

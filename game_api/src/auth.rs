@@ -16,7 +16,7 @@
 //! to log in again to ManiaPlanet to get a new token.
 
 use std::future::{ready, Ready};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
@@ -28,8 +28,7 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::Level;
 
-use crate::models::Role;
-use crate::{player, Database, RecordsError, RecordsResult};
+use crate::{http::player, models::Role, Database, RecordsError, RecordsResult};
 
 /// The client's token expires in 12 hours.
 const EXPIRES_IN: Duration = Duration::from_secs(60 * 60 * 12);
@@ -69,7 +68,7 @@ impl TokenState {
 /// prevent the same client from logging in multiple times.
 #[derive(Debug, Default)]
 pub struct AuthState {
-    token_states_map: Arc<Mutex<HashMap<String, TokenState>>>,
+    token_states_map: Mutex<HashMap<String, TokenState>>,
 }
 
 impl AuthState {
@@ -195,7 +194,7 @@ pub async fn check_auth_for(
             .fetch_one(&db.mysql_pool)
             .await?;
 
-    if role <= required {
+    if role < required {
         return Err(RecordsError::Unauthorized);
     }
 

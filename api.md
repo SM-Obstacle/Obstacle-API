@@ -618,3 +618,87 @@ Response (XML):
 </AddMedalResponse>
 ```
 Check if the response code is 403 (forbidden), it means that the session token expired, so try to regenerate a session token with the `/player/get_token` request, then use it with the `/map/add_medal` request.
+
+## Get all the events
+
+Context: Get all the events, ordered by the date of their last edition.
+Path: `/event`
+Method: `GET`
+Headers:
+* `Accept: application/json`
+Response (JSON):
+```json
+[
+    {
+        // acts like a login for a player
+        "handle": "event_handle",
+        // id of the last edition of this event or null if not yet existing
+        "last_edition_id": 0,
+    }
+    // ...
+]
+```
+
+## Get all the editions of an event
+
+Context: Get all the editions of the given event, from its handle, ordered by their date.
+Path: `/event/:event_handle`
+Method: `GET`
+Headers:
+* `Accept: application/json`
+Response (JSON):
+```json
+[
+    {
+        // the id of the edition
+        "id": 0,
+        "start_date": "date"
+    }
+    // ...
+]
+```
+
+## Get the details of the edition of an event
+
+Context: Get the details of an event edition, from the event handle and the edition id.
+Path: `/event/:event_handle/:edition_id`
+Method: `GET`
+Headers:
+* `Accept: application/json`
+Response (JSON):
+```json
+{
+    "id": 0,
+    "name": "edition's name",
+    "start_date": "date",
+    "banner_img_url": "url",
+    // if the edition has categories
+    "content": {
+        "categories": [
+            {
+                "handle": "white",
+                "name": "White",
+                "banner_img_url": "url",
+                "maps": [
+                    {
+                        "game_id": "map's uid",
+                        "dl_url": "mx url"
+                    }
+                    // ...
+                ]
+            }
+            // ...
+        ]
+    },
+    // else
+    "content": {
+        "maps": [
+            {
+                "game_id": "map's uid",
+                "dl_url": "mx url"
+            }
+            // ...
+        ]
+    }
+}
+```

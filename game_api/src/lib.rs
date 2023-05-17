@@ -1,4 +1,3 @@
-use actix_web::error::HttpError;
 use chrono::{DateTime, Utc};
 use deadpool::managed::PoolError;
 use deadpool_redis::redis::RedisError;
@@ -10,13 +9,10 @@ use tokio::sync::mpsc::error::SendError;
 
 use self::models::Banishment;
 
-mod admin;
 mod auth;
 mod graphql;
 mod http;
-mod map;
 pub mod models;
-mod player;
 mod redis;
 mod utils;
 
@@ -65,6 +61,10 @@ pub enum RecordsError {
     NoRatingFound(String, String),
     #[error("invalid rates (too many, or repeated rate)")]
     InvalidRates,
+    #[error("event `{0}` not found")]
+    EventNotFound(String),
+    #[error("event edition `{1}` not found for event `{0}`")]
+    EventEditionNotFound(String, u32),
 }
 
 impl actix_web::ResponseError for RecordsError {
@@ -114,7 +114,9 @@ impl actix_web::ResponseError for RecordsError {
                 .body(format!(
                 "no rating found to update for player with login: `{login}` and map with uid: `{map_uid}`",
             )),
-            Self::InvalidRates => actix_web::HttpResponse::BadRequest().body("invalid rates (too many, or repeated rate)")
+            Self::InvalidRates => actix_web::HttpResponse::BadRequest().body("invalid rates (too many, or repeated rate)"),
+            Self::EventNotFound(handle) => actix_web::HttpResponse::BadRequest().body(format!("event `{handle}` not found")),
+            Self::EventEditionNotFound(handle, edition) => actix_web::HttpResponse::BadRequest().body(format!("event edition `{edition}` not found for event `{handle}`")),
         }
     }
 }

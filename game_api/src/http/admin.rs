@@ -1,6 +1,6 @@
 use actix_web::{
-    web::{Data, Json, Query},
-    Responder,
+    web::{self, Data, Json, Query},
+    Responder, Scope,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{mysql::MySqlRow, FromRow, Row};
@@ -8,10 +8,21 @@ use sqlx::{mysql::MySqlRow, FromRow, Row};
 use crate::{
     auth::{self, AuthHeader},
     models::{Player, Role},
-    player,
     utils::json,
     Database, RecordsError, RecordsResult,
 };
+
+use super::player;
+
+pub fn admin_scope() -> Scope {
+    web::scope("/admin")
+        .route("/del_note", web::post().to(del_note))
+        .route("/set_role", web::post().to(set_role))
+        .route("/banishments", web::get().to(banishments))
+        .route("/ban", web::post().to(ban))
+        .route("/unban", web::post().to(unban))
+        .route("/player_note", web::get().to(player_note))
+}
 
 #[derive(Serialize, Deserialize)]
 struct AdminRequest {

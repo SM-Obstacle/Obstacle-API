@@ -1,30 +1,41 @@
 use crate::{
     auth::{self, AuthHeader},
     models::{self, Map, Player, Role},
-    player::{self, UpdatePlayerBody},
     utils::{any_repeated, json},
     Database, RecordsError, RecordsResult,
 };
 use actix_web::{
-    web::{Data, Json, Query},
-    HttpResponse, Responder,
+    web::{self, Data, Json, Query},
+    HttpResponse, Responder, Scope,
 };
 use futures::{future::try_join_all, stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-#[derive(Deserialize)]
-struct MapAuthor {
-    login: String,
-    nickname: String,
-    zone_path: String,
+use super::player::{self, UpdatePlayerBody};
+
+pub fn map_scope() -> Scope {
+    web::scope("/map")
+        .route("/insert", web::post().to(insert))
+        .route("/player_rating", web::get().to(player_rating))
+        .route("/ratings", web::get().to(ratings))
+        .route("/rating", web::get().to(rating))
+        .route("/rate", web::post().to(rate))
+        .route("/reset_ratings", web::post().to(reset_ratings))
+}
+
+#[derive(Deserialize, Serialize, FromRow)]
+pub struct MapAuthor {
+    pub login: String,
+    pub name: String,
+    pub country: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateMapBody {
-    name: String,
+    pub name: String,
     pub map_uid: String,
-    author: MapAuthor,
+    pub author: MapAuthor,
 }
 
 pub async fn insert(
@@ -47,8 +58,8 @@ pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult
         db,
         &body.author.login,
         UpdatePlayerBody {
-            nickname: body.author.nickname.clone(),
-            country: body.author.zone_path.clone(),
+            nickname: body.author.name.clone(),
+            country: body.author.country.clone(),
             login: "".to_string(),
         },
     )

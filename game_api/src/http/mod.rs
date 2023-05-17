@@ -1,56 +1,39 @@
 use actix_web::web::{JsonConfig, Query};
 use actix_web::{web, Scope};
+use reqwest::Client;
 
-use crate::models::{Map, Player};
-use crate::utils::{escaped, json};
-use crate::{admin, map, player, redis, Database, RecordsError, RecordsResult};
+use crate::{
+    models::{Map, Player},
+    redis,
+    utils::{escaped, json},
+    Database, RecordsError, RecordsResult,
+};
 use actix_web::{web::Data, Responder};
 use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::{mysql, FromRow};
 
-fn player_scope() -> Scope {
-    web::scope("/player")
-        .route("/update", web::post().to(player::update))
-        .route("/finished", web::post().to(player::player_finished))
-        .route("/get_token", web::post().to(player::get_token))
-        .service(
-            web::resource("/give_token")
-                .route(web::post().to(player::post_give_token))
-                .route(web::get().to(player::get_give_token)),
-        )
-        .route("/info", web::get().to(player::info))
-}
+use self::admin::admin_scope;
+use self::event::event_scope;
+use self::map::map_scope;
+use self::player::player_scope;
 
-fn admin_scope() -> Scope {
-    web::scope("/admin")
-        .route("/del_note", web::post().to(admin::del_note))
-        .route("/set_role", web::post().to(admin::set_role))
-        .route("/banishments", web::get().to(admin::banishments))
-        .route("/ban", web::post().to(admin::ban))
-        .route("/unban", web::post().to(admin::unban))
-        .route("/player_note", web::get().to(admin::player_note))
-}
-
-fn map_scope() -> Scope {
-    web::scope("/map")
-        .route("/insert", web::post().to(map::insert))
-        .route("/player_rating", web::get().to(map::player_rating))
-        .route("/ratings", web::get().to(map::ratings))
-        .route("/rating", web::get().to(map::rating))
-        .route("/rate", web::post().to(map::rate))
-        .route("/reset_ratings", web::post().to(map::reset_ratings))
-}
+pub mod admin;
+pub mod event;
+pub mod map;
+pub mod player;
 
 pub fn api_route() -> Scope {
     let json_config = JsonConfig::default().limit(1024 * 16);
 
     web::scope("")
         .app_data(json_config)
+        .app_data(Data::new(Client::new()))
         .route("/overview", web::get().to(overview))
         .service(player_scope())
         .service(map_scope())
         .service(admin_scope())
+        .service(event_scope())
 }
 
 #[derive(Deserialize)]
@@ -98,20 +81,18 @@ async fn append_range(
         .join(",");
 
     let query = format!(
-        "SELECT CAST(ROW_NUMBER() OVER (ORDER BY time ASC) AS UNSIGNED) AS rank,
+        "SELECT CAST(RANK() OVER (ORDER BY time ASC) AS UNSIGNED) + ? AS rank,
             players.login AS login,
             players.name AS nickname,
             MIN(time) as time
         FROM records INNER JOIN players ON records.player_id = players.id
         WHERE map_id = ? AND player_id IN ({})
         GROUP BY player_id
-        ORDER BY time ASC",
+        ORDER BY time ASC, record_date ASC",
         params
     );
 
-    let mut query = sqlx::query(&query);
-
-    query = query.bind(map_id);
+    let mut query = sqlx::query(&query).bind(start).bind(map_id);
     for id in ids {
         query = query.bind(id);
     }
@@ -124,7 +105,8 @@ async fn append_range(
                 record
             })
             .fetch_all(&db.mysql_pool)
-            .await.unwrap(),
+            .await
+            .unwrap(),
     );
 }
 

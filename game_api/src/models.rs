@@ -12,7 +12,7 @@ pub struct Player {
     pub login: String,
     pub name: String,
     pub join_date: Option<chrono::NaiveDateTime>,
-    pub country: String,
+    pub country: Option<String>,
     pub admins_note: Option<String>,
     pub role: u8,
 }
@@ -43,9 +43,10 @@ pub struct Record {
     pub flags: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, FromRow)]
 pub struct RankedRecord {
     pub rank: i32,
+    #[sqlx(flatten)]
     pub record: Record,
 }
 
@@ -213,4 +214,55 @@ pub struct PlayerRating {
     pub map_id: u32,
     pub kind: u8,
     pub rating: f32,
+}
+
+#[derive(Serialize, FromRow, Clone, Debug)]
+pub struct Event {
+    pub id: u32,
+    pub handle: String,
+    pub cooldown: Option<u8>,
+}
+
+#[derive(Serialize, FromRow, Clone, Debug)]
+pub struct EventAdmins {
+    pub event_id: u32,
+    pub player_id: u32,
+}
+
+#[derive(Serialize, FromRow, Clone, Debug)]
+pub struct EventCategories {
+    pub event_id: u32,
+    pub category_id: u32,
+}
+
+#[derive(Serialize, FromRow, Clone, Debug)]
+pub struct EventCategory {
+    pub id: u32,
+    pub handle: String,
+    pub name: String,
+    pub banner_img_url: Option<String>,
+}
+
+#[derive(Serialize, FromRow, Clone, Debug)]
+pub struct EventEdition {
+    pub id: u32,
+    pub event_id: u32,
+    pub name: String,
+    pub start_date: chrono::NaiveDateTime,
+    pub banner_img_url: Option<String>,
+}
+
+#[derive(Serialize, FromRow, Clone, Debug)]
+pub struct EventEditionCategories {
+    pub event_id: u32,
+    pub edition_id: u32,
+    pub category_id: u32,
+}
+
+#[derive(Serialize, FromRow, Clone, Debug)]
+pub struct EventEditionMaps {
+    pub event_id: u32,
+    pub edition_id: u32,
+    pub map_id: u32,
+    pub category_id: Option<u32>,
 }

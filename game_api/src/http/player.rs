@@ -1,17 +1,16 @@
 use actix_web::{
-    web::{Data, Json, Query},
-    HttpResponse, Responder,
+    web::{self, Data, Json, Query},
+    HttpResponse, Responder, Scope,
 };
 use chrono::Utc;
 use deadpool_redis::redis::AsyncCommands;
-use reqwest::StatusCode;
+use reqwest::{StatusCode, Client};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use tokio::time::timeout;
 use tracing::Level;
 
 use crate::{
-    admin,
     auth::{self, AuthHeader, AuthState, TIMEOUT},
     models::{Banishment, Map, Player, Record, Role},
     redis,
@@ -19,11 +18,26 @@ use crate::{
     Database, RecordsError, RecordsResult,
 };
 
+use super::admin;
+
+pub fn player_scope() -> Scope {
+    web::scope("/player")
+        .route("/update", web::post().to(update))
+        .route("/finished", web::post().to(player_finished))
+        .route("/get_token", web::post().to(get_token))
+        .service(
+            web::resource("/give_token")
+                .route(web::post().to(post_give_token))
+                .route(web::get().to(get_give_token)),
+        )
+        .route("/info", web::get().to(info))
+}
+
 #[derive(Deserialize)]
 pub struct UpdatePlayerBody {
     pub login: String,
     pub nickname: String,
-    pub country: String,
+    pub country: Option<String>,
 }
 
 pub async fn get_or_insert(
@@ -272,9 +286,7 @@ struct MPServerRes {
     res_login: String,
 }
 
-async fn check_mp_token(login: &str, token: String) -> RecordsResult<bool> {
-    let client = reqwest::Client::new();
-
+async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsResult<bool> {
     let res = client
         .get("https://prod.live.maniaplanet.com/webservices/me")
         .header("Accept", "application/json")
@@ -302,6 +314,7 @@ struct GetTokenResponse {
 
 pub async fn get_token(
     db: Data<Database>,
+    client: Data<Client>,
     state: Data<AuthState>,
     body: Json<GetTokenBody>,
 ) -> RecordsResult<impl Responder> {
@@ -325,7 +338,7 @@ pub async fn get_token(
     let err_msg = "/get_token rx should not be dropped at this point";
 
     // check access_token and generate new token for player ...
-    if !check_mp_token(&body.login, access_token).await? {
+    if !check_mp_token(&client, &body.login, access_token).await? {
         tx.send("INVALID_TOKEN".to_owned()).expect(err_msg);
         return Err(RecordsError::InvalidMPToken);
     }
@@ -356,7 +369,7 @@ pub async fn post_give_token(
 pub async fn get_give_token() -> impl Responder {
     HttpResponse::Ok()
         .content_type("text/html")
-        .body(include_str!("../public/give_token.html"))
+        .body(include_str!("../../public/give_token.html"))
 }
 
 #[derive(Serialize)]
@@ -377,7 +390,7 @@ struct InfoResponse {
     login: String,
     name: String,
     join_date: Option<chrono::NaiveDateTime>,
-    country: String,
+    country: Option<String>,
     role_name: String,
 }
 

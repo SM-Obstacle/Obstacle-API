@@ -9,7 +9,7 @@ records saving, authentication, players and maps registering and all the stuff i
 
 MariaDB v10.11 or higher is required for the Obstacle database. You must edit the corresponding hardcoded URI in the `main.rs` file to the database, and set the same URI as the `DATABASE_URL` environment variable.
 
-Then, you must implement run the SQL script joined with this project.
+Then, you must run the SQL script joined with this project.
 
 ### Redis server
 

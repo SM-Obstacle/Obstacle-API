@@ -8,7 +8,7 @@ use deadpool_redis::{redis::AsyncCommands, Pool as RedisPool};
 use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use crate::{
-    models::{Map, MedalPrice, Player, PlayerRating, RankedRecord, Rating, Record},
+    models::{Map, MedalPrice, Player, PlayerRating, RankedRecord, Rating},
     redis, Database,
 };
 
@@ -101,49 +101,46 @@ impl Map {
         let db = ctx.data_unchecked::<Database>();
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let mut redis_conn = redis_pool.get().await.unwrap();
+        let mut redis_conn = redis_pool.get().await?;
 
         let key = format!("l0:{}", self.game_id);
 
         redis::update_leaderboard(db, &key, self.id).await?;
 
-        let record_ids: Vec<i32> = redis_conn.zrange(key, 0, 99).await.unwrap();
+        let record_ids: Vec<i32> = redis_conn.zrange(key, 0, 99).await?;
         if record_ids.is_empty() {
             return Ok(Vec::new());
         }
 
         // Query the records with these ids
         let query = format!(
-            "SELECT * FROM records WHERE map_id = ? AND player_id IN ({}) ORDER BY time ASC",
+            "SELECT
+                RANK() OVER (ORDER BY time ASC) AS rank,
+                r.*
+            FROM records r
+            INNER JOIN (
+                SELECT player_id, map_id, MIN(time) AS time
+                FROM records
+                WHERE map_id = ? AND player_id IN ({})
+                GROUP BY player_id
+            ) t
+            ON r.player_id = t.player_id AND r.map_id = t.map_id AND r.time = t.time
+            ORDER BY r.time ASC, r.record_date ASC",
             record_ids
                 .iter()
-                .map(|_| "?".to_string())
-                .collect::<Vec<String>>()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
                 .join(",")
         );
 
-        let mut query = sqlx::query(&query);
-        query = query.bind(self.id);
-        for id in &record_ids {
-            query = query.bind(id);
+        let mut query = sqlx::query_as(&query).bind(self.id);
+        for record_id in record_ids {
+            query = query.bind(record_id);
         }
-        let mut records = query
-            .map(|row: mysql::MySqlRow| RankedRecord {
-                rank: 0,
-                record: Record::from_row(&row).unwrap(),
-            })
+
+        let records = query
             .fetch_all(mysql_pool)
-            .await
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-
-        let mut rank = 0;
-        for mut record in &mut records {
-            record.rank = rank + 1;
-            rank += 1;
-        }
-
+            .await?;
         Ok(records)
     }
 }
