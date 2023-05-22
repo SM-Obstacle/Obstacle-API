@@ -35,7 +35,7 @@ async fn main() -> RecordsResult<()> {
         .connect("mysql://records_api:api@localhost/obs_records")
         .await?;
     #[cfg(not(feature = "localhost_test"))]
-    let mysql_pool = mysql_pool.connect(var("DATABASE_URL")?).await?;
+    let mysql_pool = mysql_pool.connect(&var("DATABASE_URL")?).await?;
 
     let redis_pool = {
         let cfg = deadpool_redis::Config {
@@ -78,7 +78,7 @@ async fn main() -> RecordsResult<()> {
         #[cfg(not(feature = "localhost_test"))]
         let cors = cors
             .allowed_origin("https://www.obstacle.ovh")
-            .allowed_origin(var("RECORDS_API_HOST")?);
+            .allowed_origin(&var("RECORDS_API_HOST")?);
 
         App::new()
             .wrap(cors)
