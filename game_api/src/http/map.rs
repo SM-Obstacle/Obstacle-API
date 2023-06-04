@@ -8,7 +8,7 @@ use actix_web::{
     web::{self, Data, Json, Query},
     HttpResponse, Responder, Scope,
 };
-use futures::{future::try_join_all, stream, StreamExt};
+use futures::{future::try_join_all, StreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
@@ -35,6 +35,7 @@ pub struct MapAuthor {
 pub struct UpdateMapBody {
     pub name: String,
     pub map_uid: String,
+    pub cps_number: u32,
     pub author: MapAuthor,
 }
 
@@ -47,10 +48,19 @@ pub async fn insert(
 }
 
 pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult<u32> {
-    if let Some(id) = sqlx::query_scalar!("SELECT id FROM maps WHERE game_id = ?", body.map_uid)
-        .fetch_optional(&db.mysql_pool)
-        .await?
-    {
+    let res = player::get_map_from_game_id(db, &body.map_uid).await?;
+
+    if let Some(Map { id, cps_number, .. }) = res {
+        if cps_number.is_none() {
+            sqlx::query!(
+                "UPDATE maps SET cps_number = ? WHERE id = ?",
+                body.cps_number,
+                id
+            )
+            .execute(&db.mysql_pool)
+            .await?;
+        }
+
         return Ok(id);
     }
 
@@ -67,12 +77,13 @@ pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult
 
     let id = sqlx::query_scalar(
         "INSERT INTO maps
-        (game_id, player_id, name)
-        VALUES (?, ?, ?) RETURNING id",
+        (game_id, player_id, name, cps_number)
+        VALUES (?, ?, ?, ?) RETURNING id",
     )
     .bind(&body.map_uid)
     .bind(player_id)
     .bind(&body.name)
+    .bind(body.cps_number)
     .fetch_one(&db.mysql_pool)
     .await?;
 
@@ -420,63 +431,57 @@ pub async fn rate(
         }
     };
 
-    let ratings = stream::iter(body.ratings)
-        .map(|rate| {
-            let db = db.clone();
-            async move {
-                let count = sqlx::query_scalar!(
-                    "SELECT COUNT(*) FROM player_rating
+    let mut ratings = Vec::with_capacity(body.ratings.len());
+
+    for rate in body.ratings {
+        let count = sqlx::query_scalar!(
+            "SELECT COUNT(*) FROM player_rating
                     WHERE map_id = ? AND player_id = ? AND kind = ?",
-                    map_id,
-                    player_id,
-                    rate.kind
-                )
-                .fetch_one(&db.mysql_pool)
-                .await?;
+            map_id,
+            player_id,
+            rate.kind
+        )
+        .fetch_one(&db.mysql_pool)
+        .await?;
 
-                if count != 0 {
-                    sqlx::query!(
-                        "UPDATE player_rating SET rating = ?
+        if count != 0 {
+            sqlx::query!(
+                "UPDATE player_rating SET rating = ?
                         WHERE map_id = ? AND player_id = ? AND kind = ?",
-                        rate.rating,
-                        map_id,
-                        player_id,
-                        rate.kind
-                    )
-                    .execute(&db.mysql_pool)
-                    .await?;
-                } else {
-                    sqlx::query!(
-                        "INSERT INTO player_rating (player_id, map_id, kind, rating)
+                rate.rating,
+                map_id,
+                player_id,
+                rate.kind
+            )
+            .execute(&db.mysql_pool)
+            .await?;
+        } else {
+            sqlx::query!(
+                "INSERT INTO player_rating (player_id, map_id, kind, rating)
                         VALUES (?, ?, ?, ?)",
-                        player_id,
-                        map_id,
-                        rate.kind,
-                        rate.rating
-                    )
-                    .execute(&db.mysql_pool)
-                    .await?;
-                }
+                player_id,
+                map_id,
+                rate.kind,
+                rate.rating
+            )
+            .execute(&db.mysql_pool)
+            .await?;
+        }
 
-                let rating = sqlx::query_as(
-                    "SELECT k.kind, rating
+        let rating = sqlx::query_as(
+            "SELECT k.kind, rating
                     FROM player_rating r
                     INNER JOIN rating_kind k ON k.id = r.kind
                     WHERE map_id = ? AND player_id = ? AND r.kind = ?",
-                )
-                .bind(map_id)
-                .bind(player_id)
-                .bind(rate.kind)
-                .fetch_one(&db.mysql_pool)
-                .await?;
+        )
+        .bind(map_id)
+        .bind(player_id)
+        .bind(rate.kind)
+        .fetch_one(&db.mysql_pool)
+        .await?;
 
-                RecordsResult::Ok(rating)
-            }
-        })
-        .collect::<Vec<_>>()
-        .await;
-
-    let ratings = try_join_all(ratings).await?;
+        ratings.push(rating);
+    }
 
     json(RateResponse {
         player_login,

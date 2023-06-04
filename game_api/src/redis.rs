@@ -2,7 +2,13 @@ use crate::{Database, RecordsResult};
 use deadpool_redis::redis::AsyncCommands;
 
 pub async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
-    sqlx::query_scalar!("SELECT COUNT(*) FROM records WHERE map_id = ?", map_id)
+    sqlx::query_scalar!(
+        "SELECT COUNT(*)
+        FROM records r
+        WHERE map_id = ? AND id = (
+            SELECT MAX(id) FROM records
+            WHERE map_id = ? AND player_id = r.player_id
+        )", map_id, map_id)
         .fetch_one(&db.mysql_pool)
         .await
         .map_err(|e| e.into())
@@ -15,10 +21,10 @@ pub async fn update_leaderboard(db: &Database, key: &str, map_id: u32) -> Record
 
     if redis_count != mysql_count {
         let all_map_records: Vec<(u32, i32)> = sqlx::query_as(
-            "SELECT player_id, MIN(time) AS time FROM records
+            "SELECT player_id, MIN(time) FROM records
                 WHERE map_id = ?
                 GROUP BY player_id
-                ORDER BY time ASC",
+                ORDER BY time ASC, record_date ASC",
         )
         .bind(map_id)
         .fetch_all(&db.mysql_pool)

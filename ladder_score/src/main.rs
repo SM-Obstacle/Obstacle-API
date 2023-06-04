@@ -59,7 +59,7 @@ async fn compute_map_score(
 async fn main() -> anyhow::Result<()> {
     let mysql_pool = mysql::MySqlPoolOptions::new()
         .connect_timeout(Duration::new(10, 0))
-        .connect("mysql://root:root@localhost/obstacle_records")
+        .connect("mysql://records_api:api@localhost:3306/obs_records")
         .await?;
 
     let maps: HashMap<u32, Map> = sqlx::query_as!(Map, "SELECT * FROM maps")
@@ -155,7 +155,7 @@ async fn main() -> anyhow::Result<()> {
     let mut player_ladder = File::create("player_ladder.csv")?;
     player_ladder.write_all(b"id,login,name,score\n")?;
     for (player_id, score) in &player_scores {
-        let player = &players[&player_id];
+        let player = players.get(&player_id).unwrap();
         write!(
             &mut player_ladder,
             "{},{},{},{}\n",
@@ -166,8 +166,8 @@ async fn main() -> anyhow::Result<()> {
     let mut map_ladder = File::create("map_ladder.csv")?;
     map_ladder.write_all(b"id,name,score,average_score,min_record,max_record,average_record,median_record,records_count\n")?;
     for (map_id, score) in &map_scores {
-        let map = &maps[&map_id];
-        let stats = &map_stats[&map_id];
+        let map = maps.get(&map_id).unwrap();
+        let stats = map_stats.get(&map_id).unwrap();
         let average = score / (stats.records_count as f64);
         write!(
             &mut map_ladder,

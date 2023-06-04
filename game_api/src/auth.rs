@@ -28,6 +28,7 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::Level;
 
+use crate::utils::format_token_key;
 use crate::{http::player, models::Role, Database, RecordsError, RecordsResult};
 
 /// The client's token expires in 12 hours.
@@ -155,7 +156,7 @@ pub async fn gen_token_for(db: &Database, login: String) -> RecordsResult<String
         .collect::<Vec<u8>>();
     let token = String::from_utf8(token).expect("random token not utf8");
     let mut connection = db.redis_pool.get().await?;
-    let key = format!("token:{login}");
+    let key = format_token_key(&login);
 
     cmd("SET")
         .arg(&key)
@@ -173,7 +174,7 @@ pub async fn check_auth_for(
     required: Role,
 ) -> RecordsResult<()> {
     let mut connection = db.redis_pool.get().await?;
-    let key = format!("token:{login}");
+    let key = format_token_key(&login);
     let stored_token: Option<String> = connection.get(&key).await?;
     match stored_token {
         Some(t) if t == token => (),
@@ -201,6 +202,7 @@ pub async fn check_auth_for(
     Ok(())
 }
 
+#[derive(Clone)]
 pub struct AuthHeader {
     pub login: String,
     pub token: String,

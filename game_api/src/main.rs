@@ -68,6 +68,9 @@ async fn main() -> RecordsResult<()> {
 
     let auth_state = Data::new(AuthState::default());
 
+    #[cfg(not(feature = "localhost_test"))]
+    let localhost_origin = var("RECORDS_API_HOST")?;
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .allowed_methods(vec!["GET", "POST"])
@@ -78,7 +81,7 @@ async fn main() -> RecordsResult<()> {
         #[cfg(not(feature = "localhost_test"))]
         let cors = cors
             .allowed_origin("https://www.obstacle.ovh")
-            .allowed_origin(&var("RECORDS_API_HOST")?);
+            .allowed_origin(&localhost_origin);
 
         App::new()
             .wrap(cors)

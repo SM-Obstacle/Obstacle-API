@@ -8,19 +8,23 @@ use async_graphql_actix_web::GraphQLRequest;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
 use std::vec::Vec;
 
-use deadpool_redis::{redis::AsyncCommands, Pool as RedisPool};
+use deadpool_redis::Pool as RedisPool;
 
-use crate::graphql::map::{CpsNumberLoader, MapLoader};
+use crate::auth::{self, AuthHeader};
+use crate::graphql::map::MapLoader;
 use crate::graphql::player::PlayerLoader;
-use crate::models::{Banishment, Map, Player, RankedRecord, Record};
+use crate::models::{Banishment, Event, Map, Player, RankedRecord, Record, Role};
+use crate::utils::format_map_key;
 use crate::{redis, Database};
 
+use self::event::{EventCategoryLoader, EventLoader};
 use self::utils::{
     connections_append_query_string, connections_bind_query_parameters, connections_pages_info,
-    decode_id,
+    decode_id, get_rank_of,
 };
 
 mod ban;
+mod event;
 mod map;
 mod medal;
 mod player;
@@ -43,8 +47,19 @@ impl QueryRoot {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<Banishment>> {
+        let db = ctx.data_unchecked();
+        let Some(auth_header) = ctx.data_unchecked::<Option<AuthHeader>>() else {
+            return Err(async_graphql::Error::new("Forbidden"));
+        };
+        auth::check_auth_for(db, auth_header.clone(), Role::Admin).await?;
+        Ok(query_as("SELECT * FROM banishments")
+            .fetch_all(&db.mysql_pool)
+            .await?)
+    }
+
+    async fn events(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<Event>> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        Ok(query_as("SELECT * FROM banishments").fetch_all(db).await?)
+        Ok(query_as("SELECT * FROM event").fetch_all(db).await?)
     }
 
     async fn players(
@@ -194,13 +209,10 @@ impl QueryRoot {
         ctx: &async_graphql::Context<'_>,
         game_id: String,
     ) -> async_graphql::Result<Map> {
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let query = sqlx::query_as!(
-            Map,
-            "SELECT id, game_id, player_id, name FROM maps WHERE game_id = ? ",
-            game_id
-        );
-        Ok(query.fetch_one(mysql_pool).await?)
+        let db = ctx.data_unchecked::<Database>();
+        crate::http::player::get_map_from_game_id(db, &game_id)
+            .await?
+            .ok_or_else(|| async_graphql::Error::new("Map not found."))
     }
 
     async fn player(
@@ -219,47 +231,43 @@ impl QueryRoot {
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let redis_pool = ctx.data_unchecked::<RedisPool>();
+        let mut redis_conn = redis_pool.get().await?;
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let mut redis_conn = redis_pool.get().await.unwrap();
 
-        // Query the records with these ids
-        let query = sqlx::query_as!(
+        let records = sqlx::query_as!(
             Record,
-            "SELECT * FROM records ORDER BY record_date DESC LIMIT 100"
-        );
-
-        let mut records = query
-            .map(|record: Record| RankedRecord { rank: 0, record })
-            .fetch_all(mysql_pool)
-            .await
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-
-        for mut record in &mut records {
-            let map_game_id = sqlx::query_scalar!(
-                "SELECT game_id from maps where id = ?",
-                record.record.map_id
+            "SELECT * FROM records r
+            WHERE id = (
+                SELECT MAX(id) FROM records
+                WHERE player_id = r.player_id AND map_id = r.map_id
             )
-            .fetch_one(&db.mysql_pool)
-            .await?;
-            let key = format!("l0:{}", map_game_id);
-            let mut player_rank: Option<i64> = redis_conn
-                .zrank(&key, record.record.player_id)
-                .await
-                .unwrap();
-            if player_rank.is_none() {
-                redis::update_leaderboard(db, &key, record.record.map_id).await?;
-                player_rank = redis_conn
-                    .zrank(&key, record.record.player_id)
-                    .await
-                    .unwrap();
-            }
+            ORDER BY id DESC
+            LIMIT 100",
+        )
+        .fetch_all(mysql_pool)
+        .await?;
 
-            record.rank = player_rank.map(|r: i64| (r as u64) as i32).unwrap_or(-1) + 1;
+        let mut ranked_records = Vec::with_capacity(records.len());
+
+        for record in records {
+            let key = format_map_key(record.map_id);
+
+            let rank = match get_rank_of(&mut redis_conn, &key, record.time).await? {
+                Some(rank) => rank,
+                None => {
+                    redis::update_leaderboard(&db, &key, record.map_id).await?;
+                    get_rank_of(&mut redis_conn, &key, record.time)
+                        .await?
+                        .expect(&format!(
+                            "redis leaderboard for (`{key}`) should be updated at this point"
+                        ))
+                }
+            };
+
+            ranked_records.push(RankedRecord { rank, record });
         }
 
-        Ok(records)
+        Ok(ranked_records)
     }
 }
 
@@ -285,7 +293,11 @@ fn create_schema(db: Database) -> Schema {
         tokio::spawn,
     ))
     .data(DataLoader::new(
-        CpsNumberLoader(db.mysql_pool.clone()),
+        EventLoader(db.mysql_pool.clone()),
+        tokio::spawn,
+    ))
+    .data(DataLoader::new(
+        EventCategoryLoader(db.mysql_pool.clone()),
         tokio::spawn,
     ))
     .data(db.mysql_pool.clone())
@@ -320,8 +332,12 @@ fn create_schema(db: Database) -> Schema {
     schema
 }
 
-async fn index_graphql(schema: Data<Schema>, request: GraphQLRequest) -> impl Responder {
-    web::Json(schema.execute(request.into_inner()).await)
+async fn index_graphql(
+    auth: Option<AuthHeader>,
+    schema: Data<Schema>,
+    request: GraphQLRequest,
+) -> impl Responder {
+    web::Json(schema.execute(request.into_inner().data(auth)).await)
 }
 
 async fn index_playground() -> impl Responder {

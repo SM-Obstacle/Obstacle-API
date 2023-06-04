@@ -30,6 +30,7 @@ pub struct Map {
     pub game_id: String,
     pub player_id: u32,
     pub name: String,
+    pub cps_number: Option<u32>,
 }
 
 #[derive(Serialize, FromRow, Clone, Debug)]
@@ -43,10 +44,9 @@ pub struct Record {
     pub flags: u32,
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug)]
 pub struct RankedRecord {
     pub rank: i32,
-    #[sqlx(flatten)]
     pub record: Record,
 }
 
@@ -235,8 +235,9 @@ pub struct EventCategories {
     pub category_id: u32,
 }
 
-#[derive(Serialize, FromRow, Clone, Debug)]
+#[derive(Serialize, FromRow, Clone, Debug, SimpleObject)]
 pub struct EventCategory {
+    #[graphql(skip)]
     pub id: u32,
     pub handle: String,
     pub name: String,

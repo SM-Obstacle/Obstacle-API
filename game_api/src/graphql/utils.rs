@@ -1,5 +1,11 @@
 use async_graphql::ID;
+use deadpool_redis::{
+    redis::{cmd, AsyncCommands},
+    Connection,
+};
 use sqlx::mysql;
+
+use crate::RecordsResult;
 
 pub fn decode_id(id: Option<&ID>) -> Option<u32> {
     let parts: Vec<&str> = id?.split(':').collect();
@@ -126,4 +132,29 @@ pub fn connections_pages_info(
     }
 
     (has_previous_page, has_next_page)
+}
+
+/// Returns the competition rank corresponding to the time in a map leaderboard from its key.
+pub async fn get_rank_of(
+    redis_conn: &mut Connection,
+    key: &str,
+    time: i32,
+) -> RecordsResult<Option<i32>> {
+    let player_id: Vec<u32> = cmd("ZRANGEBYSCORE")
+        .arg(key)
+        .arg(time)
+        .arg(time)
+        .arg("LIMIT")
+        .arg(0)
+        .arg(1)
+        .query_async(redis_conn)
+        .await?;
+
+    match player_id.get(0) {
+        Some(id) => {
+            let rank: i32 = redis_conn.zrank(key, id).await?;
+            Ok(Some(rank + 1))
+        }
+        None => Ok(None),
+    }
 }

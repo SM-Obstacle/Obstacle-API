@@ -4,7 +4,7 @@ use actix_web::{
 };
 use chrono::Utc;
 use deadpool_redis::redis::AsyncCommands;
-use reqwest::{StatusCode, Client};
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use tokio::time::timeout;
@@ -14,7 +14,7 @@ use crate::{
     auth::{self, AuthHeader, AuthState, TIMEOUT},
     models::{Banishment, Map, Player, Record, Role},
     redis,
-    utils::json,
+    utils::{format_map_key, json},
     Database, RecordsError, RecordsResult,
 };
 
@@ -23,7 +23,7 @@ use super::admin;
 pub fn player_scope() -> Scope {
     web::scope("/player")
         .route("/update", web::post().to(update))
-        .route("/finished", web::post().to(player_finished))
+        .route("/finished", web::post().to(finished))
         .route("/get_token", web::post().to(get_token))
         .service(
             web::resource("/give_token")
@@ -140,7 +140,7 @@ pub struct HasFinishedResponse {
     pub new: i32,
 }
 
-pub async fn player_finished(
+pub async fn finished(
     auth: AuthHeader,
     db: Data<Database>,
     body: Json<HasFinishedBody>,
@@ -149,7 +149,7 @@ pub async fn player_finished(
 
     let body = body.into_inner();
 
-    let finished = inner_player_finished(db, body).await?;
+    let finished = player_finished(db, body).await?;
     json(finished)
 }
 
@@ -179,7 +179,7 @@ pub async fn check_banned(
 }
 
 pub async fn get_map_from_game_id(
-    db: &actix_web::web::Data<Database>,
+    db: &Database,
     map_game_id: &str,
 ) -> Result<Option<Map>, RecordsError> {
     let r = sqlx::query_as("SELECT * FROM maps WHERE game_id = ?")
@@ -189,7 +189,7 @@ pub async fn get_map_from_game_id(
     Ok(r)
 }
 
-async fn inner_player_finished(
+async fn player_finished(
     db: Data<Database>,
     body: HasFinishedBody,
 ) -> RecordsResult<HasFinishedResponse> {
@@ -214,10 +214,18 @@ async fn inner_player_finished(
 
     async fn insert_record(
         db: &Database,
+        redis_conn: &mut deadpool_redis::Connection,
         player_id: u32,
         map_id: u32,
         body: &HasFinishedBody,
     ) -> RecordsResult<()> {
+        let key = format_map_key(map_id);
+
+        let added: Option<i64> = redis_conn.zadd(&key, player_id, body.time).await.ok();
+        if added.is_none() {
+            let _count = redis::update_leaderboard(&db, &key, map_id).await?;
+        }
+
         let now = Utc::now().naive_utc();
 
         let record_id: u32 = sqlx::query_scalar(
@@ -256,19 +264,11 @@ async fn inner_player_finished(
 
     let (old, new, has_improved) = if let Some(Record { time: old, .. }) = old_record {
         if body.time < old {
-            // Update redis record
-            let key = format!("l0:{}", body.map_uid);
-            let _added: i64 = redis_conn
-                .zadd(&key, player_id, body.time)
-                .await
-                .unwrap_or(0);
-            let _count = redis::update_leaderboard(&db, &key, map_id).await?;
-
-            insert_record(&db, player_id, map_id, &body).await?;
+            insert_record(&db, &mut redis_conn, player_id, map_id, &body).await?;
         }
         (old, body.time, body.time < old)
     } else {
-        insert_record(&db, player_id, map_id, &body).await?;
+        insert_record(&db, &mut redis_conn, player_id, map_id, &body).await?;
         (body.time, body.time, true)
     };
 

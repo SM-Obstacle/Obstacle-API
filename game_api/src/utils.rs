@@ -46,3 +46,11 @@ pub fn any_repeated<T: PartialEq>(slice: &[T]) -> bool {
     }
     false
 }
+
+pub fn format_map_key(map_id: u32) -> String {
+    format!("mlb:{map_id}")
+}
+
+pub fn format_token_key(login: &str) -> String {
+    format!("pt:{login}")
+}

@@ -2,7 +2,6 @@ use actix_web::{
     web::{self, Data, Path},
     Responder, Scope,
 };
-use futures::{future::try_join_all, stream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -108,7 +107,7 @@ pub async fn get_maps_by_category_id(
 }
 
 #[derive(Serialize)]
-struct EventResponse {
+pub struct EventResponse {
     handle: String,
     last_edition_id: Option<u32>,
 }
@@ -223,26 +222,19 @@ async fn edition(
 
         Content::Maps { maps }
     } else {
-        let categories = stream::iter(categories)
-            .map(|m| {
-                let db = db.clone();
-                let client = client.clone();
-                async move {
-                    let maps = get_maps_by_category_id(&db, event_id, edition.id, m.id).await?;
-                    RecordsResult::Ok(Category {
-                        handle: m.handle,
-                        name: m.name,
-                        banner_img_url: m.banner_img_url,
-                        maps: convert_maps(&db, &client, maps).await?,
-                    })
-                }
-            })
-            .collect::<Vec<_>>()
-            .await;
+        let mut cat = Vec::with_capacity(categories.len());
 
-        let categories = try_join_all(categories).await?;
+        for m in categories {
+            let maps = get_maps_by_category_id(&db, event_id, edition.id, m.id).await?;
+            cat.push(Category {
+                handle: m.handle,
+                name: m.name,
+                banner_img_url: m.banner_img_url,
+                maps: convert_maps(&db, &client, maps).await?,
+            });
+        }
 
-        Content::Categories { categories }
+        Content::Categories { categories: cat }
     };
 
     json(EventHandleEditionResponse {
@@ -291,43 +283,36 @@ async fn convert_maps(
         mx_maps_ids.extend(chunk_ids);
     }
 
-    let maps = stream::iter(maps)
-        .zip(stream::iter(mx_maps_ids))
-        .map(|(m, mx_id)| {
-            let db = db.clone();
-            let client = client.clone();
+    let mut out_maps = Vec::with_capacity(maps.len());
 
-            async move {
-                let main_author = sqlx::query_as("SELECT * FROM players WHERE id = ?")
-                    .bind(m.player_id)
-                    .fetch_one(&db.mysql_pool)
-                    .await?;
+    for (m, mx_id) in maps.into_iter().zip(mx_maps_ids) {
+        let main_author = sqlx::query_as("SELECT * FROM players WHERE id = ?")
+            .bind(m.player_id)
+            .fetch_one(&db.mysql_pool)
+            .await?;
 
-                let other_authors = client
-                    .get(format!(
-                        "https://sm.mania.exchange/api/maps/get_authors/{mx_id}"
-                    ))
-                    .header("User-Agent", "obstacle (ahmadbky@5382)")
-                    .send()
-                    .await?
-                    .json::<Vec<MxAuthor>>()
-                    .await?
-                    .into_iter()
-                    .filter(|m| !m.uploader)
-                    .map(|m| m.username)
-                    .collect();
+        let other_authors = client
+            .get(format!(
+                "https://sm.mania.exchange/api/maps/get_authors/{mx_id}"
+            ))
+            .header("User-Agent", "obstacle (ahmadbky@5382)")
+            .send()
+            .await?
+            .json::<Vec<MxAuthor>>()
+            .await?
+            .into_iter()
+            .filter(|m| !m.uploader)
+            .map(|m| m.username)
+            .collect();
 
-                RecordsResult::Ok(Map {
-                    main_author,
-                    other_authors,
-                    name: m.name,
-                    map_uid: m.game_id,
-                    mx_id,
-                })
-            }
-        })
-        .collect::<Vec<_>>()
-        .await;
+        out_maps.push(Map {
+            main_author,
+            other_authors,
+            name: m.name,
+            map_uid: m.game_id,
+            mx_id,
+        });
+    }
 
-    Ok(try_join_all(maps).await?)
+    Ok(out_maps)
 }

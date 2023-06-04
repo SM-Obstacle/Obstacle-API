@@ -12,13 +12,11 @@ async-graphql = { version = "5.0.5", features = ["dataloader", "apollo_tracing"]
 sqlx = { version = "0.6.2", features = [ "runtime-tokio-native-tls", "mysql", "macros", "chrono" ] }
 chrono = { version = "0.4", features = ["serde"] }
 deadpool = { version = "0.9.5", features = ["managed", "rt_tokio_1"] }
-deadpool-redis = { version = "0.11.1", features = ["rt_tokio_1"] }
+deadpool-redis = { version = "0.12.0", features = ["rt_tokio_1"] }
 serde = "1.0.126"
 serde_json = "1.0.96"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-# using old version because v0.6.0 has some issues with sequence serializing.
-serde-xml-rs = "0.4.1"
 actix-web = "4.3.0"
 actix-cors = "0.6.4"
 async-graphql-actix-web = "5.0.5"

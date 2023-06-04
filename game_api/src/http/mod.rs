@@ -2,6 +2,7 @@ use actix_web::web::{JsonConfig, Query};
 use actix_web::{web, Scope};
 use reqwest::Client;
 
+use crate::utils::format_map_key;
 use crate::{
     models::{Map, Player},
     redis,
@@ -123,7 +124,7 @@ async fn overview(db: Data<Database>, body: Query<OverviewQuery>) -> RecordsResu
     let mut redis_conn = db.redis_pool.get().await.unwrap();
 
     // Update redis if needed
-    let key = format!("l0:{}", body.map_uid);
+    let key = format_map_key(map_id);
     let count = redis::update_leaderboard(&db, &key, map_id).await? as u32;
 
     let mut ranked_records: Vec<RankedRecord> = vec![];

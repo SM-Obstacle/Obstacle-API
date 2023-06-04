@@ -23,12 +23,10 @@ pub use http::api_route;
 #[derive(Error, Debug)]
 pub enum RecordsError {
     #[error(transparent)]
-    XmlError(#[from] serde_xml_rs::Error),
-    #[error(transparent)]
     IOError(#[from] io::Error),
     #[error(transparent)]
     MySql(#[from] sqlx::Error),
-    #[error("unknown error")]
+    #[error("unknown error: {0}")]
     Unknown(String),
     #[error("banned player")]
     BannedPlayer(Banishment),
@@ -73,9 +71,6 @@ pub enum RecordsError {
 impl actix_web::ResponseError for RecordsError {
     fn error_response(&self) -> actix_web::HttpResponse {
         match self {
-            Self::XmlError(err) => {
-                actix_web::HttpResponse::InternalServerError().body(err.to_string())
-            }
             Self::IOError(err) => {
                 actix_web::HttpResponse::InternalServerError().body(err.to_string())
             }
