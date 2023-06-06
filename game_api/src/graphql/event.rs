@@ -156,7 +156,7 @@ impl EventEdition {
         let q = sqlx::query_as(
             "SELECT * FROM event_category
             WHERE id IN (
-                SELECT category_id FROM event_categories
+                SELECT category_id FROM event_edition_categories
                 WHERE event_id = ? AND edition_id = ?
             )",
         )
