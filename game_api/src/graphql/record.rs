@@ -33,12 +33,11 @@ impl RankedRecord {
     ) -> async_graphql::Result<Vec<CheckpointTimes>> {
         let db = &ctx.data_unchecked::<Database>().mysql_pool;
 
-        Ok(sqlx::query_as!(
-            CheckpointTimes,
+        Ok(sqlx::query_as(
             "SELECT * FROM checkpoint_times WHERE record_id = ? AND map_id = ? ORDER BY cp_num",
-            self.record.id,
-            self.record.map_id,
         )
+        .bind(self.record.id)
+        .bind(self.record.map_id)
         .fetch_all(db)
         .await?)
     }

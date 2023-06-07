@@ -37,14 +37,12 @@ async fn compute_map_score(
     map_id: u32,
 ) -> f64 {
     let stats = &map_stats[&map_id];
-    let map_records = sqlx::query_as!(
-        Record,
-        "SELECT * from records WHERE map_id = ? ORDER BY time",
-        map_id
-    )
-    .fetch_all(mysql_pool)
-    .await
-    .unwrap();
+    let map_records =
+        sqlx::query_as::<_, Record>("SELECT * from records WHERE map_id = ? ORDER BY time")
+            .bind(map_id)
+            .fetch_all(mysql_pool)
+            .await
+            .unwrap();
     let to_sec = |time: i32| (time as f64) / 1000.0;
 
     let r = 1.0;
@@ -62,14 +60,14 @@ async fn main() -> anyhow::Result<()> {
         .connect("mysql://records_api:api@localhost:3306/obs_records")
         .await?;
 
-    let maps: HashMap<u32, Map> = sqlx::query_as!(Map, "SELECT * FROM maps")
+    let maps: HashMap<u32, Map> = sqlx::query_as::<_, Map>("SELECT * FROM maps")
         .map(|map| (map.id, map))
         .fetch_all(&mysql_pool)
         .await?
         .into_iter()
         .collect();
 
-    let players: HashMap<u32, Player> = sqlx::query_as!(Player, "SELECT * FROM players")
+    let players: HashMap<u32, Player> = sqlx::query_as::<_, Player>("SELECT * FROM players")
         .map(|player| (player.id, player))
         .fetch_all(&mysql_pool)
         .await?
@@ -83,13 +81,11 @@ async fn main() -> anyhow::Result<()> {
     let to_sec = |time: i32| (time as f64) / 1000.0;
 
     for (_, map) in &maps {
-        let map_records = sqlx::query_as!(
-            Record,
-            "SELECT * from records WHERE map_id = ? ORDER BY time",
-            map.id
-        )
-        .fetch_all(&mysql_pool)
-        .await?;
+        let map_records =
+            sqlx::query_as::<_, Record>("SELECT * from records WHERE map_id = ? ORDER BY time")
+                .bind(map.id)
+                .fetch_all(&mysql_pool)
+                .await?;
 
         // Skip maps without records
         if map_records.is_empty() {

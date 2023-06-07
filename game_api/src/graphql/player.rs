@@ -115,8 +115,7 @@ impl Player {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
 
         // Query the records with these ids
-        let records = sqlx::query_as!(
-            Record,
+        let records = sqlx::query_as::<_, Record>(
             "SELECT * FROM records r
             WHERE player_id = ? AND id = (
                 SELECT MAX(id) FROM records
@@ -124,9 +123,9 @@ impl Player {
             )
             ORDER BY id DESC
             LIMIT 100",
-            self.id,
-            self.id
         )
+        .bind(self.id)
+        .bind(self.id)
         .fetch_all(mysql_pool)
         .await?;
 

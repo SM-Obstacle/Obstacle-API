@@ -49,12 +49,10 @@ pub async fn del_note(
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Admin).await?;
     let body = body.into_inner();
-    sqlx::query!(
-        "UPDATE players SET admins_note = NULL WHERE login = ?",
-        body.req.player_login
-    )
-    .execute(&db.mysql_pool)
-    .await?;
+    sqlx::query("UPDATE players SET admins_note = NULL WHERE login = ?")
+        .bind(&body.req.player_login)
+        .execute(&db.mysql_pool)
+        .await?;
 
     json(DelNoteResponse { req: body.req })
 }
@@ -80,15 +78,14 @@ pub async fn set_role(
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Admin).await?;
     let body = body.into_inner();
-    sqlx::query!(
-        "UPDATE players SET role = ? WHERE login = ?",
-        body.role,
-        body.req.player_login
-    )
-    .execute(&db.mysql_pool)
-    .await?;
+    sqlx::query("UPDATE players SET role = ? WHERE login = ?")
+        .bind(body.role)
+        .bind(&body.req.player_login)
+        .execute(&db.mysql_pool)
+        .await?;
 
-    let role = sqlx::query_scalar!("SELECT role_name FROM role WHERE id = ?", body.role)
+    let role = sqlx::query_scalar("SELECT role_name FROM role WHERE id = ?")
+        .bind(body.role)
         .fetch_one(&db.mysql_pool)
         .await?;
 
@@ -213,20 +210,19 @@ pub async fn ban(
             .await?
             .is_some();
 
-    let ban_id: u32 = sqlx::query_scalar!(
+    let ban_id: u32 = sqlx::query_scalar(
         "INSERT INTO banishments
                 (date_ban,  duration,   was_reprieved,  reason, player_id,  banished_by)
         VALUES  (SYSDATE(), ?,          ?,              ?,      ?,          ?)
         RETURNING id",
-        body.duration,
-        was_reprieved,
-        body.reason,
-        player_id,
-        admin_id
     )
+    .bind(body.duration)
+    .bind(was_reprieved)
+    .bind(body.reason)
+    .bind(player_id)
+    .bind(admin_id)
     .fetch_one(&db.mysql_pool)
-    .await?
-    .try_get(0)?;
+    .await?;
 
     let ban = sqlx::query_as(
         r#"SELECT id, date_ban, duration, reason, (SELECT login FROM players WHERE id = banished_by) as "banished_by", was_reprieved
@@ -282,12 +278,11 @@ pub async fn unban(
         return Err(RecordsError::PlayerNotBanned(body.req.player_login));
     };
 
-    if let Some(duration) = sqlx::query_scalar!(
-        "SELECT SYSDATE() - date_ban FROM banishments WHERE id = ?",
-        ban.inner.id
-    )
-    .fetch_optional(&db.mysql_pool)
-    .await?
+    if let Some(duration) =
+        sqlx::query_scalar::<_, i64>("SELECT SYSDATE() - date_ban FROM banishments WHERE id = ?")
+            .bind(ban.inner.id)
+            .fetch_optional(&db.mysql_pool)
+            .await?
     {
         println!("duration: {duration}s");
     }
@@ -323,8 +318,10 @@ pub async fn player_note(
     auth::check_auth_for(&db, auth, Role::Admin).await?;
     let body = body.into_inner();
 
-    let Some(admins_note) = sqlx::query_scalar!(
-        "SELECT admins_note FROM players WHERE login = ?", body.req.player_login)
+    let Some(admins_note) = sqlx::query_scalar(
+        "SELECT admins_note FROM players WHERE login = ?"
+    )
+    .bind(&body.req.player_login)
     .fetch_optional(&db.mysql_pool).await? else {
         return Err(RecordsError::PlayerNotFound(body.req.player_login));
     };

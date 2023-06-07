@@ -52,13 +52,11 @@ pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult
 
     if let Some(Map { id, cps_number, .. }) = res {
         if cps_number.is_none() {
-            sqlx::query!(
-                "UPDATE maps SET cps_number = ? WHERE id = ?",
-                body.cps_number,
-                id
-            )
-            .execute(&db.mysql_pool)
-            .await?;
+            sqlx::query("UPDATE maps SET cps_number = ? WHERE id = ?")
+                .bind(body.cps_number)
+                .bind(id)
+                .execute(&db.mysql_pool)
+                .await?;
         }
 
         return Ok(id);
@@ -131,11 +129,11 @@ pub async fn player_rating(
         return Err(RecordsError::MapNotFound(body.map_id));
     };
 
-    let rating = match sqlx::query_scalar!(
+    let rating = match sqlx::query_scalar(
         "SELECT rating_date FROM rating WHERE player_id = ? AND map_id = ?",
-        player_id,
-        map_id
     )
+    .bind(player_id)
+    .bind(map_id)
     .fetch_optional(&db.mysql_pool)
     .await?
     {
@@ -214,7 +212,8 @@ pub async fn ratings(
     let (role, author_login) = if map.player_id == player.id {
         (Role::Player, body.login.clone())
     } else {
-        let login = sqlx::query_scalar!("SELECT login FROM players WHERE id = ?", map.player_id)
+        let login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
+            .bind(map.player_id)
             .fetch_one(&db.mysql_pool)
             .await?;
         (Role::Admin, login)
@@ -222,40 +221,37 @@ pub async fn ratings(
 
     auth::check_auth_for(&db, auth, role).await?;
 
-    let players_ratings = sqlx::query_as!(
-        models::Rating,
-        "SELECT * FROM rating WHERE map_id = ?",
-        map.id
-    )
-    .fetch(&db.mysql_pool)
-    .map(|rating| async {
-        let rating = rating?;
+    let players_ratings =
+        sqlx::query_as::<_, models::Rating>("SELECT * FROM rating WHERE map_id = ?")
+            .bind(map.id)
+            .fetch(&db.mysql_pool)
+            .map(|rating| async {
+                let rating = rating?;
 
-        let player_login =
-            sqlx::query_scalar!("SELECT login FROM players WHERE id = ?", rating.player_id)
-                .fetch_one(&db.mysql_pool)
-                .await?;
+                let player_login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
+                    .bind(rating.player_id)
+                    .fetch_one(&db.mysql_pool)
+                    .await?;
 
-        let ratings = sqlx::query_as!(
-            Rating,
-            "SELECT k.kind, rating
+                let ratings = sqlx::query_as::<_, Rating>(
+                    "SELECT k.kind, rating
             FROM player_rating r
             INNER JOIN rating_kind k ON k.id = r.kind
             WHERE player_id = ? AND map_id = ?",
-            rating.player_id,
-            rating.map_id,
-        )
-        .fetch_all(&db.mysql_pool)
-        .await?;
+                )
+                .bind(rating.player_id)
+                .bind(rating.map_id)
+                .fetch_all(&db.mysql_pool)
+                .await?;
 
-        RecordsResult::Ok(PlayerGroupedRatings {
-            player_login,
-            rating_date: rating.rating_date,
-            ratings,
-        })
-    })
-    .collect::<Vec<_>>()
-    .await;
+                RecordsResult::Ok(PlayerGroupedRatings {
+                    player_login,
+                    rating_date: rating.rating_date,
+                    ratings,
+                })
+            })
+            .collect::<Vec<_>>()
+            .await;
 
     let players_ratings = try_join_all(players_ratings).await?;
 
@@ -365,7 +361,7 @@ pub async fn rate(
         .fetch_one(&db.mysql_pool)
         .await?;
 
-    let rate_count = sqlx::query_scalar!("SELECT COUNT(*) FROM rating_kind")
+    let rate_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rating_kind")
         .fetch_one(&db.mysql_pool)
         .await?;
     if body.ratings.len()
@@ -378,8 +374,10 @@ pub async fn rate(
     }
 
     if body.ratings.is_empty() {
-        let Some(rating_date) = sqlx::query_scalar!(
-            "SELECT rating_date FROM rating WHERE player_id = ? AND map_id = ?", player_id, map_id)
+        let Some(rating_date) = sqlx::query_scalar(
+            "SELECT rating_date FROM rating WHERE player_id = ? AND map_id = ?")
+        .bind(player_id)
+        .bind(map_id)
         .fetch_optional(&db.mysql_pool)
         .await? else {
             return Err(RecordsError::NoRatingFound(body.login, body.map_id));
@@ -395,30 +393,27 @@ pub async fn rate(
     }
 
     let rating_date = {
-        let count = sqlx::query_scalar!(
-            "SELECT COUNT(*) FROM rating WHERE map_id = ? AND player_id = ?",
-            map_id,
-            player_id
-        )
-        .fetch_one(&db.mysql_pool)
-        .await?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM rating WHERE map_id = ? AND player_id = ?")
+                .bind(map_id)
+                .bind(player_id)
+                .fetch_one(&db.mysql_pool)
+                .await?;
 
         if count != 0 {
-            sqlx::query!(
+            sqlx::query(
                 "UPDATE rating SET rating_date = SYSDATE() WHERE map_id = ? AND player_id = ?",
-                map_id,
-                player_id
             )
+            .bind(map_id)
+            .bind(player_id)
             .execute(&db.mysql_pool)
             .await?;
 
-            sqlx::query_scalar!(
-                "SELECT rating_date FROM rating WHERE map_id = ? AND player_id = ?",
-                map_id,
-                player_id
-            )
-            .fetch_one(&db.mysql_pool)
-            .await?
+            sqlx::query_scalar("SELECT rating_date FROM rating WHERE map_id = ? AND player_id = ?")
+                .bind(map_id)
+                .bind(player_id)
+                .fetch_one(&db.mysql_pool)
+                .await?
         } else {
             sqlx::query_scalar(
                 "INSERT INTO rating (player_id, map_id, rating_date)
@@ -434,36 +429,36 @@ pub async fn rate(
     let mut ratings = Vec::with_capacity(body.ratings.len());
 
     for rate in body.ratings {
-        let count = sqlx::query_scalar!(
+        let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM player_rating
                     WHERE map_id = ? AND player_id = ? AND kind = ?",
-            map_id,
-            player_id,
-            rate.kind
         )
+        .bind(map_id)
+        .bind(player_id)
+        .bind(rate.kind)
         .fetch_one(&db.mysql_pool)
         .await?;
 
         if count != 0 {
-            sqlx::query!(
+            sqlx::query(
                 "UPDATE player_rating SET rating = ?
                         WHERE map_id = ? AND player_id = ? AND kind = ?",
-                rate.rating,
-                map_id,
-                player_id,
-                rate.kind
             )
+            .bind(rate.rating)
+            .bind(map_id)
+            .bind(player_id)
+            .bind(rate.kind)
             .execute(&db.mysql_pool)
             .await?;
         } else {
-            sqlx::query!(
+            sqlx::query(
                 "INSERT INTO player_rating (player_id, map_id, kind, rating)
                         VALUES (?, ?, ?, ?)",
-                player_id,
-                map_id,
-                rate.kind,
-                rate.rating
             )
+            .bind(player_id)
+            .bind(map_id)
+            .bind(rate.kind)
+            .bind(rate.rating)
             .execute(&db.mysql_pool)
             .await?;
         }
@@ -525,11 +520,13 @@ pub async fn reset_ratings(
     };
     let map_id: u32 = map_id;
 
-    sqlx::query!("DELETE FROM player_rating WHERE map_id = ?", map_id)
+    sqlx::query("DELETE FROM player_rating WHERE map_id = ?")
+        .bind(map_id)
         .execute(&db.mysql_pool)
         .await?;
 
-    sqlx::query!("DELETE FROM rating WHERE map_id = ?", map_id)
+    sqlx::query("DELETE FROM rating WHERE map_id = ?")
+        .bind(map_id)
         .execute(&db.mysql_pool)
         .await?;
 

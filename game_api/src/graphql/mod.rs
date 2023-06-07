@@ -221,7 +221,8 @@ impl QueryRoot {
         login: String,
     ) -> async_graphql::Result<Player> {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let query = sqlx::query_as!(Player, "SELECT * FROM players WHERE login = ? ", login);
+        let query =
+            sqlx::query_as::<_, Player>("SELECT * FROM players WHERE login = ? ").bind(login);
         Ok(query.fetch_one(mysql_pool).await?)
     }
 
@@ -234,8 +235,7 @@ impl QueryRoot {
         let mut redis_conn = redis_pool.get().await?;
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
 
-        let records = sqlx::query_as!(
-            Record,
+        let records = sqlx::query_as::<_, Record>(
             "SELECT * FROM records r
             WHERE id = (
                 SELECT MAX(id) FROM records

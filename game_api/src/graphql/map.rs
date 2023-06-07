@@ -64,7 +64,8 @@ impl Map {
 
         auth::check_auth_for(&db, auth_header.clone(), role).await?;
 
-        let player_id = sqlx::query_scalar!("SELECT id FROM players WHERE login = ?", login)
+        let player_id: u32 = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
+            .bind(login)
             .fetch_one(&db.mysql_pool)
             .await?;
 

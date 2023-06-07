@@ -106,7 +106,7 @@ pub async fn get_maps_by_category_id(
     Ok(r)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, FromRow)]
 pub struct EventResponse {
     handle: String,
     last_edition_id: Option<u32>,
@@ -152,8 +152,7 @@ struct EventHandleEditionResponse {
 }
 
 async fn event_list(db: Data<Database>) -> RecordsResult<impl Responder> {
-    let res = sqlx::query_as!(
-        EventResponse,
+    let res = sqlx::query_as::<_, EventResponse>(
         "SELECT ev.handle, MAX(ed.id) AS last_edition_id
         FROM event ev
         LEFT JOIN event_edition ed ON ed.event_id = ev.id

@@ -45,7 +45,8 @@ pub async fn get_or_insert(
     login: &str,
     body: UpdatePlayerBody,
 ) -> RecordsResult<u32> {
-    if let Some(id) = sqlx::query_scalar!("SELECT id FROM players WHERE login = ?", login)
+    if let Some(id) = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
+        .bind(login)
         .fetch_optional(&db.mysql_pool)
         .await?
     {
@@ -91,18 +92,17 @@ pub async fn update_or_insert(
     login: &str,
     body: UpdatePlayerBody,
 ) -> RecordsResult<u32> {
-    if let Some(id) = sqlx::query_scalar!("SELECT id FROM players WHERE login = ?", login)
+    if let Some(id) = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
+        .bind(login)
         .fetch_optional(&db.mysql_pool)
         .await?
     {
-        sqlx::query!(
-            "UPDATE players SET name = ?, country = ? WHERE id = ?",
-            body.nickname,
-            body.country,
-            id
-        )
-        .execute(&db.mysql_pool)
-        .await?;
+        sqlx::query("UPDATE players SET name = ?, country = ? WHERE id = ?")
+            .bind(body.nickname)
+            .bind(body.country)
+            .bind(id)
+            .execute(&db.mysql_pool)
+            .await?;
 
         return Ok(id);
     }
@@ -202,13 +202,12 @@ async fn player_finished(
 
     let mut redis_conn = db.redis_pool.get().await.unwrap();
 
-    let old_record = sqlx::query_as!(
-        Record,
+    let old_record = sqlx::query_as::<_, Record>(
         "SELECT * FROM records WHERE map_id = ? AND player_id = ?
             ORDER BY record_date DESC LIMIT 1",
-        map_id,
-        player_id
     )
+    .bind(map_id)
+    .bind(player_id)
     .fetch_optional(&db.mysql_pool)
     .await?;
 
