@@ -3,7 +3,7 @@ use deadpool::managed::PoolError;
 use deadpool_redis::redis::RedisError;
 pub use deadpool_redis::Pool as RedisPool;
 pub use sqlx::MySqlPool;
-use std::{env::VarError, io};
+use std::io;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 
@@ -141,15 +141,6 @@ impl<T> From<SendError<T>> for RecordsError {
 impl From<RedisError> for RecordsError {
     fn from(err: RedisError) -> Self {
         Self::Unknown(err.to_string())
-    }
-}
-
-impl From<VarError> for RecordsError {
-    fn from(value: VarError) -> Self {
-        match value {
-            VarError::NotPresent => Self::MissingDBUrl,
-            VarError::NotUnicode(_) => Self::Unknown("DATABASE_URL is not unicode".to_owned()),
-        }
     }
 }
 

@@ -23,7 +23,8 @@ async fn main() -> RecordsResult<()> {
     #[cfg(feature = "localhost_test")]
     let port = 3001u16;
     #[cfg(not(feature = "localhost_test"))]
-    let port = var("RECORDS_API_PORT")?
+    let port = var("RECORDS_API_PORT")
+        .expect("RECORDS_API_PORT env var is not set")
         .parse::<u16>()
         .expect("RECORDS_API_PORT env var should be numeric");
 
@@ -34,7 +35,9 @@ async fn main() -> RecordsResult<()> {
         .await?;
     #[cfg(not(feature = "localhost_test"))]
     let mysql_pool = mysql_pool
-        .connect(&read_to_string(var("DATABASE_URL")?)?)
+        .connect(&read_to_string(
+            var("DATABASE_URL").expect("DATABASE_URL env var is not set"),
+        )?)
         .await?;
 
     let redis_pool = {
@@ -42,7 +45,9 @@ async fn main() -> RecordsResult<()> {
             #[cfg(feature = "localhost_test")]
             url: Some("redis://127.0.0.1:6379/".to_string()),
             #[cfg(not(feature = "localhost_test"))]
-            url: Some(read_to_string(var("REDIS_URL")?)?),
+            url: Some(read_to_string(
+                var("REDIS_URL").expect("REDIS_URL env var is not set"),
+            )?),
             connection: None,
             pool: None,
         };
@@ -69,7 +74,7 @@ async fn main() -> RecordsResult<()> {
     let auth_state = Data::new(AuthState::default());
 
     #[cfg(not(feature = "localhost_test"))]
-    let localhost_origin = var("RECORDS_API_HOST")?;
+    let localhost_origin = var("RECORDS_API_HOST").expect("RECORDS_API_HOST env var is not set");
 
     HttpServer::new(move || {
         let cors = Cors::default()
