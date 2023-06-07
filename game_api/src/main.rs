@@ -6,8 +6,9 @@ use actix_web::{
 use deadpool::Runtime;
 use game_api::{api_route, graphql_route, AuthState, Database, RecordsResult};
 use sqlx::mysql;
-#[cfg(not(feature = "localhost_test"))]
 use std::env::var;
+#[cfg(not(feature = "localhost_test"))]
+use std::fs::read_to_string;
 use std::time::Duration;
 use tracing_actix_web::TracingLogger;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -16,18 +17,15 @@ use tracing_subscriber::fmt::format::FmtSpan;
 async fn main() -> RecordsResult<()> {
     // Filter traces based on the RUST_LOG env var, or, if it's not set,
     // default to show the output of the example.
-    let filter = std::env::var("RECORDS_API_LOG")
+    let filter = var("RECORDS_API_LOG")
         .unwrap_or_else(|_| "tracing=info,warp=info,game_api=info".to_owned());
 
     #[cfg(feature = "localhost_test")]
-    let mut port = 3001u16;
+    let port = 3001u16;
     #[cfg(not(feature = "localhost_test"))]
-    let mut port = 3000u16;
-    if let Ok(s) = std::env::var("RECORDS_API_PORT") {
-        if let Ok(env_port) = s.parse::<u16>() {
-            port = env_port;
-        }
-    };
+    let port = var("RECORDS_API_PORT")?
+        .parse::<u16>()
+        .expect("RECORDS_API_PORT env var should be numeric");
 
     let mysql_pool = mysql::MySqlPoolOptions::new().acquire_timeout(Duration::new(10, 0));
     #[cfg(feature = "localhost_test")]
@@ -35,14 +33,16 @@ async fn main() -> RecordsResult<()> {
         .connect("mysql://records_api:api@localhost/obs_records")
         .await?;
     #[cfg(not(feature = "localhost_test"))]
-    let mysql_pool = mysql_pool.connect(&var("DATABASE_URL")?).await?;
+    let mysql_pool = mysql_pool
+        .connect(&read_to_string(var("DATABASE_URL")?)?)
+        .await?;
 
     let redis_pool = {
         let cfg = deadpool_redis::Config {
             #[cfg(feature = "localhost_test")]
             url: Some("redis://127.0.0.1:6379/".to_string()),
             #[cfg(not(feature = "localhost_test"))]
-            url: Some(var("REDIS_URL")?),
+            url: Some(read_to_string(var("REDIS_URL")?)?),
             connection: None,
             pool: None,
         };
