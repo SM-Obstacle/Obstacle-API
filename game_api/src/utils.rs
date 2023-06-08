@@ -1,5 +1,6 @@
 use actix_web::{HttpResponse, Responder};
 use serde::Serialize;
+use sha256::digest;
 
 pub fn json<T: Serialize, E>(obj: T) -> Result<impl Responder, E> {
     Ok(HttpResponse::Ok().json(obj))
@@ -48,9 +49,10 @@ pub fn any_repeated<T: PartialEq>(slice: &[T]) -> bool {
 }
 
 pub fn format_map_key(map_id: u32) -> String {
-    format!("mlb:{map_id}")
+    format!("v3:lb:{map_id}")
 }
 
 pub fn format_token_key(login: &str) -> String {
-    format!("pt:{login}")
+    let login = digest(login);
+    format!("v3:token:{login}")
 }
