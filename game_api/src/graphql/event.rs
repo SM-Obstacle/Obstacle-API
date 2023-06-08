@@ -132,11 +132,10 @@ impl EventEdition {
     }
 
     async fn event(&self, ctx: &Context<'_>) -> async_graphql::Result<Event> {
-        Ok(ctx
-            .data_unchecked::<DataLoader<EventLoader>>()
+        ctx.data_unchecked::<DataLoader<EventLoader>>()
             .load_one(self.event_id)
             .await?
-            .ok_or_else(|| async_graphql::Error::new("Event not found."))?)
+            .ok_or_else(|| async_graphql::Error::new("Event not found."))
     }
 
     async fn name(&self) -> &str {
@@ -171,11 +170,10 @@ impl EventEdition {
 #[async_graphql::Object]
 impl EventEditionMaps {
     async fn event(&self, ctx: &Context<'_>) -> async_graphql::Result<Event> {
-        Ok(ctx
-            .data_unchecked::<DataLoader<EventLoader>>()
+        ctx.data_unchecked::<DataLoader<EventLoader>>()
             .load_one(self.event_id)
             .await?
-            .ok_or_else(|| async_graphql::Error::new("Event not found."))?)
+            .ok_or_else(|| async_graphql::Error::new("Event not found."))
     }
 
     async fn edition(&self, ctx: &Context<'_>) -> async_graphql::Result<EventEdition> {

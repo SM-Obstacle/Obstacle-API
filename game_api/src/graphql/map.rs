@@ -62,7 +62,7 @@ impl Map {
 
         let db = ctx.data_unchecked();
 
-        auth::check_auth_for(&db, auth_header.clone(), role).await?;
+        auth::check_auth_for(db, auth_header.clone(), role).await?;
 
         let player_id: u32 = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
             .bind(login)
@@ -93,7 +93,7 @@ impl Map {
             Role::Player
         };
 
-        auth::check_auth_for(&db, auth_header.clone(), role).await?;
+        auth::check_auth_for(db, auth_header.clone(), role).await?;
 
         Ok(sqlx::query_as("SELECT * FROM rating WHERE map_id = ?")
             .bind(self.id)
@@ -160,9 +160,9 @@ impl Map {
         for record in records {
             let rank = get_rank_of(&mut redis_conn, &key, record.time)
                 .await?
-                .expect(&format!(
-                    "redis leaderboard for (`{key}`) should be updated at this point"
-                ));
+                .unwrap_or_else(|| {
+                    panic!("redis leaderboard for (`{key}`) should be updated at this point")
+                });
 
             ranked_records.push(RankedRecord { rank, record });
         }

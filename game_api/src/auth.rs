@@ -187,11 +187,11 @@ pub async fn check_auth_for(
         _ => return Err(RecordsError::Unauthorized),
     }
 
-    let player = player::get_player_from_login(&db, &login)
+    let player = player::get_player_from_login(db, &login)
         .await?
         .expect("invalid player in redis server");
 
-    if let Some(ban) = player::check_banned(&db, player.id).await? {
+    if let Some(ban) = player::check_banned(db, player.id).await? {
         return Err(RecordsError::BannedPlayer(ban));
     };
 

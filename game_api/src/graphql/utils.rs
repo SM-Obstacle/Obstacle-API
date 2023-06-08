@@ -150,7 +150,7 @@ pub async fn get_rank_of(
         .query_async(redis_conn)
         .await?;
 
-    match player_id.get(0) {
+    match player_id.first() {
         Some(id) => {
             let rank: i32 = redis_conn.zrank(key, id).await?;
             Ok(Some(rank + 1))

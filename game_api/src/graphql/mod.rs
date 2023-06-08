@@ -255,12 +255,14 @@ impl QueryRoot {
             let rank = match get_rank_of(&mut redis_conn, &key, record.time).await? {
                 Some(rank) => rank,
                 None => {
-                    redis::update_leaderboard(&db, &key, record.map_id).await?;
+                    redis::update_leaderboard(db, &key, record.map_id).await?;
                     get_rank_of(&mut redis_conn, &key, record.time)
                         .await?
-                        .expect(&format!(
-                            "redis leaderboard for (`{key}`) should be updated at this point"
-                        ))
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "redis leaderboard for (`{key}`) should be updated at this point"
+                            )
+                        })
                 }
             };
 
@@ -277,6 +279,7 @@ pub type Schema = async_graphql::Schema<
     async_graphql::EmptySubscription,
 >;
 
+#[allow(clippy::let_and_return)]
 fn create_schema(db: Database) -> Schema {
     let schema = async_graphql::Schema::build(
         QueryRoot,

@@ -222,7 +222,7 @@ async fn player_finished(
 
         let added: Option<i64> = redis_conn.zadd(&key, player_id, body.time).await.ok();
         if added.is_none() {
-            let _count = redis::update_leaderboard(&db, &key, map_id).await?;
+            let _count = redis::update_leaderboard(db, &key, map_id).await?;
         }
 
         let now = Utc::now().naive_utc();
