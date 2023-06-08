@@ -16,6 +16,7 @@
 //! to log in again to ManiaPlanet to get a new token.
 
 use std::future::{ready, Ready};
+use std::sync::OnceLock;
 use std::{collections::HashMap, time::Duration};
 
 use actix_web::dev::Payload;
@@ -31,9 +32,7 @@ use tracing::Level;
 use crate::utils::format_token_key;
 use crate::{http::player, models::Role, Database, RecordsError, RecordsResult};
 
-/// The client's token expires in 12 hours.
-const EXPIRES_IN: Duration = Duration::from_secs(60 * 60 * 12);
-//const EXPIRES_IN: Duration = Duration::from_secs(15);
+static EXPIRES_IN: OnceLock<u32> = OnceLock::new();
 
 /// The state expires in 5 minutes.
 pub const TIMEOUT: Duration = Duration::from_secs(60 * 5);
@@ -158,11 +157,18 @@ pub async fn gen_token_for(db: &Database, login: String) -> RecordsResult<String
     let mut connection = db.redis_pool.get().await?;
     let key = format_token_key(&login);
 
+    let ex = EXPIRES_IN.get_or_init(|| {
+        std::env::var("RECORDS_API_TOKEN_TTL")
+            .expect("RECORDS_API_TOKEN_TTL env var is not set")
+            .parse()
+            .expect("RECORDS_API_TOKEN_TTL should be u32")
+    });
+
     cmd("SET")
         .arg(&key)
         .arg(&token)
         .arg("EX")
-        .arg(EXPIRES_IN.as_secs())
+        .arg(ex)
         .query_async(&mut connection)
         .await?;
     Ok(token)

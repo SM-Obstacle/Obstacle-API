@@ -26,7 +26,7 @@ async fn main() -> RecordsResult<()> {
     let port = var("RECORDS_API_PORT")
         .expect("RECORDS_API_PORT env var is not set")
         .parse::<u16>()
-        .expect("RECORDS_API_PORT env var should be numeric");
+        .expect("RECORDS_API_PORT env var should be u16");
 
     let mysql_pool = mysql::MySqlPoolOptions::new().acquire_timeout(Duration::new(10, 0));
     #[cfg(feature = "localhost_test")]
