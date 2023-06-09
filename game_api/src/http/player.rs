@@ -11,7 +11,7 @@ use tokio::time::timeout;
 use tracing::Level;
 
 use crate::{
-    auth::{self, AuthHeader, AuthState, TIMEOUT},
+    auth::{self, AuthHeader, AuthState, Message, TIMEOUT},
     models::{Banishment, Map, Player, Record, Role},
     redis,
     utils::{format_map_key, json},
@@ -322,7 +322,7 @@ pub async fn get_token(
     // retrieve access_token from browser redirection
     let (tx, rx) = state.connect_with_browser(body.state.clone()).await?;
     let access_token = match timeout(TIMEOUT, rx).await {
-        Ok(Ok(access_token)) => access_token,
+        Ok(Ok(Message::MPAccessToken(access_token))) => access_token,
         _ => {
             tracing::event!(
                 Level::WARN,
@@ -338,12 +338,12 @@ pub async fn get_token(
 
     // check access_token and generate new token for player ...
     if !check_mp_token(&client, &body.login, access_token).await? {
-        tx.send("INVALID_TOKEN".to_owned()).expect(err_msg);
+        tx.send(Message::InvalidMPToken).expect(err_msg);
         return Err(RecordsError::InvalidMPToken);
     }
 
     let token = auth::gen_token_for(&db, body.login).await?;
-    tx.send("OK".to_owned()).expect(err_msg);
+    tx.send(Message::Ok).expect(err_msg);
 
     json(GetTokenResponse { token })
 }

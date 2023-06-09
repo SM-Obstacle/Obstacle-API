@@ -1,6 +1,5 @@
 use actix_web::{HttpResponse, Responder};
 use serde::Serialize;
-use sha256::digest;
 
 pub fn json<T: Serialize, E>(obj: T) -> Result<impl Responder, E> {
     Ok(HttpResponse::Ok().json(obj))
@@ -53,6 +52,5 @@ pub fn format_map_key(map_id: u32) -> String {
 }
 
 pub fn format_token_key(login: &str) -> String {
-    let login = digest(login);
     format!("v3:token:{login}")
 }
