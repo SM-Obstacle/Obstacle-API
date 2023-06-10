@@ -289,7 +289,7 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
     let res = client
         .get("https://prod.live.maniaplanet.com/webservices/me")
         .header("Accept", "application/json")
-        .header("Authorization", format!("Bearer {token}"))
+        .bearer_auth(token)
         .send()
         .await?;
     let MPServerRes { res_login } = match res.status() {
