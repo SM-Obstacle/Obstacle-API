@@ -8,7 +8,7 @@ use sqlx::FromRow;
 
 use crate::{models, utils::json, Database, RecordsError, RecordsResult};
 
-use super::map::MapAuthor;
+use super::player::UpdatePlayerBody;
 
 pub fn event_scope() -> Scope {
     web::scope("/event")
@@ -120,7 +120,7 @@ struct EventHandleResponse {
 
 #[derive(Serialize)]
 struct Map {
-    main_author: MapAuthor,
+    main_author: UpdatePlayerBody,
     other_authors: Vec<String>,
     name: String,
     map_uid: String,

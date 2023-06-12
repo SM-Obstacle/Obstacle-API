@@ -24,19 +24,12 @@ pub fn map_scope() -> Scope {
         .route("/reset_ratings", web::post().to(reset_ratings))
 }
 
-#[derive(Deserialize, Serialize, FromRow)]
-pub struct MapAuthor {
-    pub login: String,
-    pub name: String,
-    pub country: Option<String>,
-}
-
 #[derive(Deserialize)]
 pub struct UpdateMapBody {
     pub name: String,
     pub map_uid: String,
     pub cps_number: u32,
-    pub author: MapAuthor,
+    pub author: UpdatePlayerBody,
 }
 
 pub async fn insert(
@@ -62,16 +55,7 @@ pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult
         return Ok(id);
     }
 
-    let player_id = player::get_or_insert(
-        db,
-        &body.author.login,
-        UpdatePlayerBody {
-            nickname: body.author.name.clone(),
-            country: body.author.country.clone(),
-            login: "".to_string(),
-        },
-    )
-    .await?;
+    let player_id = player::get_or_insert(db, body.author.clone()).await?;
 
     let id = sqlx::query_scalar(
         "INSERT INTO maps
@@ -91,7 +75,7 @@ pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult
 #[derive(Deserialize)]
 pub struct PlayerRatingBody {
     login: String,
-    map_id: String,
+    map_uid: String,
 }
 
 #[derive(Serialize, FromRow)]
@@ -125,8 +109,8 @@ pub async fn player_rating(
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.login).await? else {
         return Err(RecordsError::PlayerNotFound(body.login));
     };
-    let Some(Map { id: map_id, .. }) = player::get_map_from_game_id(&db, &body.map_id).await? else {
-        return Err(RecordsError::MapNotFound(body.map_id));
+    let Some(Map { id: map_id, .. }) = player::get_map_from_game_id(&db, &body.map_uid).await? else {
+        return Err(RecordsError::MapNotFound(body.map_uid));
     };
 
     let rating = match sqlx::query_scalar(

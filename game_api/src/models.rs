@@ -12,7 +12,7 @@ pub struct Player {
     pub login: String,
     pub name: String,
     pub join_date: Option<chrono::NaiveDateTime>,
-    pub country: Option<String>,
+    pub zone_path: Option<String>,
     pub admins_note: Option<String>,
     pub role: u8,
 }

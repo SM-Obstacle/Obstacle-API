@@ -33,38 +33,38 @@ pub fn player_scope() -> Scope {
         .route("/info", web::get().to(info))
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Clone, FromRow)]
 pub struct UpdatePlayerBody {
     pub login: String,
-    pub nickname: String,
-    pub country: Option<String>,
+    pub name: String,
+    pub zone_path: Option<String>,
 }
 
-pub async fn get_or_insert(
-    db: &Database,
-    login: &str,
-    body: UpdatePlayerBody,
-) -> RecordsResult<u32> {
+async fn insert_player(db: &Database, body: UpdatePlayerBody) -> RecordsResult<u32> {
+    let id = sqlx::query_scalar(
+        "INSERT INTO players
+        (login, name, join_date, zone_path, admins_note, role)
+        VALUES (?, ?, SYSDATE(), ?, NULL, 1) RETURNING id",
+    )
+    .bind(body.login)
+    .bind(body.name)
+    .bind(body.zone_path)
+    .fetch_one(&db.mysql_pool)
+    .await?;
+
+    Ok(id)
+}
+
+pub async fn get_or_insert(db: &Database, body: UpdatePlayerBody) -> RecordsResult<u32> {
     if let Some(id) = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
-        .bind(login)
+        .bind(&body.login)
         .fetch_optional(&db.mysql_pool)
         .await?
     {
         return Ok(id);
     }
 
-    let id = sqlx::query_scalar(
-        "INSERT INTO players
-        (login, name, join_date, country, admins_note, role)
-        VALUES (?, ?, SYSDATE(), ?, NULL, 1) RETURNING id",
-    )
-    .bind(login)
-    .bind(body.nickname)
-    .bind(body.country)
-    .fetch_one(&db.mysql_pool)
-    .await?;
-
-    Ok(id)
+    insert_player(db, body).await
 }
 
 pub async fn update(
@@ -72,53 +72,37 @@ pub async fn update(
     auth: AuthHeader,
     body: Json<UpdatePlayerBody>,
 ) -> RecordsResult<impl Responder> {
-    auth::check_auth_for(&db, auth, Role::Player).await?;
-
     let body = body.into_inner();
-    let login = body.login.clone();
 
-    let player_id = update_or_insert(&db, &body.login.clone(), body).await?;
-    let current_ban = admin::is_banned(&db, player_id).await?;
+    match auth::check_auth_for(&db, auth, Role::Player).await {
+        Ok(()) => update_or_insert(&db, body).await?,
+        Err(RecordsError::PlayerNotFound(_)) => {
+            let _ = insert_player(&db, body).await?;
+        }
+        Err(e) => return Err(e),
+    }
 
-    json(IsBannedResponse {
-        login,
-        banned: current_ban.is_some(),
-        current_ban,
-    })
+    Ok(HttpResponse::Ok().finish())
 }
 
-pub async fn update_or_insert(
-    db: &Database,
-    login: &str,
-    body: UpdatePlayerBody,
-) -> RecordsResult<u32> {
-    if let Some(id) = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
-        .bind(login)
+pub async fn update_or_insert(db: &Database, body: UpdatePlayerBody) -> RecordsResult<()> {
+    if let Some(id) = sqlx::query_scalar::<_, u32>("SELECT id FROM players WHERE login = ?")
+        .bind(&body.login)
         .fetch_optional(&db.mysql_pool)
         .await?
     {
-        sqlx::query("UPDATE players SET name = ?, country = ? WHERE id = ?")
-            .bind(body.nickname)
-            .bind(body.country)
+        sqlx::query("UPDATE players SET name = ?, zone_path = ? WHERE id = ?")
+            .bind(body.name)
+            .bind(body.zone_path)
             .bind(id)
             .execute(&db.mysql_pool)
             .await?;
 
-        return Ok(id);
+        return Ok(());
     }
 
-    let id = sqlx::query_scalar(
-        "INSERT INTO players
-        (login, name, join_date, country, admins_note, role)
-        VALUES (?, ?, SYSDATE(), ?, NULL, 1) RETURNING id",
-    )
-    .bind(login)
-    .bind(body.nickname)
-    .bind(body.country)
-    .fetch_one(&db.mysql_pool)
-    .await?;
-
-    Ok(id)
+    let _ = insert_player(db, body).await?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -196,9 +180,18 @@ async fn player_finished(
     let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.login).await? else {
         return Err(RecordsError::PlayerNotFound(body.login));
     };
-    let Some(Map { id: map_id, .. }) = get_map_from_game_id(&db, &body.map_uid).await? else {
+    let Some(Map { id: map_id, cps_number, .. }) = get_map_from_game_id(&db, &body.map_uid).await? else {
         return Err(RecordsError::MapNotFound(body.map_uid));
     };
+
+    if matches!(cps_number, Some(num) if num < body.cps.len() as u32)
+        || body
+            .cps
+            .split_last()
+            .is_some_and(|(_, first)| first.iter().sum::<i32>() != body.time)
+    {
+        return Err(RecordsError::InvalidTimes);
+    }
 
     let mut redis_conn = db.redis_pool.get().await.unwrap();
 
@@ -389,7 +382,7 @@ struct InfoResponse {
     login: String,
     name: String,
     join_date: Option<chrono::NaiveDateTime>,
-    country: Option<String>,
+    zone_path: Option<String>,
     role_name: String,
 }
 

@@ -197,9 +197,9 @@ pub async fn check_auth_for(
         _ => return Err(RecordsError::Unauthorized),
     }
 
-    let player = player::get_player_from_login(db, &login)
-        .await?
-        .expect("invalid player in redis server");
+    let Some(player) = player::get_player_from_login(db, &login).await? else {
+        return Err(RecordsError::PlayerNotFound(login));
+    };
 
     if let Some(ban) = player::check_banned(db, player.id).await? {
         return Err(RecordsError::BannedPlayer(ban));
@@ -236,33 +236,13 @@ impl FromRequest for AuthHeader {
                 .and_then(|h| h.to_str().map(str::to_string).ok())
         };
 
-        #[cfg(feature = "release")]
-        {
-            let (Some(agent), Some(login), Some(token)) = (
-                ext_header("User-Agent"), 
-                ext_header("PlayerLogin"),
-                ext_header("Authorization"))
-            else {
-                return ready(Err(RecordsError::Unauthorized));
-            };
+        let (Some(login), Some(token)) = (
+            ext_header("PlayerLogin"),
+            ext_header("Authorization"))
+        else {
+            return ready(Err(RecordsError::Unauthorized));
+        };
 
-            if !agent.starts_with("ManiaPlanet/") {
-                return ready(Err(RecordsError::Unauthorized));
-            }
-
-            ready(Ok(Self { login, token }))
-        }
-
-        #[cfg(not(feature = "release"))]
-        {
-            let (Some(login), Some(token)) = (
-                ext_header("PlayerLogin"),
-                ext_header("Authorization"))
-            else {
-                return ready(Err(RecordsError::Unauthorized));
-            };
-
-            ready(Ok(Self { login, token }))
-        }
+        ready(Ok(Self { login, token }))
     }
 }

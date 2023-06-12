@@ -23,7 +23,6 @@ async-graphql-actix-web = "5.0.5"
 tracing-actix-web = "0.7.2"
 reqwest = { version = "0.11.14", features = ["json"] }
 rand = "0.8.5"
-actix-multipart = "0.6.0"
 futures = "0.3.27"
 sha256 = "1.1.3"
 

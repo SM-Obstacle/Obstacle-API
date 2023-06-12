@@ -1,0 +1,113 @@
+name: records
+services:
+  backend:
+    build:
+      context: ../
+      target: development
+      dockerfile: ./.docker/backend/Dockerfile
+      args:
+        RECORDS_API_PORT: ${RECORDS_API_PORT}
+    environment:
+      RECORDS_API_PORT: ${RECORDS_API_PORT}
+      RECORDS_API_TOKEN_TTL: ${RECORDS_API_TOKEN_TTL}
+      RECORDS_API_HOST: http://164.132.227.196
+      DATABASE_URL: /run/secrets/db_url
+      REDIS_URL: /run/secrets/redis_url
+    ports:
+      - "80:${RECORDS_API_PORT}"
+    networks:
+      - redis-side
+      - db-side
+    volumes:
+      - ./records/src:/records/src
+      - backend-cache:/records/target
+    depends_on:
+      - db
+      - redis
+    secrets:
+      - db_url
+      - redis_url
+
+  db:
+    image: mariadb
+    restart: always
+    environment:
+      MARIADB_DATABASE_FILE: /run/secrets/db_db
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_pw
+      MARIADB_USER_FILE: /run/secrets/db_user
+      MARIADB_PASSWORD_FILE: /run/secrets/db_pw
+    networks:
+      - db-side
+    expose:
+      - "3306"
+    secrets:
+      - db_db
+      - db_root_pw
+      - db_user
+      - db_pw
+    volumes:
+      - ./db/entrypoint:/docker-entrypoint-initdb.d/
+      - db_data:/var/lib/mysql
+
+# db-backup:
+#   image: tiredofit/mariadb-backup
+#   volumes:
+#     - ./backups:/backups
+#   restart: always
+#   environment:
+#     DB_SERVER: db
+#     DB_NAME: /run/secrets/db_db
+#     DB_USER: /run/secrets/db_backup_user
+#     DB_PASSWORD: /run/secrets/db_backup_pw
+#     DB_DUMP_FREQ: 1440
+#     DB_DUMP_BEGIN: 0000
+#     DB_CLEANUP_TIME: 8640
+#     MD5: TRUE
+#     COMPRESSION: XZ
+#     SPLIT_DB: FALSE
+#   secrets:
+#     - db_db
+#     - db_backup_user
+#     - db_backup_pw
+
+  adminer:
+    image: adminer
+    restart: always
+    networks:
+      - db-side
+    ports:
+      - "8080:8080"
+
+  redis:
+    image: redis:alpine
+    restart: always
+    networks:
+      - redis-side
+    expose:
+      - "6379"
+
+networks:
+  redis-side: {}
+  db-side: {}
+
+volumes:
+  backend-cache: {}
+  db_data: {}
+
+secrets:
+  db_url:
+    file: ./backend/db_url
+  redis_url:
+    file: ./backend/redis_url
+  db_db:
+    file: ./db/db_db
+  db_root_pw:
+    file: ./db/db_root_pw
+  db_user:
+    file: ./db/db_user
+  db_pw:
+    file: ./db/db_pw
+  db_backup_user:
+    file: ./db/db_backup_user
+  db_backup_pw:
+    file: ./db/db_backup_pw
