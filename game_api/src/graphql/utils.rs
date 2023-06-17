@@ -1,8 +1,5 @@
 use async_graphql::ID;
-use deadpool_redis::{
-    redis::{cmd, AsyncCommands},
-    Connection,
-};
+use deadpool_redis::{redis::AsyncCommands, Connection};
 use sqlx::mysql;
 
 use crate::RecordsResult;
@@ -140,14 +137,8 @@ pub async fn get_rank_of(
     key: &str,
     time: i32,
 ) -> RecordsResult<Option<i32>> {
-    let player_id: Vec<u32> = cmd("ZRANGEBYSCORE")
-        .arg(key)
-        .arg(time)
-        .arg(time)
-        .arg("LIMIT")
-        .arg(0)
-        .arg(1)
-        .query_async(redis_conn)
+    let player_id: Vec<u32> = redis_conn
+        .zrangebyscore_limit(key, time, time, 0, 1)
         .await?;
 
     match player_id.first() {

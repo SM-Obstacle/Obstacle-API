@@ -141,20 +141,28 @@ impl Map {
         let query = format!(
             "SELECT r.*
             FROM records r
-            WHERE map_id = ? AND player_id IN ({}) AND id = (
-                SELECT MAX(id)
+            INNER JOIN (
+                SELECT MAX(id) AS id, player_id
                 FROM records
-                WHERE map_id = ? AND player_id = r.player_id
-            )
+                WHERE map_id = ? AND player_id IN ({})
+                GROUP BY player_id
+            ) t ON t.id = r.id AND t.player_id = r.player_id
+            WHERE map_id = ? AND r.player_id IN ({})
             ORDER BY r.time ASC, r.record_date ASC",
-            player_ids_query
+            player_ids_query, player_ids_query
         );
 
+        println!("{:?}", query);
+
         let mut query = sqlx::query_as::<_, Record>(&query).bind(self.id);
-        for record_id in record_ids {
-            query = query.bind(record_id);
+        for id in &record_ids {
+            query = query.bind(id);
         }
-        let records = query.bind(self.id).fetch_all(mysql_pool).await?;
+        query = query.bind(self.id);
+        for id in &record_ids {
+            query = query.bind(id);
+        }
+        let records = query.fetch_all(mysql_pool).await?;
         let mut ranked_records = Vec::with_capacity(records.len());
 
         for record in records {

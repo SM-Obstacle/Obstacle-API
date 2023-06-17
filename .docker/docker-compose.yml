@@ -1,5 +1,38 @@
 name: records
 services:
+  nginx:
+    image: nginx
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates
+    ports:
+      - "80:80"
+    environment:
+      NGINX_HOST: ${RECORDS_API_HOST}
+      RECORDS_API_PORT: ${RECORDS_API_PORT}
+      WEBSITE_PORT: ${WEBSITE_PORT}
+    networks:
+      - nginx-side
+    depends_on:
+      - backend
+      - website
+      - adminer
+
+  website:
+    build:
+      context: ../
+      dockerfile: ./.docker/website/Dockerfile
+      args:
+        WEBSITE_PORT: ${WEBSITE_PORT}
+    environment:
+      NODE_ENV: development
+      WEBSITE_PORT: ${WEBSITE_PORT}
+    expose:
+      - "${WEBSITE_PORT}"
+    networks:
+      - nginx-side
+    depends_on:
+      - backend
+
   backend:
     build:
       context: ../
@@ -10,16 +43,18 @@ services:
     environment:
       RECORDS_API_PORT: ${RECORDS_API_PORT}
       RECORDS_API_TOKEN_TTL: ${RECORDS_API_TOKEN_TTL}
-      RECORDS_API_HOST: http://164.132.227.196
+      RECORDS_API_HOST: ${RECORDS_API_HOST}
       DATABASE_URL: /run/secrets/db_url
       REDIS_URL: /run/secrets/redis_url
-    ports:
-      - "80:${RECORDS_API_PORT}"
+      GQL_ENDPOINT: /api/graphql
+    expose:
+      - "${RECORDS_API_PORT}"
     networks:
       - redis-side
       - db-side
+      - nginx-side
     volumes:
-      - ./records/src:/records/src
+      - ../game_api/src/:/records/src/
       - backend-cache:/records/target
     depends_on:
       - db
@@ -49,34 +84,14 @@ services:
       - ./db/entrypoint:/docker-entrypoint-initdb.d/
       - db_data:/var/lib/mysql
 
-# db-backup:
-#   image: tiredofit/mariadb-backup
-#   volumes:
-#     - ./backups:/backups
-#   restart: always
-#   environment:
-#     DB_SERVER: db
-#     DB_NAME: /run/secrets/db_db
-#     DB_USER: /run/secrets/db_backup_user
-#     DB_PASSWORD: /run/secrets/db_backup_pw
-#     DB_DUMP_FREQ: 1440
-#     DB_DUMP_BEGIN: 0000
-#     DB_CLEANUP_TIME: 8640
-#     MD5: TRUE
-#     COMPRESSION: XZ
-#     SPLIT_DB: FALSE
-#   secrets:
-#     - db_db
-#     - db_backup_user
-#     - db_backup_pw
-
   adminer:
     image: adminer
     restart: always
     networks:
       - db-side
-    ports:
-      - "8080:8080"
+      - nginx-side
+    expose:
+      - "8080"
 
   redis:
     image: redis:alpine
@@ -89,6 +104,7 @@ services:
 networks:
   redis-side: {}
   db-side: {}
+  nginx-side: {}
 
 volumes:
   backend-cache: {}

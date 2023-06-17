@@ -6,6 +6,7 @@ use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use async_graphql::{connection, ID};
 use async_graphql_actix_web::GraphQLRequest;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
+use std::env::var;
 use std::vec::Vec;
 
 use deadpool_redis::Pool as RedisPool;
@@ -344,9 +345,15 @@ async fn index_graphql(
 }
 
 async fn index_playground() -> impl Responder {
+    let gql_endpoint = var("GQL_ENDPOINT").unwrap_or_else(|_| {
+        println!("GQL_ENDPOINT env var not set, using /graphql as default");
+        "/graphql".to_owned()
+    });
     HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")
-        .body(playground_source(GraphQLPlaygroundConfig::new("/graphql")))
+        .body(playground_source(GraphQLPlaygroundConfig::new(
+            &gql_endpoint,
+        )))
 }
 
 pub fn graphql_route(db: Database) -> Resource {

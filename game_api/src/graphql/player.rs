@@ -116,13 +116,15 @@ impl Player {
 
         // Query the records with these ids
         let records = sqlx::query_as::<_, Record>(
-            "SELECT * FROM records r
-            WHERE player_id = ? AND id = (
-                SELECT MAX(id) FROM records
-                WHERE player_id = ? AND map_id = r.map_id
-            )
-            ORDER BY id DESC
-            LIMIT 100",
+            "SELECT r.* FROM records r
+            INNER JOIN (
+                SELECT MAX(id) AS id, map_id
+                FROM records
+                WHERE player_id = ?
+                GROUP BY map_id
+            ) t ON t.id = r.id AND t.map_id = r.map_id
+            WHERE player_id = ?
+            ORDER BY id DESC LIMIT 100",
         )
         .bind(self.id)
         .bind(self.id)

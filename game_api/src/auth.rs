@@ -22,7 +22,7 @@ use std::{collections::HashMap, time::Duration};
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
-use deadpool_redis::redis::{cmd, AsyncCommands};
+use deadpool_redis::redis::AsyncCommands;
 use rand::Rng;
 use sha256::digest;
 use tokio::sync::oneshot::{self, Receiver, Sender};
@@ -174,13 +174,7 @@ pub async fn gen_token_for(db: &Database, login: String) -> RecordsResult<String
 
     let token_hash = digest(&*token);
 
-    cmd("SET")
-        .arg(&key)
-        .arg(&token_hash)
-        .arg("EX")
-        .arg(ex)
-        .query_async(&mut connection)
-        .await?;
+    connection.set_ex(key, token_hash, *ex as usize).await?;
     Ok(token)
 }
 

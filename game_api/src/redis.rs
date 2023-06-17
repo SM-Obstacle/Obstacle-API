@@ -4,13 +4,10 @@ use deadpool_redis::redis::AsyncCommands;
 pub async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
     sqlx::query_scalar(
         "SELECT COUNT(*)
-        FROM records r
-        WHERE map_id = ? AND id = (
-            SELECT MAX(id) FROM records
-            WHERE map_id = ? AND player_id = r.player_id
-        )",
+        FROM (SELECT * FROM records
+        WHERE map_id = ?
+        GROUP BY player_id) r",
     )
-    .bind(map_id)
     .bind(map_id)
     .fetch_one(&db.mysql_pool)
     .await
