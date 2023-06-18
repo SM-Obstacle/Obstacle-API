@@ -1,4 +1,5 @@
 use actix_web::{HttpResponse, Responder};
+use rand::Rng;
 use serde::Serialize;
 
 pub fn json<T: Serialize, E>(obj: T) -> Result<impl Responder, E> {
@@ -47,10 +48,30 @@ pub fn any_repeated<T: PartialEq>(slice: &[T]) -> bool {
     false
 }
 
-pub fn format_map_key(map_id: u32) -> String {
-    format!("v3:lb:{map_id}")
+fn format_key(sub: String) -> String {
+    format!("v3:{sub}")
 }
 
-pub fn format_token_key(login: &str) -> String {
-    format!("v3:token:{login}")
+pub fn format_map_key(map_id: u32) -> String {
+    format_key(format!("lb:{map_id}"))
+}
+
+fn inner_format_token_key(prefix: &str, login: &str) -> String {
+    format_key(format!("token:{prefix}:{login}"))
+}
+
+pub fn format_web_token_key(login: &str) -> String {
+    inner_format_token_key("web", login)
+}
+
+pub fn format_mp_token_key(login: &str) -> String {
+    inner_format_token_key("mp", login)
+}
+
+pub fn generate_token(len: usize) -> String {
+    let token = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(len)
+        .collect::<Vec<u8>>();
+    String::from_utf8(token).expect("random generated token not utf8")
 }

@@ -42,6 +42,7 @@ pub struct Record {
     pub respawn_count: i32,
     pub record_date: chrono::NaiveDateTime,
     pub flags: u32,
+    pub try_count: Option<u32>,
 }
 
 #[derive(Debug)]

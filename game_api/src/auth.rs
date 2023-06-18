@@ -23,14 +23,13 @@ use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
 use deadpool_redis::redis::AsyncCommands;
-use rand::Rng;
 use sha256::digest;
 use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::Level;
 
-use crate::utils::format_token_key;
+use crate::utils::{format_mp_token_key, format_web_token_key, generate_token};
 use crate::{http::player, models::Role, Database, RecordsError, RecordsResult};
 
 static EXPIRES_IN: OnceLock<u32> = OnceLock::new();
@@ -64,7 +63,10 @@ impl TokenState {
 pub enum Message {
     MPAccessToken(String),
     InvalidMPToken,
-    Ok,
+    Ok {
+        login: String,
+        token: String,
+    }
 }
 
 /// Holds the state of the authentication system.
@@ -123,16 +125,16 @@ impl AuthState {
         &self,
         state: String,
         access_token: String,
-    ) -> RecordsResult<()> {
+    ) -> RecordsResult<(String, String)> {
         let mut state_map = self.token_states_map.lock().await;
 
-        if let Some(TokenState { tx, rx, .. }) = state_map.remove(&state) {
+        let (login, web_token) = if let Some(TokenState { tx, rx, .. }) = state_map.remove(&state) {
             tx.send(Message::MPAccessToken(access_token))
                 .expect("/player/get_token rx should not be dropped at this point");
 
             match timeout(TIMEOUT, rx).await {
                 Ok(Ok(res)) => match res {
-                    Message::Ok => {}
+                    Message::Ok { login, token } => (login, token),
                     Message::InvalidMPToken => return Err(RecordsError::InvalidMPToken),
                     _ => unreachable!(),
                 },
@@ -140,10 +142,10 @@ impl AuthState {
                     tracing::event!(Level::WARN, "Token state `{}` timed out", state);
                     return Err(RecordsError::Timeout);
                 }
-            };
+            }
         } else {
             return Err(RecordsError::MissingGetTokenReq);
-        }
+        };
 
         tracing::event!(
             Level::INFO,
@@ -152,30 +154,31 @@ impl AuthState {
             state_map.len()
         );
 
-        Ok(())
+        Ok((login, web_token))
     }
 }
 
-pub async fn gen_token_for(db: &Database, login: String) -> RecordsResult<String> {
-    let token = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(256)
-        .collect::<Vec<u8>>();
-    let token = String::from_utf8(token).expect("random token not utf8");
-    let mut connection = db.redis_pool.get().await?;
-    let key = format_token_key(&login);
+pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String, String)> {
+    let mp_token = generate_token(256);
+    let web_token = generate_token(32);
 
-    let ex = EXPIRES_IN.get_or_init(|| {
+    let mut connection = db.redis_pool.get().await?;
+    let mp_key = format_mp_token_key(&login);
+    let web_key = format_web_token_key(&login);
+
+    let ex = *EXPIRES_IN.get_or_init(|| {
         std::env::var("RECORDS_API_TOKEN_TTL")
             .expect("RECORDS_API_TOKEN_TTL env var is not set")
             .parse()
             .expect("RECORDS_API_TOKEN_TTL should be u32")
-    });
+    }) as usize;
 
-    let token_hash = digest(&*token);
+    let mp_token_hash = digest(&*mp_token);
+    let web_token_hash = digest(&*web_token);
 
-    connection.set_ex(key, token_hash, *ex as usize).await?;
-    Ok(token)
+    connection.set_ex(mp_key, mp_token_hash, ex).await?;
+    connection.set_ex(web_key, web_token_hash, ex).await?;
+    Ok((mp_token, web_token))
 }
 
 pub async fn check_auth_for(
@@ -184,7 +187,7 @@ pub async fn check_auth_for(
     required: Role,
 ) -> RecordsResult<()> {
     let mut connection = db.redis_pool.get().await?;
-    let key = format_token_key(&login);
+    let key = format_mp_token_key(&login);
     let stored_token: Option<String> = connection.get(&key).await?;
     match stored_token {
         Some(t) if t == digest(token) => (),

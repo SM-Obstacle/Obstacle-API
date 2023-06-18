@@ -23,12 +23,16 @@ impl Player {
         ID(format!("v0:Player:{}", self.id))
     }
 
-    async fn login(&self) -> String {
-        self.login.clone()
+    async fn login(&self) -> &str {
+        &self.login
     }
 
-    async fn name(&self) -> String {
-        self.name.clone()
+    async fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn zone_path(&self) -> Option<&str> {
+        self.zone_path.as_deref()
     }
 
     async fn banishments(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Banishment>> {

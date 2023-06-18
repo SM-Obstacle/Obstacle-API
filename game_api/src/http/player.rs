@@ -184,11 +184,8 @@ async fn player_finished(
         return Err(RecordsError::MapNotFound(body.map_uid));
     };
 
-    if matches!(cps_number, Some(num) if num < body.cps.len() as u32)
-        || body
-            .cps
-            .split_last()
-            .is_some_and(|(_, first)| first.iter().sum::<i32>() != body.time)
+    if matches!(cps_number, Some(num) if num + 1 != body.cps.len() as u32)
+        || body.cps.iter().sum::<i32>() != body.time
     {
         return Err(RecordsError::InvalidTimes);
     }
@@ -335,10 +332,14 @@ pub async fn get_token(
         return Err(RecordsError::InvalidMPToken);
     }
 
-    let token = auth::gen_token_for(&db, body.login).await?;
-    tx.send(Message::Ok).expect(err_msg);
+    let (mp_token, web_token) = auth::gen_token_for(&db, &body.login).await?;
+    tx.send(Message::Ok {
+        login: body.login,
+        token: web_token,
+    })
+    .expect(err_msg);
 
-    json(GetTokenResponse { token })
+    json(GetTokenResponse { token: mp_token })
 }
 
 #[derive(Deserialize)]
@@ -347,15 +348,21 @@ pub struct GiveTokenBody {
     state: String,
 }
 
+#[derive(Serialize)]
+pub struct GiveTokenResponse {
+    login: String,
+    token: String,
+}
+
 pub async fn post_give_token(
     state: Data<AuthState>,
     body: Json<GiveTokenBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    state
+    let (login, token) = state
         .browser_connected_for(body.state, body.access_token)
         .await?;
-    Ok(HttpResponse::Ok())
+    json(GiveTokenResponse { login, token })
 }
 
 pub async fn get_give_token() -> impl Responder {
