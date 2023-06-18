@@ -30,6 +30,7 @@ pub fn player_scope() -> Scope {
                 .route(web::post().to(post_give_token))
                 .route(web::get().to(get_give_token)),
         )
+        .route("/times", web::post().to(times))
         .route("/info", web::get().to(info))
 }
 
@@ -376,6 +377,54 @@ struct IsBannedResponse {
     login: String,
     banned: bool,
     current_ban: Option<admin::Banishment>,
+}
+
+#[derive(Deserialize)]
+struct TimesBody {
+    login: String,
+    maps_uids: Vec<String>,
+}
+
+#[derive(Serialize, FromRow)]
+struct TimesResponseItem {
+    map_uid: String,
+    time: i32,
+}
+
+async fn times(
+    auth: AuthHeader,
+    db: Data<Database>,
+    body: Json<TimesBody>,
+) -> RecordsResult<impl Responder> {
+    auth::check_auth_for(&db, auth, Role::Player).await?;
+
+    let body = body.into_inner();
+
+    let Some(player) = get_player_from_login(&db, &body.login).await? else {
+        return Err(RecordsError::PlayerNotFound(body.login));
+    };
+
+    let query = format!(
+        "SELECT m.game_id AS map_uid, MIN(r.time) AS time
+        FROM maps m
+        INNER JOIN records r ON r.map_id = m.id
+        WHERE r.player_id = ? AND m.game_id IN ({})
+        GROUP BY m.id",
+        body.maps_uids
+            .iter()
+            .map(|_| "?".to_owned())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+
+    let mut query = sqlx::query_as::<_, TimesResponseItem>(&query).bind(player.id);
+
+    for map_uid in body.maps_uids {
+        query = query.bind(map_uid);
+    }
+
+    let result = query.fetch_all(&db.mysql_pool).await?;
+    json(result)
 }
 
 #[derive(Deserialize)]
