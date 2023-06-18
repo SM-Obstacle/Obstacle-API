@@ -45,9 +45,7 @@ async fn main() -> RecordsResult<()> {
             #[cfg(feature = "localhost_test")]
             url: Some("redis://127.0.0.1:6379/".to_string()),
             #[cfg(not(feature = "localhost_test"))]
-            url: Some(read_to_string(
-                var("REDIS_URL").expect("REDIS_URL env var is not set"),
-            )?),
+            url: Some(var("REDIS_URL").expect("REDIS_URL env var is not set")),
             connection: None,
             pool: None,
         };

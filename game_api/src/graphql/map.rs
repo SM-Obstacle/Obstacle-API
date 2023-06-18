@@ -152,8 +152,6 @@ impl Map {
             player_ids_query, player_ids_query
         );
 
-        println!("{:?}", query);
-
         let mut query = sqlx::query_as::<_, Record>(&query).bind(self.id);
         for id in &record_ids {
             query = query.bind(id);

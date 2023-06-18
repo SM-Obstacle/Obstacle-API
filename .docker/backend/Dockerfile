@@ -39,8 +39,6 @@ RUN cargo build --release --offline
 
 FROM debian:bluster-slim
 
-EXPOSE 3000
-
 COPY --from=builder /code/target/release/game-api /game-api
 
 CMD ["/game-api"]

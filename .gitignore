@@ -8,4 +8,5 @@ Cargo.lock
 
 # docker secret files
 db_*
-redis_*s
+redis_*
+*.conf*

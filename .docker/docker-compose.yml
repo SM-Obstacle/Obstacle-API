@@ -1,12 +1,16 @@
 name: records
 services:
   nginx:
-    image: nginx
+    image: jonasal/nginx-certbot:latest
     volumes:
-      - ./nginx/templates:/etc/nginx/templates
+      - nginx-ssl:${NGINX_SSL}
+      - ./nginx/templates:/etc/nginx/templates:ro
     ports:
       - "80:80"
+      - "443:443"
+    restart: unless-stopped
     environment:
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL}
       NGINX_HOST: ${RECORDS_API_HOST}
       RECORDS_API_PORT: ${RECORDS_API_PORT}
       WEBSITE_PORT: ${WEBSITE_PORT}
@@ -45,7 +49,7 @@ services:
       RECORDS_API_TOKEN_TTL: ${RECORDS_API_TOKEN_TTL}
       RECORDS_API_HOST: ${RECORDS_API_HOST}
       DATABASE_URL: /run/secrets/db_url
-      REDIS_URL: /run/secrets/redis_url
+      REDIS_URL: redis://redis:6379/
       GQL_ENDPOINT: /api/graphql
     expose:
       - "${RECORDS_API_PORT}"
@@ -61,7 +65,6 @@ services:
       - redis
     secrets:
       - db_url
-      - redis_url
 
   db:
     image: mariadb
@@ -82,7 +85,7 @@ services:
       - db_pw
     volumes:
       - ./db/entrypoint:/docker-entrypoint-initdb.d/
-      - db_data:/var/lib/mysql
+      - db-data:/var/lib/mysql
 
   adminer:
     image: adminer
@@ -107,14 +110,13 @@ networks:
   nginx-side: {}
 
 volumes:
+  nginx-ssl: {}
   backend-cache: {}
-  db_data: {}
+  db-data: {}
 
 secrets:
   db_url:
     file: ./backend/db_url
-  redis_url:
-    file: ./backend/redis_url
   db_db:
     file: ./db/db_db
   db_root_pw:
@@ -123,7 +125,3 @@ secrets:
     file: ./db/db_user
   db_pw:
     file: ./db/db_pw
-  db_backup_user:
-    file: ./db/db_backup_user
-  db_backup_pw:
-    file: ./db/db_backup_pw
