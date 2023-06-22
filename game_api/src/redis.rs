@@ -1,7 +1,7 @@
 use crate::{Database, RecordsResult};
 use deadpool_redis::redis::AsyncCommands;
 
-pub async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
+async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
     sqlx::query_scalar(
         "SELECT COUNT(*)
         FROM (SELECT * FROM records
@@ -14,6 +14,10 @@ pub async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64>
     .map_err(|e| e.into())
 }
 
+/// Checks if the Redis leaderboard for the map with the `key` has a different count
+/// that in the database, and reupdates the Redis leaderboard completly if so.
+/// 
+/// This is a check to avoid records duplicates, that may happen sometimes.
 pub async fn update_leaderboard(db: &Database, key: &str, map_id: u32) -> RecordsResult<i64> {
     let mut redis_conn = db.redis_pool.get().await.unwrap();
     let redis_count: i64 = redis_conn.zcount(key, "-inf", "+inf").await?;

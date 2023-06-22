@@ -1,3 +1,6 @@
+//! Module used to serve the routes mainly used by the Obstacle gamemode. Each submodule is
+//! specific for a route segment.
+
 use actix_web::web::{JsonConfig, Query};
 use actix_web::{web, Scope};
 use reqwest::Client;
@@ -6,13 +9,12 @@ use crate::utils::format_map_key;
 use crate::{
     models::{Map, Player},
     redis,
-    utils::{escaped, json},
+    utils::json,
     Database, RecordsError, RecordsResult,
 };
 use actix_web::{web::Data, Responder};
 use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
-use sqlx::{mysql, FromRow};
 
 use self::admin::admin_scope;
 use self::event::event_scope;
@@ -93,22 +95,12 @@ async fn append_range(
         params
     );
 
-    let mut query = sqlx::query(&query).bind(start).bind(map_id);
+    let mut query = sqlx::query_as(&query).bind(start).bind(map_id);
     for id in ids {
         query = query.bind(id);
     }
 
-    ranked_records.extend(
-        query
-            .map(|row: mysql::MySqlRow| {
-                let mut record = RankedRecord::from_row(&row).unwrap();
-                record.nickname = escaped(&record.nickname);
-                record
-            })
-            .fetch_all(&db.mysql_pool)
-            .await
-            .unwrap(),
-    );
+    ranked_records.extend(query.fetch_all(&db.mysql_pool).await.unwrap());
 }
 
 async fn overview(db: Data<Database>, body: Query<OverviewQuery>) -> RecordsResult<impl Responder> {

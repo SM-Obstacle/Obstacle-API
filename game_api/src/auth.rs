@@ -1,19 +1,47 @@
 //! The authentication system.
 //!
-//! The authentication system is used to authenticate the client (which corresponds to
-//! the Obstacle TitlePack Script). The authentication system is used to prevent
-//! unauthorized access to the API.
+//! It is mainly used by the Obstacle Titlepack Script, to authenticate the records of the players,
+//! and their actions. It allows them to update their information, save a record, rate a map, etc.
 //!
-//! The authentication system is based on the OAuth 2.0 protocol. It is only used when
-//! a player finishes a map. When a new player finishes a map, the script must send a
-//! /new_player_finished request to this server, and ask the player to log in to ManiaPlanet.
-//! Then it will receive a token. This token is then sent to this server, to verify the token,
-//! and to validate the map finish. After this procedure, the server generates a separate token
-//! for the new player, and replies with it to the client. So the client can store the token
-//! in the player's local files, and use it to authenticate the player when he finishes a map.
+//! The authentication system is also used by the website to retrieve and update information.
 //!
-//! The generated token has a time-to-live of 1 year. After this time, the player will have
-//! to log in again to ManiaPlanet to get a new token.
+//! For each player, the system produces 2 tokens:
+//! * The Maniaplanet token, used by the Obstacle gamemode to register the in-game information
+//! * The website token, used by the website to retrieve sensitive information
+//!
+//! For every API route that requires authentication, it will retrieve the `Authorization` header
+//! bound with the `"login"` provided in the request payload, to check for the player's authenticity.
+//! This goes for the Obstacle gamemode, but for the website, it will be a session id cookie
+//! sent by the browser.
+//!
+//! For each case, the player's role (Player, Mod, Admin) is also checked to correspond
+//! to the required role.
+//!
+//! The procedure to initialize the tokens uses the OAuth 2.0 protocol provided by ManiaPlanet.
+//! It has only access to the `basic` scope, meaning the name of the player, his login,
+//! and his zone path. For now, this procedure is done from the Obstacle Titlepack. It is as follows:
+//!
+//! 1. The script generates a random string named `state`
+//! 2. It sends a POST request to `/player/get_token`, with the corresponding payload
+//! 3. It waits a bit, then opens a URL for the player to
+//! https://prod.live.maniaplanet.com/login/oauth/authorize?response_type=token&client_id=de1ce3ba8e&client_secret=52877e3c1aa428eeb75a042c52caa01fb74a7526&redirect_uri=https://obstacle.titlepack.io/give_token&state=`state`&scope=basic
+//! 4. The player logs in with his ManiaPlanet account, and is redirected to the page at
+//! https://obstacle.titlepack.io/give_token URL.
+//! 5. This page executes a JavaScript code that sends a POST request to `/player/give_token`
+//! with the access token provided by the ManiaPlanet OAuth system and the same `state`.
+//! 6. The authentication system validates the provided access token, and generates the 2 tokens
+//! for the player.
+//! 7. The POST `/player/give_token` request returns a `200 OK` response with a `Set-Cookie` header
+//! containing the encoded session ID with the website token stored in it bound with the player's login
+//! 8. The POST `/player/get_token` request returns the response with the generated ManiaPlanet token
+//! that will be used to authenticate the player in the gamemode.
+//!
+//! The generated tokens have a time-to-live of 6 months. Passed this time, the authentication system
+//! will return an `Unauthorized` error. The gamemode script will have to execute the procedure
+//! from above.
+//!
+//! See https://github.com/maniaplanet/documentation/blob/master/13.web-services/01.oauth2/docs.md#implicit-flow
+//! for more information.
 
 use std::future::{ready, Ready};
 use std::sync::OnceLock;
