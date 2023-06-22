@@ -1,10 +1,16 @@
 use actix_cors::Cors;
+use actix_session::{
+    config::{CookieContentSecurity, PersistentSession},
+    storage::CookieSessionStore,
+    SessionMiddleware,
+};
 use actix_web::{
+    cookie::{time::Duration as CookieDuration, Key},
     web::{self, Data},
     App, HttpResponse, HttpServer,
 };
 use deadpool::Runtime;
-use game_api::{api_route, graphql_route, AuthState, Database, RecordsResult};
+use game_api::{api_route, get_tokens_ttl, graphql_route, AuthState, Database, RecordsResult};
 use sqlx::mysql;
 use std::env::var;
 #[cfg(not(feature = "localhost_test"))]
@@ -74,8 +80,11 @@ async fn main() -> RecordsResult<()> {
     #[cfg(not(feature = "localhost_test"))]
     let localhost_origin = var("RECORDS_API_HOST").expect("RECORDS_API_HOST env var is not set");
 
+    let sess_key = Key::generate();
+
     HttpServer::new(move || {
         let cors = Cors::default()
+            .supports_credentials()
             .allowed_methods(vec!["GET", "POST"])
             .allowed_headers(vec!["accept", "content-type"])
             .max_age(3600);
@@ -89,6 +98,16 @@ async fn main() -> RecordsResult<()> {
         App::new()
             .wrap(cors)
             .wrap(TracingLogger::default())
+            .wrap(
+                SessionMiddleware::builder(CookieSessionStore::default(), sess_key.clone())
+                    .cookie_secure(!cfg!(feature = "localhost_test"))
+                    .cookie_content_security(CookieContentSecurity::Private)
+                    .session_lifecycle(
+                        PersistentSession::default()
+                            .session_ttl(CookieDuration::seconds(get_tokens_ttl() as i64)),
+                    )
+                    .build(),
+            )
             .app_data(auth_state.clone())
             .app_data(Data::new(db.clone()))
             .service(graphql_route(db.clone()))

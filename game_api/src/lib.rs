@@ -16,7 +16,7 @@ pub mod models;
 mod redis;
 mod utils;
 
-pub use auth::{AuthState, UPDATE_RATE};
+pub use auth::{get_tokens_ttl, AuthState, UPDATE_RATE};
 pub use graphql::graphql_route;
 pub use http::api_route;
 
@@ -65,6 +65,8 @@ pub enum RecordsError {
     EventEditionNotFound(String, u32),
     #[error("invalid times")]
     InvalidTimes,
+    #[error("forbidden")]
+    Forbidden,
 }
 
 impl actix_web::ResponseError for RecordsError {
@@ -114,7 +116,8 @@ impl actix_web::ResponseError for RecordsError {
             Self::InvalidRates => actix_web::HttpResponse::BadRequest().body("invalid rates (too many, or repeated rate)"),
             Self::EventNotFound(handle) => actix_web::HttpResponse::BadRequest().body(format!("event `{handle}` not found")),
             Self::EventEditionNotFound(handle, edition) => actix_web::HttpResponse::BadRequest().body(format!("event edition `{edition}` not found for event `{handle}`")),
-            Self::InvalidTimes => actix_web::HttpResponse::BadRequest().body("invalid times")
+            Self::InvalidTimes => actix_web::HttpResponse::BadRequest().body("invalid times"),
+            Self::Forbidden => actix_web::HttpResponse::Forbidden().body("forbidden action"),
         }
     }
 }

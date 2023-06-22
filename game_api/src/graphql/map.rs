@@ -8,7 +8,7 @@ use deadpool_redis::{redis::AsyncCommands, Pool as RedisPool};
 use sqlx::{mysql, FromRow, MySqlPool};
 
 use crate::{
-    auth::{self, AuthHeader},
+    auth::{self, WebToken},
     models::{Map, MedalPrice, Player, PlayerRating, RankedRecord, Rating, Record, Role},
     redis,
     utils::format_map_key,
@@ -50,8 +50,8 @@ impl Map {
         ctx: &async_graphql::Context<'_>,
         login: String,
     ) -> async_graphql::Result<Option<MedalPrice>> {
-        let Some(auth_header) = ctx.data_unchecked::<Option<AuthHeader>>() else {
-            return Err(async_graphql::Error::new("Forbidden."));
+        let Some(auth_header) = ctx.data_opt::<WebToken>() else {
+            return Err(async_graphql::Error::new("Unauthorized."));
         };
 
         let role = if auth_header.login != login {
@@ -62,7 +62,7 @@ impl Map {
 
         let db = ctx.data_unchecked();
 
-        auth::check_auth_for(db, auth_header.clone(), role).await?;
+        auth::website_check_auth_for(db, auth_header.clone(), role).await?;
 
         let player_id: u32 = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
             .bind(login)
@@ -83,8 +83,8 @@ impl Map {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<Rating>> {
         let db = ctx.data_unchecked();
-        let Some(auth_header) = ctx.data_unchecked::<Option<AuthHeader>>() else {
-            return Err(async_graphql::Error::new("Forbidden."));
+        let Some(auth_header) = ctx.data_opt::<WebToken>() else {
+            return Err(async_graphql::Error::new("Unauthorized."));
         };
 
         let role = if self.player(ctx).await?.login != auth_header.login {
@@ -93,7 +93,7 @@ impl Map {
             Role::Player
         };
 
-        auth::check_auth_for(db, auth_header.clone(), role).await?;
+        auth::website_check_auth_for(db, auth_header.clone(), role).await?;
 
         Ok(sqlx::query_as("SELECT * FROM rating WHERE map_id = ?")
             .bind(self.id)

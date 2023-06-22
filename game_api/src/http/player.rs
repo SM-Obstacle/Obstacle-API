@@ -1,3 +1,4 @@
+use actix_session::Session;
 use actix_web::{
     web::{self, Data, Json, Query},
     HttpResponse, Responder, Scope,
@@ -11,7 +12,7 @@ use tokio::time::timeout;
 use tracing::Level;
 
 use crate::{
-    auth::{self, AuthHeader, AuthState, Message, TIMEOUT},
+    auth::{self, AuthHeader, AuthState, Message, WebToken, TIMEOUT, WEB_TOKEN_SESS_KEY},
     models::{Banishment, Map, Player, Record, Role},
     redis,
     utils::{format_map_key, json},
@@ -334,10 +335,10 @@ pub async fn get_token(
     }
 
     let (mp_token, web_token) = auth::gen_token_for(&db, &body.login).await?;
-    tx.send(Message::Ok {
+    tx.send(Message::Ok(WebToken {
         login: body.login,
         token: web_token,
-    })
+    }))
     .expect(err_msg);
 
     json(GetTokenResponse { token: mp_token })
@@ -356,14 +357,18 @@ pub struct GiveTokenResponse {
 }
 
 pub async fn post_give_token(
+    session: Session,
     state: Data<AuthState>,
     body: Json<GiveTokenBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    let (login, token) = state
+    let web_token = state
         .browser_connected_for(body.state, body.access_token)
         .await?;
-    json(GiveTokenResponse { login, token })
+    session
+        .insert(WEB_TOKEN_SESS_KEY, web_token)
+        .expect("unable to insert session web token");
+    Ok(HttpResponse::Ok().finish())
 }
 
 pub async fn get_give_token() -> impl Responder {

@@ -23,6 +23,7 @@ use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
 use deadpool_redis::redis::AsyncCommands;
+use serde::{Deserialize, Serialize};
 use sha256::digest;
 use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio::sync::Mutex;
@@ -34,6 +35,17 @@ use crate::{http::player, models::Role, Database, RecordsError, RecordsResult};
 
 static EXPIRES_IN: OnceLock<u32> = OnceLock::new();
 
+pub fn get_tokens_ttl() -> u32 {
+    *EXPIRES_IN.get_or_init(|| {
+        std::env::var("RECORDS_API_TOKEN_TTL")
+            .expect("RECORDS_API_TOKEN_TTL env var is not set")
+            .parse()
+            .expect("RECORDS_API_TOKEN_TTL should be u32")
+    })
+}
+
+pub const WEB_TOKEN_SESS_KEY: &str = "__obs_web_token";
+
 /// The state expires in 5 minutes.
 pub const TIMEOUT: Duration = Duration::from_secs(60 * 5);
 
@@ -41,6 +53,12 @@ pub const TIMEOUT: Duration = Duration::from_secs(60 * 5);
 ///
 /// This is used to remove expired tokens.
 pub const UPDATE_RATE: Duration = Duration::from_secs(60 * 60 * 24);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebToken {
+    pub login: String,
+    pub token: String,
+}
 
 #[derive(Debug)]
 struct TokenState {
@@ -63,10 +81,7 @@ impl TokenState {
 pub enum Message {
     MPAccessToken(String),
     InvalidMPToken,
-    Ok {
-        login: String,
-        token: String,
-    }
+    Ok(WebToken),
 }
 
 /// Holds the state of the authentication system.
@@ -125,16 +140,16 @@ impl AuthState {
         &self,
         state: String,
         access_token: String,
-    ) -> RecordsResult<(String, String)> {
+    ) -> RecordsResult<WebToken> {
         let mut state_map = self.token_states_map.lock().await;
 
-        let (login, web_token) = if let Some(TokenState { tx, rx, .. }) = state_map.remove(&state) {
+        let web_token = if let Some(TokenState { tx, rx, .. }) = state_map.remove(&state) {
             tx.send(Message::MPAccessToken(access_token))
                 .expect("/player/get_token rx should not be dropped at this point");
 
             match timeout(TIMEOUT, rx).await {
                 Ok(Ok(res)) => match res {
-                    Message::Ok { login, token } => (login, token),
+                    Message::Ok(web_token) => web_token,
                     Message::InvalidMPToken => return Err(RecordsError::InvalidMPToken),
                     _ => unreachable!(),
                 },
@@ -154,10 +169,16 @@ impl AuthState {
             state_map.len()
         );
 
-        Ok((login, web_token))
+        Ok(web_token)
     }
 }
 
+/// Generates a ManiaPlanet and Website token for the player with the provided login.
+///
+/// The player might not yet exist in the database.
+/// It returns a couple of (ManiaPlanet token ; Website token).
+///
+/// The tokens are stored in the Redis database.
 pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String, String)> {
     let mp_token = generate_token(256);
     let web_token = generate_token(32);
@@ -166,12 +187,7 @@ pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String,
     let mp_key = format_mp_token_key(&login);
     let web_key = format_web_token_key(&login);
 
-    let ex = *EXPIRES_IN.get_or_init(|| {
-        std::env::var("RECORDS_API_TOKEN_TTL")
-            .expect("RECORDS_API_TOKEN_TTL env var is not set")
-            .parse()
-            .expect("RECORDS_API_TOKEN_TTL should be u32")
-    }) as usize;
+    let ex = get_tokens_ttl() as usize;
 
     let mp_token_hash = digest(&*mp_token);
     let web_token_hash = digest(&*web_token);
@@ -181,19 +197,21 @@ pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String,
     Ok((mp_token, web_token))
 }
 
-pub async fn check_auth_for(
+async fn inner_check_auth_for(
     db: &Database,
-    AuthHeader { login, token }: AuthHeader,
+    login: String,
+    token: &str,
     required: Role,
+    key: String,
 ) -> RecordsResult<()> {
     let mut connection = db.redis_pool.get().await?;
-    let key = format_mp_token_key(&login);
     let stored_token: Option<String> = connection.get(&key).await?;
-    match stored_token {
-        Some(t) if t == digest(token) => (),
-        _ => return Err(RecordsError::Unauthorized),
+    if !matches!(stored_token, Some(t) if t == digest(token)) {
+        return Err(RecordsError::Unauthorized);
     }
 
+    // At this point, if Redis has registered a token with the login, it means that
+    // the player is not yet added to the Obstacle database but effectively has a ManiaPlanet account
     let Some(player) = player::get_player_from_login(db, &login).await? else {
         return Err(RecordsError::PlayerNotFound(login));
     };
@@ -202,17 +220,44 @@ pub async fn check_auth_for(
         return Err(RecordsError::BannedPlayer(ban));
     };
 
-    let role: Role =
-        sqlx::query_as("SELECT * FROM role WHERE id = (SELECT role FROM players WHERE id = ?)")
-            .bind(player.id)
-            .fetch_one(&db.mysql_pool)
-            .await?;
+    let role: Role = sqlx::query_as(
+        "SELECT r.id, r.role_name FROM players p
+            INNER JOIN role r ON r.id = p.role
+            WHERE p.id = ?",
+    )
+    .bind(player.id)
+    .fetch_one(&db.mysql_pool)
+    .await?;
 
     if role < required {
-        return Err(RecordsError::Unauthorized);
+        return Err(RecordsError::Forbidden);
     }
 
     Ok(())
+}
+
+pub async fn website_check_auth_for(
+    db: &Database,
+    web_token: WebToken,
+    required: Role,
+) -> RecordsResult<()> {
+    let key = format_web_token_key(&web_token.login);
+    inner_check_auth_for(db, web_token.login, &web_token.token, required, key).await
+}
+
+/// Checks for a successful authentication for the player with its login and ManiaPlanet token.
+///
+/// * If the token is invalid, or the player is banned, it returns an `Unauthorized` error
+/// * If it is valid, but the player doesn't exist in the database, it returns a `PlayerNotFound` error
+/// * If the player hasn't the required role, it returns a `Forbidden` error
+/// * Otherwise, it returns Ok(())
+pub async fn check_auth_for(
+    db: &Database,
+    AuthHeader { login, token }: AuthHeader,
+    required: Role,
+) -> RecordsResult<()> {
+    let key = format_mp_token_key(&login);
+    inner_check_auth_for(db, login, &token, required, key).await
 }
 
 #[derive(Clone)]

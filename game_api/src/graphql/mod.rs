@@ -1,3 +1,4 @@
+use actix_session::Session;
 use actix_web::web::{self, Data};
 use actix_web::{HttpResponse, Resource, Responder};
 use async_graphql::dataloader::DataLoader;
@@ -11,7 +12,7 @@ use std::vec::Vec;
 
 use deadpool_redis::Pool as RedisPool;
 
-use crate::auth::{self, AuthHeader};
+use crate::auth::{self, WebToken, WEB_TOKEN_SESS_KEY};
 use crate::graphql::map::MapLoader;
 use crate::graphql::player::PlayerLoader;
 use crate::models::{Banishment, Event, Map, Player, RankedRecord, Record, Role};
@@ -49,10 +50,10 @@ impl QueryRoot {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<Banishment>> {
         let db = ctx.data_unchecked();
-        let Some(auth_header) = ctx.data_unchecked::<Option<AuthHeader>>() else {
-            return Err(async_graphql::Error::new("Forbidden"));
+        let Some(web_token) = ctx.data_opt::<WebToken>() else {
+            return Err(async_graphql::Error::new("Unauthorized"));
         };
-        auth::check_auth_for(db, auth_header.clone(), Role::Admin).await?;
+        auth::website_check_auth_for(db, web_token.clone(), Role::Admin).await?;
         Ok(query_as("SELECT * FROM banishments")
             .fetch_all(&db.mysql_pool)
             .await?)
@@ -337,11 +338,25 @@ fn create_schema(db: Database) -> Schema {
 }
 
 async fn index_graphql(
-    auth: Option<AuthHeader>,
+    session: Session,
     schema: Data<Schema>,
     request: GraphQLRequest,
 ) -> impl Responder {
-    web::Json(schema.execute(request.into_inner().data(auth)).await)
+    let web_token = session
+        .get::<WebToken>(WEB_TOKEN_SESS_KEY)
+        .expect("unable to retrieve web token");
+
+    let request = {
+        let r = request.into_inner();
+
+        if let Some(web_token) = web_token {
+            r.data(web_token)
+        } else {
+            r
+        }
+    };
+
+    web::Json(schema.execute(request).await)
 }
 
 async fn index_playground() -> impl Responder {
