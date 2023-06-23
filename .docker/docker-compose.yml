@@ -47,6 +47,7 @@ services:
     environment:
       RECORDS_MP_APP_CLIENT_ID_FILE: /run/secrets/mp_id
       RECORDS_MP_APP_CLIENT_SECRET_FILE: /run/secrets/mp_secret
+      RECORDS_API_SESSION_KEY_FILE: /run/secrets/sess_key
       RECORDS_API_PORT: ${RECORDS_API_PORT}
       RECORDS_API_TOKEN_TTL: ${RECORDS_API_TOKEN_TTL}
       RECORDS_API_HOST: ${RECORDS_API_HOST}
@@ -68,6 +69,7 @@ services:
     secrets:
       - mp_id
       - mp_secret
+      - sess_key
       - db_url
 
   db:
@@ -121,6 +123,8 @@ volumes:
 secrets:
   mp_id:
     file: ./backend/mp_id
+  sess_key:
+    file: ./backend/sess_key
   mp_secret:
     file: ./backend/mp_secret
   db_url:

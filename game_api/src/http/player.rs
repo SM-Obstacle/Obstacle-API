@@ -1,4 +1,4 @@
-use std::{env, fs::read_to_string, sync::OnceLock};
+use std::sync::OnceLock;
 
 use actix_session::Session;
 use actix_web::{
@@ -17,7 +17,7 @@ use crate::{
     auth::{self, AuthHeader, AuthState, Message, WebToken, TIMEOUT, WEB_TOKEN_SESS_KEY},
     models::{Banishment, Map, Player, Record, Role},
     redis,
-    utils::{format_map_key, json},
+    utils::{format_map_key, json, read_env_var_file},
     Database, RecordsError, RecordsResult,
 };
 
@@ -296,17 +296,12 @@ struct MPServerRes {
 static MP_APP_CLIENT_ID: OnceLock<String> = OnceLock::new();
 static MP_APP_CLIENT_SECRET: OnceLock<String> = OnceLock::new();
 
-fn init_for(v: &str) -> String {
-    let path = env::var(v).unwrap_or_else(|e| panic!("env var {v} not set: {e:?}"));
-    read_to_string(path).unwrap_or_else(|e| panic!("unable to read from {v} path: {e:?}"))
-}
-
 fn get_mp_app_client_id() -> &'static str {
-    MP_APP_CLIENT_ID.get_or_init(|| init_for("RECORDS_MP_APP_CLIENT_ID_FILE"))
+    MP_APP_CLIENT_ID.get_or_init(|| read_env_var_file("RECORDS_MP_APP_CLIENT_ID_FILE"))
 }
 
 fn get_mp_app_client_secret() -> &'static str {
-    MP_APP_CLIENT_SECRET.get_or_init(|| init_for("RECORDS_MP_APP_CLIENT_SECRET_FILE"))
+    MP_APP_CLIENT_SECRET.get_or_init(|| read_env_var_file("RECORDS_MP_APP_CLIENT_SECRET_FILE"))
 }
 
 async fn test_access_token(

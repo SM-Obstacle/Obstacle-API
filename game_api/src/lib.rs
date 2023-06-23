@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use deadpool::managed::PoolError;
 use deadpool_redis::redis::RedisError;
 pub use deadpool_redis::Pool as RedisPool;
+use serde::Serialize;
 pub use sqlx::MySqlPool;
 use std::io;
 use thiserror::Error;
@@ -16,9 +17,10 @@ pub mod models;
 mod redis;
 mod utils;
 
-pub use auth::{get_tokens_ttl, AuthState, UPDATE_RATE};
+pub use auth::{get_tokens_ttl, AuthState};
 pub use graphql::graphql_route;
 pub use http::api_route;
+pub use utils::{get_env_var, get_env_var_as, read_env_var_file};
 
 #[derive(Error, Debug)]
 pub enum RecordsError {
@@ -28,7 +30,7 @@ pub enum RecordsError {
     MySql(#[from] sqlx::Error),
     #[error("unknown error: {0}")]
     Unknown(String),
-    #[error("banned player")]
+    #[error("banned player {0}")]
     BannedPlayer(Banishment),
     #[error("unauthorized")]
     Unauthorized,
@@ -77,7 +79,12 @@ impl actix_web::ResponseError for RecordsError {
                 actix_web::HttpResponse::Unauthorized().body("unauthorized action")
             }
             Self::BannedPlayer(ban) => {
-                actix_web::HttpResponse::Forbidden().body(format!("banned player: {ban}"))
+                #[derive(Serialize)]
+                struct BannedPlayerResponse<'a> {
+                    message: String,
+                    ban: &'a Banishment,
+                }
+                actix_web::HttpResponse::Forbidden().json(BannedPlayerResponse { message: ban.to_string(), ban })
             }
             Self::Timeout => actix_web::HttpResponse::RequestTimeout().finish(),
             Self::StateAlreadyReceived(instant) => actix_web::HttpResponse::BadRequest()

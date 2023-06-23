@@ -10,11 +10,13 @@ use actix_web::{
     App, HttpResponse, HttpServer,
 };
 use deadpool::Runtime;
-use game_api::{api_route, get_tokens_ttl, graphql_route, AuthState, Database, RecordsResult};
+use game_api::{
+    api_route, get_tokens_ttl, graphql_route, read_env_var_file, AuthState, Database, RecordsResult,
+};
+#[cfg(not(feature = "localhost_test"))]
+use game_api::{get_env_var, get_env_var_as};
 use sqlx::mysql;
 use std::env::var;
-#[cfg(not(feature = "localhost_test"))]
-use std::fs::read_to_string;
 use std::time::Duration;
 use tracing_actix_web::TracingLogger;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -27,12 +29,9 @@ async fn main() -> RecordsResult<()> {
         .unwrap_or_else(|_| "tracing=info,warp=info,game_api=info".to_owned());
 
     #[cfg(feature = "localhost_test")]
-    let port = 3001u16;
+    let port = 3001;
     #[cfg(not(feature = "localhost_test"))]
-    let port = var("RECORDS_API_PORT")
-        .expect("RECORDS_API_PORT env var is not set")
-        .parse::<u16>()
-        .expect("RECORDS_API_PORT env var should be u16");
+    let port = get_env_var_as("RECORDS_API_PORT");
 
     let mysql_pool = mysql::MySqlPoolOptions::new().acquire_timeout(Duration::new(10, 0));
     #[cfg(feature = "localhost_test")]
@@ -41,9 +40,7 @@ async fn main() -> RecordsResult<()> {
         .await?;
     #[cfg(not(feature = "localhost_test"))]
     let mysql_pool = mysql_pool
-        .connect(&read_to_string(
-            var("DATABASE_URL").expect("DATABASE_URL env var is not set"),
-        )?)
+        .connect(&read_env_var_file("DATABASE_URL"))
         .await?;
 
     let redis_pool = {
@@ -51,7 +48,7 @@ async fn main() -> RecordsResult<()> {
             #[cfg(feature = "localhost_test")]
             url: Some("redis://127.0.0.1:6379/".to_string()),
             #[cfg(not(feature = "localhost_test"))]
-            url: Some(var("REDIS_URL").expect("REDIS_URL env var is not set")),
+            url: Some(get_env_var("REDIS_URL")),
             connection: None,
             pool: None,
         };
@@ -78,9 +75,9 @@ async fn main() -> RecordsResult<()> {
     let auth_state = Data::new(AuthState::default());
 
     #[cfg(not(feature = "localhost_test"))]
-    let localhost_origin = var("RECORDS_API_HOST").expect("RECORDS_API_HOST env var is not set");
+    let localhost_origin = get_env_var("RECORDS_API_HOST");
 
-    let sess_key = Key::generate();
+    let sess_key = Key::from(read_env_var_file("RECORDS_API_SESSION_KEY_FILE").as_bytes());
 
     HttpServer::new(move || {
         let cors = Cors::default()

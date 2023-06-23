@@ -11,3 +11,4 @@ db_*
 redis_*
 *.conf*
 mp_*
+sess_key

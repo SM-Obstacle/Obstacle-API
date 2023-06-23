@@ -1,3 +1,5 @@
+use std::{env, fmt::Debug, fs::read_to_string, str::FromStr};
+
 use actix_web::{HttpResponse, Responder};
 use rand::Rng;
 use serde::Serialize;
@@ -48,4 +50,37 @@ pub fn generate_token(len: usize) -> String {
         .map(char::from)
         .take(len)
         .collect()
+}
+
+/// Retrieves the string value of the given environment variable.
+///
+/// # Panic
+///
+/// This function panics at runtime if it fails to read the environment variable. It has this
+/// behavior because all the environment variable of the Records API are read as configuration.
+pub fn get_env_var(v: &str) -> String {
+    env::var(v).unwrap_or_else(|e| panic!("unable to retrieve env var {v}: {e:?}"))
+}
+
+pub fn get_env_var_as<T>(v: &str) -> T
+where
+    T: FromStr,
+    <T as FromStr>::Err: Debug,
+{
+    get_env_var(v).parse().unwrap_or_else(|e| {
+        panic!(
+            "unable to parse {v} env var to {}: {e:?}",
+            std::any::type_name::<T>()
+        )
+    })
+}
+
+/// Reads the content of the path specified in the given environment variable, and returns it.
+///
+/// # Panic
+///
+/// This function panics at runtime if it fails to read the environment variable. It has this
+/// behavior because all the environment variable of the Records API are read as configuration.
+pub fn read_env_var_file(v: &str) -> String {
+    read_to_string(get_env_var(v)).unwrap_or_else(|e| panic!("unable to read from {v} path: {e:?}"))
 }

@@ -9,8 +9,8 @@
 //! * The Maniaplanet token, used by the Obstacle gamemode to register the in-game information
 //! * The website token, used by the website to retrieve sensitive information
 //!
-//! For every API route that requires authentication, it will retrieve the `Authorization` header
-//! bound with the `"login"` provided in the request payload, to check for the player's authenticity.
+//! For every API route that requires authentication, it will retrieve the `Authorization`
+//! and `PlayerLogin` headers provided with the request, to check for the player's authenticity.
 //! This goes for the Obstacle gamemode, but for the website, it will be a session id cookie
 //! sent by the browser.
 //!
@@ -19,17 +19,19 @@
 //!
 //! The procedure to initialize the tokens uses the OAuth 2.0 protocol provided by ManiaPlanet.
 //! It has only access to the `basic` scope, meaning the name of the player, his login,
-//! and his zone path. For now, this procedure is done from the Obstacle Titlepack. It is as follows:
+//! and his zone path. We don't use the ManiaPlanet OAuth system to retrieve information about
+//! the player, only to associate it with the Obstacle tokens.
+//! For now, this procedure is done from the Obstacle Titlepack. It is as follows:
 //!
 //! 1. The script generates a random string named `state`
 //! 2. It sends a POST request to `/player/get_token`, with the corresponding payload
 //! 3. It waits a bit, then opens a URL for the player to
-//! https://prod.live.maniaplanet.com/login/oauth/authorize?response_type=token&client_id=de1ce3ba8e&client_secret=52877e3c1aa428eeb75a042c52caa01fb74a7526&redirect_uri=https://obstacle.titlepack.io/give_token&state=`state`&scope=basic
+//! https://prod.live.maniaplanet.com/login/oauth/authorize?response_type=code&client_id=de1ce3ba8e&redirect_uri=https://obstacle.titlepack.io/give_token&state=`state`&scope=basic
 //! 4. The player logs in with his ManiaPlanet account, and is redirected to the page at
 //! https://obstacle.titlepack.io/give_token URL.
 //! 5. This page executes a JavaScript code that sends a POST request to `/player/give_token`
-//! with the access token provided by the ManiaPlanet OAuth system and the same `state`.
-//! 6. The authentication system validates the provided access token, and generates the 2 tokens
+//! with the code provided by the ManiaPlanet OAuth system and the same `state`.
+//! 6. The authentication system validates the provided code, and generates the 2 tokens
 //! for the player.
 //! 7. The POST `/player/give_token` request returns a `200 OK` response with a `Set-Cookie` header
 //! containing the encoded session ID with the website token stored in it bound with the player's login
@@ -40,7 +42,10 @@
 //! will return an `Unauthorized` error. The gamemode script will have to execute the procedure
 //! from above.
 //!
-//! See https://github.com/maniaplanet/documentation/blob/master/13.web-services/01.oauth2/docs.md#implicit-flow
+//! So in the documentation, the `/player/give_token` endpoint represents the POST request sent by
+//! the browser ; while `/player/get_token` is the one sent by Obstacle gamemode.
+//!
+//! See https://github.com/maniaplanet/documentation/blob/master/13.web-services/01.oauth2/docs.md#auth-code-flow-or-explicit-flow-or-server-side-flow
 //! for more information.
 
 use std::future::{ready, Ready};
@@ -58,40 +63,36 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::Level;
 
-use crate::utils::{format_mp_token_key, format_web_token_key, generate_token};
+use crate::utils::{format_mp_token_key, format_web_token_key, generate_token, get_env_var_as};
 use crate::{http::player, models::Role, Database, RecordsError, RecordsResult};
 
 static EXPIRES_IN: OnceLock<u32> = OnceLock::new();
 
+/// Returns the time-to-live of all the generated Obstacle tokens.
 pub fn get_tokens_ttl() -> u32 {
-    *EXPIRES_IN.get_or_init(|| {
-        std::env::var("RECORDS_API_TOKEN_TTL")
-            .expect("RECORDS_API_TOKEN_TTL env var is not set")
-            .parse()
-            .expect("RECORDS_API_TOKEN_TTL should be u32")
-    })
+    *EXPIRES_IN.get_or_init(|| get_env_var_as("RECORDS_API_TOKEN_TTL"))
 }
 
 pub const WEB_TOKEN_SESS_KEY: &str = "__obs_web_token";
 
-/// The state expires in 5 minutes.
+/// The state string expires in 5 minutes.
+///
+/// This is typically used to set a timeout for the POST /player/get_token request sent by
+/// the Obstacle gamemode, waiting for the browser of the player to make the
+/// POST /player/give_token request with the same state string.
 pub const TIMEOUT: Duration = Duration::from_secs(60 * 5);
 
-/// The server auth state is updated every day.
-///
-/// This is used to remove expired tokens.
-pub const UPDATE_RATE: Duration = Duration::from_secs(60 * 60 * 24);
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebToken {
-    pub login: String,
-    pub token: String,
-}
-
+/// Represents the current state of a communication between the /player/get_token and
+/// /player/give_token endpoints.
 #[derive(Debug)]
 struct TokenState {
+    /// The sender of the /player/get_token endpoint.
     tx: Sender<Message>,
+    /// The receiver of the /player/get_token endpoint.
     rx: Receiver<Message>,
+    /// The instant where this state has been initialized. This is used to prevent
+    /// endpoints to communicate with a `state` string that has already been used for
+    /// other endpoints.
     instant: DateTime<Utc>,
 }
 
@@ -105,29 +106,35 @@ impl TokenState {
     }
 }
 
+/// Represents the messages that are exchanged between the /player/get_token and /player/give_token
+/// endpoints.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Message {
+    /// The /player/give_token gives the code provided by the ManiaPlanet OAuth system
     MPCode(String),
+    /// After checking for the code provided by the /player/give_token endpoint, the /player/get_token
+    /// endpoint checks it, and returned an error
     InvalidMPCode,
+    /// The /player/get_token endpoint received the code from the /player/give_token endpoint, and
+    /// has successfuly generated the Obstacle tokens for the player. It sends back the new website
+    /// token of the player.
     Ok(WebToken),
 }
 
-/// Holds the state of the authentication system.
+/// Holds the authentication system state between the endpoints.
 ///
-/// The state is used to prevent multiple requests to the /new_token endpoint
-/// with the same state. This is to prevent CSRF attacks.
-///
-/// The state is also used to keep track of the client tokens. This is to
-/// prevent the same client from logging in multiple times.
+/// With its internal hash-map, it allows the /player/get_token and /player_give_token endpoints
+/// to communicate with each other, by providing the same `state` string.
 #[derive(Debug, Default)]
 pub struct AuthState {
-    token_states_map: Mutex<HashMap<String, TokenState>>,
+    states_map: Mutex<HashMap<String, TokenState>>,
 }
 
 impl AuthState {
     /// Removes a state from the state map.
     pub async fn remove_state(&self, state: String) {
-        let mut state_map = self.token_states_map.lock().await;
+        let mut state_map = self.states_map.lock().await;
         state_map.remove(&state);
         tracing::event!(
             Level::INFO,
@@ -137,6 +144,16 @@ impl AuthState {
         );
     }
 
+    /// Called by the `/player/get_token` endpoint, this method is used to retrieve
+    /// the crossed channel used to communicate with the `/player/give_token` endpoint.
+    ///
+    /// This method should be called before the `/player/give_token` endpoint calls the
+    /// [`Self::browser_connected_for`] method.
+    ///
+    /// # Arguments
+    ///
+    /// * `state`, the state string, that is the same as the one retrieved by the `/player/give_token`
+    /// endpoint.
     pub async fn connect_with_browser(
         &self,
         state: String,
@@ -147,7 +164,7 @@ impl AuthState {
 
         // store channel in the state_map
         {
-            let mut state_map = self.token_states_map.lock().await;
+            let mut state_map = self.states_map.lock().await;
             let state_info = state.clone();
             if let Some(TokenState { instant, .. }) = state_map.get(&state) {
                 return Err(RecordsError::StateAlreadyReceived(*instant));
@@ -164,12 +181,20 @@ impl AuthState {
         Ok((tx1, rx2))
     }
 
+    /// Called by the `/player/give_token` endpoint, this method is used to send the state
+    /// and code received from ManiaPlanet OAuth system, to the `/player/get_token` endpoint.
+    ///
+    /// After a success communication with the other endpoint, the method returns the web token
+    /// of the user who has signed in. This is then stored in his session.
+    ///
+    /// This method should be called after the `/player/get_token` endpoint called the
+    /// [`Self::connect_with_browser`] method.
     pub async fn browser_connected_for(
         &self,
         state: String,
         code: String,
     ) -> RecordsResult<WebToken> {
-        let mut state_map = self.token_states_map.lock().await;
+        let mut state_map = self.states_map.lock().await;
 
         let web_token = if let Some(TokenState { tx, rx, .. }) = state_map.remove(&state) {
             tx.send(Message::MPCode(code))
@@ -212,8 +237,8 @@ pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String,
     let web_token = generate_token(32);
 
     let mut connection = db.redis_pool.get().await?;
-    let mp_key = format_mp_token_key(&login);
-    let web_key = format_web_token_key(&login);
+    let mp_key = format_mp_token_key(login);
+    let web_key = format_web_token_key(login);
 
     let ex = get_tokens_ttl() as usize;
 
@@ -228,7 +253,7 @@ pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String,
 async fn inner_check_auth_for(
     db: &Database,
     login: String,
-    token: &str,
+    token: String,
     required: Role,
     key: String,
 ) -> RecordsResult<()> {
@@ -264,20 +289,31 @@ async fn inner_check_auth_for(
     Ok(())
 }
 
+/// Checks for a successful authentication for the player with its login and Website token.
+///
+/// This is generally done when retrieving or updating information with the GraphQL API.
+/// It has the same return value behavior than [`check_auth_for`].
 pub async fn website_check_auth_for(
     db: &Database,
-    web_token: WebToken,
+    WebToken { login, token }: WebToken,
     required: Role,
 ) -> RecordsResult<()> {
-    let key = format_web_token_key(&web_token.login);
-    inner_check_auth_for(db, web_token.login, &web_token.token, required, key).await
+    let key = format_web_token_key(&login);
+    inner_check_auth_for(db, login, token, required, key).await
 }
 
 /// Checks for a successful authentication for the player with its login and ManiaPlanet token.
 ///
-/// * If the token is invalid, or the player is banned, it returns an `Unauthorized` error
+/// # Arguments
+///
+/// * `_: AuthHeader`: the authentication headers retrieved from the HTTP request.
+/// * `required: Role` the required role to be authorized.
+///
+/// # Returns
+///
+/// * If the token is invalid, it returns an `Unauthorized` error
 /// * If it is valid, but the player doesn't exist in the database, it returns a `PlayerNotFound` error
-/// * If the player hasn't the required role, it returns a `Forbidden` error
+/// * If the player hasn't the required role, or is banned, it returns a `Forbidden` error
 /// * Otherwise, it returns Ok(())
 pub async fn check_auth_for(
     db: &Database,
@@ -285,9 +321,10 @@ pub async fn check_auth_for(
     required: Role,
 ) -> RecordsResult<()> {
     let key = format_mp_token_key(&login);
-    inner_check_auth_for(db, login, &token, required, key).await
+    inner_check_auth_for(db, login, token, required, key).await
 }
 
+/// Represents the `Authorization` and `PlayerLogin` headers retrieved from an HTTP request.
 #[derive(Clone)]
 pub struct AuthHeader {
     pub login: String,
@@ -315,4 +352,11 @@ impl FromRequest for AuthHeader {
 
         ready(Ok(Self { login, token }))
     }
+}
+
+/// Represents the information stored in the session cookie of the user sent by the browser.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebToken {
+    pub login: String,
+    pub token: String,
 }
