@@ -1,3 +1,5 @@
+use std::{env, fs::read_to_string, sync::OnceLock};
+
 use actix_session::Session;
 use actix_web::{
     web::{self, Data, Json, Query},
@@ -271,10 +273,63 @@ async fn player_finished(
     })
 }
 
+#[derive(Serialize)]
+struct MPAccessTokenBody<'a> {
+    grant_type: String,
+    client_id: &'a str,
+    client_secret: &'a str,
+    code: String,
+    redirect_uri: String,
+}
+
+#[derive(Deserialize)]
+struct MPAccessTokenResponse {
+    access_token: String,
+}
+
 #[derive(Deserialize, Debug)]
 struct MPServerRes {
     #[serde(alias = "login")]
     res_login: String,
+}
+
+static MP_APP_CLIENT_ID: OnceLock<String> = OnceLock::new();
+static MP_APP_CLIENT_SECRET: OnceLock<String> = OnceLock::new();
+
+fn init_for(v: &str) -> String {
+    let path = env::var(v).unwrap_or_else(|e| panic!("env var {v} not set: {e:?}"));
+    read_to_string(path).unwrap_or_else(|e| panic!("unable to read from {v} path: {e:?}"))
+}
+
+fn get_mp_app_client_id() -> &'static str {
+    MP_APP_CLIENT_ID.get_or_init(|| init_for("RECORDS_MP_APP_CLIENT_ID_FILE"))
+}
+
+fn get_mp_app_client_secret() -> &'static str {
+    MP_APP_CLIENT_SECRET.get_or_init(|| init_for("RECORDS_MP_APP_CLIENT_SECRET_FILE"))
+}
+
+async fn test_access_token(
+    client: &Client,
+    login: &str,
+    code: String,
+    redirect_uri: String,
+) -> RecordsResult<bool> {
+    let MPAccessTokenResponse { access_token } = client
+        .post("https://prod.live.maniaplanet.com/login/oauth2/access_token")
+        .form(&MPAccessTokenBody {
+            grant_type: "authorization_code".to_owned(),
+            client_id: get_mp_app_client_id(),
+            client_secret: get_mp_app_client_secret(),
+            code,
+            redirect_uri,
+        })
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    check_mp_token(client, login, access_token).await
 }
 
 async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsResult<bool> {
@@ -296,6 +351,7 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
 pub struct GetTokenBody {
     login: String,
     state: String,
+    redirect_uri: String,
 }
 
 #[derive(Serialize)]
@@ -313,8 +369,8 @@ pub async fn get_token(
 
     // retrieve access_token from browser redirection
     let (tx, rx) = state.connect_with_browser(body.state.clone()).await?;
-    let access_token = match timeout(TIMEOUT, rx).await {
-        Ok(Ok(Message::MPAccessToken(access_token))) => access_token,
+    let code = match timeout(TIMEOUT, rx).await {
+        Ok(Ok(Message::MPCode(access_token))) => access_token,
         _ => {
             tracing::event!(
                 Level::WARN,
@@ -329,9 +385,9 @@ pub async fn get_token(
     let err_msg = "/get_token rx should not be dropped at this point";
 
     // check access_token and generate new token for player ...
-    if !check_mp_token(&client, &body.login, access_token).await? {
-        tx.send(Message::InvalidMPToken).expect(err_msg);
-        return Err(RecordsError::InvalidMPToken);
+    if !test_access_token(&client, &body.login, code, body.redirect_uri).await? {
+        tx.send(Message::InvalidMPCode).expect(err_msg);
+        return Err(RecordsError::InvalidMPCode);
     }
 
     let (mp_token, web_token) = auth::gen_token_for(&db, &body.login).await?;
@@ -346,7 +402,7 @@ pub async fn get_token(
 
 #[derive(Deserialize)]
 pub struct GiveTokenBody {
-    access_token: String,
+    code: String,
     state: String,
 }
 
@@ -362,9 +418,7 @@ pub async fn post_give_token(
     body: Json<GiveTokenBody>,
 ) -> RecordsResult<impl Responder> {
     let body = body.into_inner();
-    let web_token = state
-        .browser_connected_for(body.state, body.access_token)
-        .await?;
+    let web_token = state.browser_connected_for(body.state, body.code).await?;
     session
         .insert(WEB_TOKEN_SESS_KEY, web_token)
         .expect("unable to insert session web token");

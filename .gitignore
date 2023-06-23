@@ -10,3 +10,4 @@ Cargo.lock
 db_*
 redis_*
 *.conf*
+mp_*

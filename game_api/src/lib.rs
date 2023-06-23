@@ -36,12 +36,10 @@ pub enum RecordsError {
     Timeout,
     #[error("the state has already been received by the server")]
     StateAlreadyReceived(DateTime<Utc>),
-    #[error("missing the /player/finished request with state `{0}`")]
-    MissingPlayerFinishedReq(String),
     #[error("missing the /player/get_token request")]
     MissingGetTokenReq,
-    #[error("invalid ManiaPlanet access token on /gen_new_token request")]
-    InvalidMPToken,
+    #[error("invalid ManiaPlanet code on /player/give_token request")]
+    InvalidMPCode,
     #[error("player not found in database: `{0}`")]
     PlayerNotFound(String),
     #[error("player not banned: `{0}`")]
@@ -84,13 +82,10 @@ impl actix_web::ResponseError for RecordsError {
             Self::Timeout => actix_web::HttpResponse::RequestTimeout().finish(),
             Self::StateAlreadyReceived(instant) => actix_web::HttpResponse::BadRequest()
                 .body(format!("state already received at {instant:?}")),
-            Self::MissingPlayerFinishedReq(s) => {
-                actix_web::HttpResponse::BadRequest().body(format!("missing /player/finished request with state `{s}`"))
-            }
             Self::MissingGetTokenReq => {
                 actix_web::HttpResponse::BadRequest().body("missing /player/get_token request")
             }
-            Self::InvalidMPToken => {
+            Self::InvalidMPCode => {
                 actix_web::HttpResponse::BadRequest().body("invalid MP access token")
             }
             Self::MySql(err) => actix_web::HttpResponse::BadRequest().body(err.to_string()),

@@ -107,8 +107,8 @@ impl TokenState {
 
 #[derive(Debug)]
 pub enum Message {
-    MPAccessToken(String),
-    InvalidMPToken,
+    MPCode(String),
+    InvalidMPCode,
     Ok(WebToken),
 }
 
@@ -167,18 +167,18 @@ impl AuthState {
     pub async fn browser_connected_for(
         &self,
         state: String,
-        access_token: String,
+        code: String,
     ) -> RecordsResult<WebToken> {
         let mut state_map = self.token_states_map.lock().await;
 
         let web_token = if let Some(TokenState { tx, rx, .. }) = state_map.remove(&state) {
-            tx.send(Message::MPAccessToken(access_token))
+            tx.send(Message::MPCode(code))
                 .expect("/player/get_token rx should not be dropped at this point");
 
             match timeout(TIMEOUT, rx).await {
                 Ok(Ok(res)) => match res {
                     Message::Ok(web_token) => web_token,
-                    Message::InvalidMPToken => return Err(RecordsError::InvalidMPToken),
+                    Message::InvalidMPCode => return Err(RecordsError::InvalidMPCode),
                     _ => unreachable!(),
                 },
                 _ => {

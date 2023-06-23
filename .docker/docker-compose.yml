@@ -45,6 +45,8 @@ services:
       args:
         RECORDS_API_PORT: ${RECORDS_API_PORT}
     environment:
+      RECORDS_MP_APP_CLIENT_ID_FILE: /run/secrets/mp_id
+      RECORDS_MP_APP_CLIENT_SECRET_FILE: /run/secrets/mp_secret
       RECORDS_API_PORT: ${RECORDS_API_PORT}
       RECORDS_API_TOKEN_TTL: ${RECORDS_API_TOKEN_TTL}
       RECORDS_API_HOST: ${RECORDS_API_HOST}
@@ -64,6 +66,8 @@ services:
       - db
       - redis
     secrets:
+      - mp_id
+      - mp_secret
       - db_url
 
   db:
@@ -115,6 +119,10 @@ volumes:
   db-data: {}
 
 secrets:
+  mp_id:
+    file: ./backend/mp_id
+  mp_secret:
+    file: ./backend/mp_secret
   db_url:
     file: ./backend/db_url
   db_db:
