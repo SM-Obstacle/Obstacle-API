@@ -28,11 +28,7 @@ pub fn player_scope() -> Scope {
         .route("/update", web::post().to(update))
         .route("/finished", web::post().to(finished))
         .route("/get_token", web::post().to(get_token))
-        .service(
-            web::resource("/give_token")
-                .route(web::post().to(post_give_token))
-                .route(web::get().to(get_give_token)),
-        )
+        .route("/give_token", web::post().to(post_give_token))
         .route("/times", web::post().to(times))
         .route("/info", web::get().to(info))
 }
@@ -339,7 +335,7 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
         _ => return Ok(false),
     };
 
-    Ok(res_login == login)
+    Ok(res_login.to_lowercase() == login.to_lowercase())
 }
 
 #[derive(Deserialize)]
@@ -418,12 +414,6 @@ pub async fn post_give_token(
         .insert(WEB_TOKEN_SESS_KEY, web_token)
         .expect("unable to insert session web token");
     Ok(HttpResponse::Ok().finish())
-}
-
-pub async fn get_give_token() -> impl Responder {
-    HttpResponse::Ok()
-        .content_type("text/html")
-        .body(include_str!("../../public/give_token.html"))
 }
 
 #[derive(Serialize)]

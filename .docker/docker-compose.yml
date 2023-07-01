@@ -19,7 +19,6 @@ services:
     depends_on:
       - backend
       - website
-      - adminer
 
   website:
     build:
@@ -40,10 +39,7 @@ services:
   backend:
     build:
       context: ../
-      target: development
       dockerfile: ./.docker/backend/Dockerfile
-      args:
-        RECORDS_API_PORT: ${RECORDS_API_PORT}
     environment:
       RECORDS_MP_APP_CLIENT_ID_FILE: /run/secrets/mp_id
       RECORDS_MP_APP_CLIENT_SECRET_FILE: /run/secrets/mp_secret
@@ -56,13 +52,13 @@ services:
       GQL_ENDPOINT: /api/graphql
     expose:
       - "${RECORDS_API_PORT}"
+    volumes:
+      - ../game_api/src:/code/src/
+      - backend-cache:/code/target/
     networks:
       - redis-side
       - db-side
       - nginx-side
-    volumes:
-      - ../game_api/src/:/records/src/
-      - backend-cache:/records/target
     depends_on:
       - db
       - redis
@@ -82,8 +78,8 @@ services:
       MARIADB_PASSWORD_FILE: /run/secrets/db_pw
     networks:
       - db-side
-    expose:
-      - "3306"
+    ports:
+      - "${DB_PORT}:3306"
     secrets:
       - db_db
       - db_root_pw
@@ -92,15 +88,6 @@ services:
     volumes:
       - ./db/entrypoint:/docker-entrypoint-initdb.d/
       - db-data:/var/lib/mysql
-
-  adminer:
-    image: adminer
-    restart: always
-    networks:
-      - db-side
-      - nginx-side
-    expose:
-      - "8080"
 
   redis:
     image: redis:alpine

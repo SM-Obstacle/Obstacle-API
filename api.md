@@ -41,7 +41,7 @@ Example response:
             "rank": 1,
             "login": "wazas",
             "nickname": "...",
-            "time": 039483
+            "time": 39483
         },
         // ...
     ]
@@ -54,7 +54,7 @@ This is the entrypoint for the GraphQL playground.
 
 ## POST `/graphql`
 
-This is the entrypoint for a GraphQL request. Use the playground for the schema.
+This is the entrypoint for a GraphQL request. Use the playground to see the schema.
 
 ## POST `/player/update`
 
@@ -100,7 +100,7 @@ Body:
 ```
 
 An invalid `login` or `map_uid`, or the `cps` array length being greater than the cps number of the map,
-or the sum of the `cps` times being greater than the `time` provided, will result to a `400 Bad Request` error.
+or the sum of the `cps` times being different than the `time` provided, will result to a `400 Bad Request` error.
 
 Example response:
 
@@ -123,14 +123,15 @@ with the Obstacle token of the player.
 Requests a new token for a player. This request must be given with a `state` string, a randomly generated string,
 that will be the same as the `<YOUR_STATE>` in this link when you open it to the player:
 
-`https://prod.live.maniaplanet.com/login/oauth2/authorize?response_type=token&client_id=de1ce3ba8e&client_secret=52877e3c1aa428eeb75a042c52caa01fb74a7526&redirect_uri=http://localhost/player/give_token&state=<YOUR_STATE>&scope=basic`
+`https://prod.live.maniaplanet.com/login/oauth2/authorize?response_type=code&client_id=de1ce3ba8e&redirect_uri=https://obstacle.titlepack.io/give_token&state=<YOUR_STATE>&scope=basic`
 
 Body:
 
 ```json
 {
     "login": "Player's login",
-    "state": "The randomly generated string"
+    "state": "The randomly generated string",
+    "redirect_uri": "https://obstacle.titlepack.io/give_token"
 }
 ```
 
