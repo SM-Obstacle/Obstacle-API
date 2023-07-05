@@ -101,10 +101,9 @@ struct PlayerRatingResponse {
 pub async fn player_rating(
     db: Data<Database>,
     auth: AuthHeader,
-    body: Json<PlayerRatingBody>,
+    Json(body): Json<PlayerRatingBody>,
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Player).await?;
-    let body = body.into_inner();
 
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.login).await? else {
         return Err(RecordsError::PlayerNotFound(body.login));
@@ -182,10 +181,8 @@ struct RatingsResponse {
 pub async fn ratings(
     db: Data<Database>,
     auth: AuthHeader,
-    body: Json<RatingsBody>,
+    Json(body): Json<RatingsBody>,
 ) -> RecordsResult<impl Responder> {
-    let body = body.into_inner();
-
     let Some(player) = player::get_player_from_login(&db, &body.login).await? else {
         return Err(RecordsError::PlayerNotFound(body.login));
     };
@@ -258,9 +255,10 @@ struct RatingResponse {
     ratings: Vec<Rating>,
 }
 
-pub async fn rating(db: Data<Database>, body: Query<RatingBody>) -> RecordsResult<impl Responder> {
-    let body = body.into_inner();
-
+pub async fn rating(
+    db: Data<Database>,
+    Query(body): Query<RatingBody>,
+) -> RecordsResult<impl Responder> {
     let Some((map_name, author_login)) = sqlx::query_as(
         "SELECT m.name, login FROM maps m
         INNER JOIN players p ON p.id = player_id
@@ -320,10 +318,9 @@ struct RateResponse {
 pub async fn rate(
     db: Data<Database>,
     auth: AuthHeader,
-    body: Json<RateBody>,
+    Json(body): Json<RateBody>,
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Player).await?;
-    let body = body.into_inner();
 
     let Some(Player { id: player_id, login: player_login, .. }) = sqlx::query_as(
         "SELECT * FROM players WHERE login = ?")
@@ -487,10 +484,9 @@ struct ResetRatingsResponse {
 pub async fn reset_ratings(
     db: Data<Database>,
     auth: AuthHeader,
-    body: Json<ResetRatingsBody>,
+    Json(body): Json<ResetRatingsBody>,
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Admin).await?;
-    let body = body.into_inner();
 
     let Some((map_id, map_name, author_login)) = sqlx::query_as(
         "SELECT m.id, m.name, login

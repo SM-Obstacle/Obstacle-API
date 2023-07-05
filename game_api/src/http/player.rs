@@ -33,7 +33,7 @@ pub fn player_scope() -> Scope {
         .route("/info", web::get().to(info))
 }
 
-#[derive(Serialize, Deserialize, Clone, FromRow)]
+#[derive(Serialize, Deserialize, Clone, FromRow, Debug)]
 pub struct UpdatePlayerBody {
     pub login: String,
     pub name: String,
@@ -70,9 +70,9 @@ pub async fn get_or_insert(db: &Database, body: UpdatePlayerBody) -> RecordsResu
 pub async fn update(
     db: Data<Database>,
     auth: AuthHeader,
-    body: Json<UpdatePlayerBody>,
+    Json(body): Json<UpdatePlayerBody>,
 ) -> RecordsResult<impl Responder> {
-    let body = body.into_inner();
+    println!("{body:?}");
 
     match auth::check_auth_for(&db, auth, Role::Player).await {
         Ok(()) => update_or_insert(&db, body).await?,
@@ -105,7 +105,7 @@ pub async fn update_or_insert(db: &Database, body: UpdatePlayerBody) -> RecordsR
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct HasFinishedBody {
     pub time: i32,
     pub respawn_count: i32,
@@ -127,11 +127,11 @@ pub struct HasFinishedResponse {
 pub async fn finished(
     auth: AuthHeader,
     db: Data<Database>,
-    body: Json<HasFinishedBody>,
+    Json(body): Json<HasFinishedBody>,
 ) -> RecordsResult<impl Responder> {
-    auth::check_auth_for(&db, auth, Role::Player).await?;
+    println!("{body:?}");
 
-    let body = body.into_inner();
+    auth::check_auth_for(&db, auth, Role::Player).await?;
 
     let finished = player_finished(db, body).await?;
     json(finished)
@@ -354,10 +354,8 @@ pub async fn get_token(
     db: Data<Database>,
     client: Data<Client>,
     state: Data<AuthState>,
-    body: Json<GetTokenBody>,
+    Json(body): Json<GetTokenBody>,
 ) -> RecordsResult<impl Responder> {
-    let body = body.into_inner();
-
     // retrieve access_token from browser redirection
     let (tx, rx) = state.connect_with_browser(body.state.clone()).await?;
     let code = match timeout(TIMEOUT, rx).await {
@@ -406,9 +404,8 @@ pub struct GiveTokenResponse {
 pub async fn post_give_token(
     session: Session,
     state: Data<AuthState>,
-    body: Json<GiveTokenBody>,
+    Json(body): Json<GiveTokenBody>,
 ) -> RecordsResult<impl Responder> {
-    let body = body.into_inner();
     let web_token = state.browser_connected_for(body.state, body.code).await?;
     session
         .insert(WEB_TOKEN_SESS_KEY, web_token)
@@ -438,11 +435,9 @@ struct TimesResponseItem {
 async fn times(
     auth: AuthHeader,
     db: Data<Database>,
-    body: Json<TimesBody>,
+    Json(body): Json<TimesBody>,
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Player).await?;
-
-    let body = body.into_inner();
 
     let Some(player) = get_player_from_login(&db, &body.login).await? else {
         return Err(RecordsError::PlayerNotFound(body.login));
@@ -486,9 +481,10 @@ struct InfoResponse {
     role_name: String,
 }
 
-pub async fn info(db: Data<Database>, body: Query<InfoBody>) -> RecordsResult<impl Responder> {
-    let body = body.into_inner();
-
+pub async fn info(
+    db: Data<Database>,
+    Query(body): Query<InfoBody>,
+) -> RecordsResult<impl Responder> {
     let Some(info) = sqlx::query_as::<_, InfoResponse>(
         "SELECT *, (SELECT role_name FROM role WHERE id = role) as role_name
         FROM players WHERE login = ?")

@@ -128,7 +128,7 @@ impl Player {
                 GROUP BY map_id
             ) t ON t.id = r.id AND t.map_id = r.map_id
             WHERE player_id = ?
-            ORDER BY id DESC LIMIT 100",
+            ORDER BY record_date DESC LIMIT 100",
         )
         .bind(self.id)
         .bind(self.id)

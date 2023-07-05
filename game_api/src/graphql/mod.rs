@@ -243,7 +243,7 @@ impl QueryRoot {
                 SELECT MAX(id) FROM records
                 WHERE player_id = r.player_id AND map_id = r.map_id
             )
-            ORDER BY id DESC
+            ORDER BY record_date DESC
             LIMIT 100",
         )
         .fetch_all(mysql_pool)
@@ -340,19 +340,17 @@ fn create_schema(db: Database) -> Schema {
 async fn index_graphql(
     session: Session,
     schema: Data<Schema>,
-    request: GraphQLRequest,
+    GraphQLRequest(request): GraphQLRequest,
 ) -> impl Responder {
     let web_token = session
         .get::<WebToken>(WEB_TOKEN_SESS_KEY)
         .expect("unable to retrieve web token");
 
     let request = {
-        let r = request.into_inner();
-
         if let Some(web_token) = web_token {
-            r.data(web_token)
+            request.data(web_token)
         } else {
-            r
+            request
         }
     };
 

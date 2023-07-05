@@ -103,9 +103,10 @@ async fn append_range(
     ranked_records.extend(query.fetch_all(&db.mysql_pool).await.unwrap());
 }
 
-async fn overview(db: Data<Database>, body: Query<OverviewQuery>) -> RecordsResult<impl Responder> {
-    let body = body.into_inner();
-
+async fn overview(
+    db: Data<Database>,
+    Query(body): Query<OverviewQuery>,
+) -> RecordsResult<impl Responder> {
     let Some(Map { id: map_id, .. }) = player::get_map_from_game_id(&db, &body.map_uid).await? else {
         return Err(RecordsError::MapNotFound(body.map_uid));
     };

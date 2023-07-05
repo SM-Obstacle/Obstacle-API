@@ -45,10 +45,9 @@ struct DelNoteResponse {
 pub async fn del_note(
     db: Data<Database>,
     auth: AuthHeader,
-    body: Json<DelNoteBody>,
+    Json(body): Json<DelNoteBody>,
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Admin).await?;
-    let body = body.into_inner();
     sqlx::query("UPDATE players SET admins_note = NULL WHERE login = ?")
         .bind(&body.req.player_login)
         .execute(&db.mysql_pool)
@@ -74,10 +73,9 @@ struct SetRoleResponse {
 pub async fn set_role(
     db: Data<Database>,
     auth: AuthHeader,
-    body: Json<SetRoleBody>,
+    Json(body): Json<SetRoleBody>,
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Admin).await?;
-    let body = body.into_inner();
     sqlx::query("UPDATE players SET role = ? WHERE login = ?")
         .bind(body.role)
         .bind(&body.req.player_login)
@@ -144,11 +142,9 @@ struct BanishmentsResponse {
 pub async fn banishments(
     db: Data<Database>,
     auth: AuthHeader,
-    body: Query<BanishmentsBody>,
+    Query(body): Query<BanishmentsBody>,
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Admin).await?;
-    let body = body.into_inner();
-
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
         return Err(RecordsError::PlayerNotFound(body.req.player_login));
     };
@@ -191,10 +187,9 @@ struct BanResponse {
 pub async fn ban(
     db: Data<Database>,
     auth: AuthHeader,
-    body: Json<BanBody>,
+    Json(body): Json<BanBody>,
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Admin).await?;
-    let body = body.into_inner();
 
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
         return Err(RecordsError::PlayerNotFound(body.req.player_login));
@@ -265,10 +260,9 @@ struct UnbanResponse {
 pub async fn unban(
     db: Data<Database>,
     auth: AuthHeader,
-    body: Json<UnbanBody>,
+    Json(body): Json<UnbanBody>,
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Admin).await?;
-    let body = body.into_inner();
 
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
         return Err(RecordsError::PlayerNotFound(body.req.player_login));
@@ -313,10 +307,9 @@ struct PlayerNoteResponse {
 pub async fn player_note(
     db: Data<Database>,
     auth: AuthHeader,
-    body: Json<PlayerNoteBody>,
+    Json(body): Json<PlayerNoteBody>,
 ) -> RecordsResult<impl Responder> {
     auth::check_auth_for(&db, auth, Role::Admin).await?;
-    let body = body.into_inner();
 
     let Some(admins_note) = sqlx::query_scalar(
         "SELECT admins_note FROM players WHERE login = ?"
