@@ -122,11 +122,11 @@ impl Player {
         let records = sqlx::query_as::<_, Record>(
             "SELECT r.* FROM records r
             INNER JOIN (
-                SELECT MAX(id) AS id, map_id
+                SELECT MAX(record_date) AS record_date, map_id
                 FROM records
                 WHERE player_id = ?
                 GROUP BY map_id
-            ) t ON t.id = r.id AND t.map_id = r.map_id
+            ) t ON t.record_date = r.record_date AND t.map_id = r.map_id
             WHERE player_id = ?
             ORDER BY record_date DESC LIMIT 100",
         )

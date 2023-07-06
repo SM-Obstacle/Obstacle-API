@@ -239,8 +239,8 @@ impl QueryRoot {
 
         let records = sqlx::query_as::<_, Record>(
             "SELECT * FROM records r
-            WHERE id = (
-                SELECT MAX(id) FROM records
+            WHERE record_date = (
+                SELECT MAX(record_date) FROM records
                 WHERE player_id = r.player_id AND map_id = r.map_id
             )
             ORDER BY record_date DESC

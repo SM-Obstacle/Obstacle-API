@@ -142,11 +142,11 @@ impl Map {
             "SELECT r.*
             FROM records r
             INNER JOIN (
-                SELECT MAX(id) AS id, player_id
+                SELECT MAX(record_date) AS record_date, player_id
                 FROM records
                 WHERE map_id = ? AND player_id IN ({})
                 GROUP BY player_id
-            ) t ON t.id = r.id AND t.player_id = r.player_id
+            ) t ON t.record_date = r.record_date AND t.player_id = r.player_id
             WHERE map_id = ? AND r.player_id IN ({})
             ORDER BY r.time ASC, r.record_date ASC",
             player_ids_query, player_ids_query
