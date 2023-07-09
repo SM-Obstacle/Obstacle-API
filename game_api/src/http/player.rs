@@ -18,7 +18,7 @@ use crate::{
     models::{Banishment, Map, Player, Record, Role},
     redis,
     utils::{format_map_key, json, read_env_var_file},
-    Database, RecordsError, RecordsResult,
+    AccessTokenErr, Database, RecordsError, RecordsResult,
 };
 
 use super::admin;
@@ -72,8 +72,6 @@ pub async fn update(
     auth: AuthHeader,
     Json(body): Json<UpdatePlayerBody>,
 ) -> RecordsResult<impl Responder> {
-    println!("{body:?}");
-
     match auth::check_auth_for(&db, auth, Role::Player).await {
         Ok(()) => update_or_insert(&db, body).await?,
         Err(RecordsError::PlayerNotFound(_)) => {
@@ -129,8 +127,6 @@ pub async fn finished(
     db: Data<Database>,
     Json(body): Json<HasFinishedBody>,
 ) -> RecordsResult<impl Responder> {
-    println!("{body:?}");
-
     auth::check_auth_for(&db, auth, Role::Player).await?;
 
     let finished = player_finished(db, body).await?;
@@ -271,16 +267,18 @@ async fn player_finished(
 
 #[derive(Serialize)]
 struct MPAccessTokenBody<'a> {
-    grant_type: String,
+    grant_type: &'a str,
     client_id: &'a str,
     client_secret: &'a str,
-    code: String,
-    redirect_uri: String,
+    code: &'a str,
+    redirect_uri: &'a str,
 }
 
 #[derive(Deserialize)]
-struct MPAccessTokenResponse {
-    access_token: String,
+#[serde(untagged)]
+enum MPAccessTokenResponse {
+    AccessToken { access_token: String },
+    Error(AccessTokenErr),
 }
 
 #[derive(Deserialize, Debug)]
@@ -303,13 +301,13 @@ fn get_mp_app_client_secret() -> &'static str {
 async fn test_access_token(
     client: &Client,
     login: &str,
-    code: String,
-    redirect_uri: String,
+    ref code: String,
+    ref redirect_uri: String,
 ) -> RecordsResult<bool> {
-    let MPAccessTokenResponse { access_token } = client
+    let res = client
         .post("https://prod.live.maniaplanet.com/login/oauth2/access_token")
         .form(&MPAccessTokenBody {
-            grant_type: "authorization_code".to_owned(),
+            grant_type: "authorization_code",
             client_id: get_mp_app_client_id(),
             client_secret: get_mp_app_client_secret(),
             code,
@@ -319,6 +317,11 @@ async fn test_access_token(
         .await?
         .json()
         .await?;
+
+    let access_token = match res {
+        MPAccessTokenResponse::AccessToken { access_token } => access_token,
+        MPAccessTokenResponse::Error(err) => return Err(RecordsError::AccessTokenErr(err)),
+    };
 
     check_mp_token(client, login, access_token).await
 }
@@ -374,9 +377,20 @@ pub async fn get_token(
     let err_msg = "/get_token rx should not be dropped at this point";
 
     // check access_token and generate new token for player ...
-    if !test_access_token(&client, &body.login, code, body.redirect_uri).await? {
-        tx.send(Message::InvalidMPCode).expect(err_msg);
-        return Err(RecordsError::InvalidMPCode);
+    match test_access_token(&client, &body.login, code, body.redirect_uri).await {
+        Ok(true) => (),
+        Ok(false) => {
+            tx.send(Message::InvalidMPCode).expect(err_msg);
+            return Err(RecordsError::InvalidMPCode);
+        }
+        Err(RecordsError::AccessTokenErr(err)) => {
+            tx.send(Message::AccessTokenErr(err.clone()))
+                .expect(err_msg);
+            return Err(RecordsError::AccessTokenErr(err));
+        }
+        err => {
+            let _ = err?;
+        }
     }
 
     let (mp_token, web_token) = auth::gen_token_for(&db, &body.login).await?;

@@ -63,6 +63,7 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::Level;
 
+use crate::AccessTokenErr;
 use crate::utils::{format_mp_token_key, format_web_token_key, generate_token, get_env_var_as};
 use crate::{http::player, models::Role, Database, RecordsError, RecordsResult};
 
@@ -116,6 +117,9 @@ pub enum Message {
     /// After checking for the code provided by the /player/give_token endpoint, the /player/get_token
     /// endpoint checks it, and returned an error
     InvalidMPCode,
+    /// The /player/get_token endpoint received the code provided by the /player/give_token endpoint,
+    /// sent the corresponding request to ManiaPlanet services, and the latter returned an error.
+    AccessTokenErr(AccessTokenErr),
     /// The /player/get_token endpoint received the code from the /player/give_token endpoint, and
     /// has successfuly generated the Obstacle tokens for the player. It sends back the new website
     /// token of the player.
@@ -204,6 +208,7 @@ impl AuthState {
                 Ok(Ok(res)) => match res {
                     Message::Ok(web_token) => web_token,
                     Message::InvalidMPCode => return Err(RecordsError::InvalidMPCode),
+                    Message::AccessTokenErr(err) => return Err(RecordsError::AccessTokenErr(err)),
                     _ => unreachable!(),
                 },
                 _ => {

@@ -80,8 +80,8 @@ impl<'r> FromRow<'r, MySqlRow> for Role {
 pub struct BanishmentInner {
     pub id: u32,
     pub date_ban: chrono::NaiveDateTime,
-    pub duration: Option<u32>,
-    pub reason: Option<String>,
+    pub duration: i64,
+    pub reason: String,
     pub player_id: u32,
     pub banished_by: u32,
 }
@@ -108,12 +108,16 @@ impl fmt::Display for BanishmentInner {
             f,
             "at: {:?}, duration: {}, reason: `{}`",
             self.date_ban,
-            if let Some(d) = self.duration {
-                format!("{d} seconds")
-            } else {
+            if self.duration == -1 {
                 "forever".to_owned()
+            } else {
+                format!("{} seconds", self.duration)
             },
-            self.reason.as_deref().unwrap_or("none")
+            if self.reason.is_empty() {
+                "none"
+            } else {
+                &self.reason
+            }
         )
     }
 }

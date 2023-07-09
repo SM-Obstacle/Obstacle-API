@@ -11,7 +11,7 @@ use actix_web::{
 };
 use deadpool::Runtime;
 use game_api::{
-    api_route, get_tokens_ttl, graphql_route, read_env_var_file, AuthState, Database, RecordsResult,
+    api_route, get_tokens_ttl, graphql_route, read_env_var_file, AuthState, Database, RecordsResult, RecordsError,
 };
 #[cfg(not(feature = "localhost_test"))]
 use game_api::{get_env_var, get_env_var_as};
@@ -110,7 +110,7 @@ async fn main() -> RecordsResult<()> {
             .service(graphql_route(db.clone()))
             .service(api_route())
             .default_service(web::to(|| async {
-                HttpResponse::NotFound().body("Not found")
+                Err::<HttpResponse, _>(RecordsError::EndpointNotFound)
             }))
     })
     .bind(("0.0.0.0", port))?

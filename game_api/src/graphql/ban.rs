@@ -14,7 +14,7 @@ impl Banishment {
         self.inner.date_ban
     }
 
-    async fn duration(&self) -> Option<u32> {
+    async fn duration(&self) -> i64 {
         self.inner.duration
     }
 
@@ -22,8 +22,8 @@ impl Banishment {
         self.was_reprieved
     }
 
-    async fn reason(&self) -> Option<&str> {
-        self.inner.reason.as_deref()
+    async fn reason(&self) -> &str {
+        &self.inner.reason
     }
 
     async fn player(&self, ctx: &Context<'_>) -> async_graphql::Result<Player> {
