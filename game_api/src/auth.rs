@@ -274,7 +274,7 @@ async fn inner_check_auth_for(
         return Err(RecordsError::PlayerNotFound(login));
     };
 
-    if let Some(ban) = player::check_banned(db, player.id).await? {
+    if let Some(ban) = player::check_banned(&db.mysql_pool, player.id).await? {
         return Err(RecordsError::BannedPlayer(ban));
     };
 

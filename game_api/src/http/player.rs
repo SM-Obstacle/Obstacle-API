@@ -9,7 +9,7 @@ use chrono::Utc;
 use deadpool_redis::redis::AsyncCommands;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, MySqlPool};
 use tokio::time::timeout;
 use tracing::Level;
 
@@ -145,16 +145,13 @@ pub async fn get_player_from_login(
 }
 
 pub async fn check_banned(
-    db: &Database,
+    db: &MySqlPool,
     player_id: u32,
 ) -> Result<Option<Banishment>, RecordsError> {
-    let r = sqlx::query_as(
-        "SELECT * FROM banishments
-        WHERE player_id = ? AND (date_ban + INTERVAL duration SECOND > NOW() OR duration IS NULL)",
-    )
-    .bind(player_id)
-    .fetch_optional(&db.mysql_pool)
-    .await?;
+    let r = sqlx::query_as("SELECT * FROM current_bans WHERE player_id = ?")
+        .bind(player_id)
+        .fetch_optional(db)
+        .await?;
     Ok(r)
 }
 
