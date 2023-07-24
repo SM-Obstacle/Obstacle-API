@@ -44,7 +44,7 @@ async fn insert_player(db: &Database, body: UpdatePlayerBody) -> RecordsResult<u
     let id = sqlx::query_scalar(
         "INSERT INTO players
         (login, name, join_date, zone_path, admins_note, role)
-        VALUES (?, ?, SYSDATE(), ?, NULL, 1) RETURNING id",
+        VALUES (?, ?, SYSDATE(), ?, NULL, 0) RETURNING id",
     )
     .bind(body.login)
     .bind(body.name)
