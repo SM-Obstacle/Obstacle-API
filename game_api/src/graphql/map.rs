@@ -5,6 +5,7 @@ use async_graphql::{
     ID,
 };
 use deadpool_redis::{redis::AsyncCommands, Pool as RedisPool};
+use futures::StreamExt;
 use sqlx::{mysql, FromRow, MySqlPool};
 
 use crate::{
@@ -14,7 +15,7 @@ use crate::{
     utils::format_map_key,
 };
 
-use super::{player::PlayerLoader, utils::get_rank_of};
+use super::{get_rank_of_with, player::PlayerLoader};
 
 #[async_graphql::Object]
 impl Map {
@@ -22,8 +23,8 @@ impl Map {
         ID(format!("v0:Map:{}", self.id))
     }
 
-    async fn game_id(&self) -> String {
-        self.game_id.clone()
+    async fn game_id(&self) -> &str {
+        &self.game_id
     }
 
     async fn player_id(&self) -> ID {
@@ -41,8 +42,12 @@ impl Map {
             .ok_or_else(|| async_graphql::Error::new("Player not found."))
     }
 
-    async fn name(&self) -> String {
-        self.name.clone()
+    async fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn reversed(&self) -> bool {
+        self.reversed.unwrap_or(false)
     }
 
     async fn medal_for(
@@ -127,10 +132,16 @@ impl Map {
         let mut redis_conn = redis_pool.get().await?;
 
         let key = format_map_key(self.id);
+        let reversed = self.reversed.unwrap_or(false);
 
         redis::update_leaderboard(db, &key, self.id).await?;
 
-        let record_ids: Vec<i32> = redis_conn.zrange(&key, 0, 99).await?;
+        let record_ids: Vec<i32> = if reversed {
+            redis_conn.zrevrange(&key, 0, 99)
+        } else {
+            redis_conn.zrange(&key, 0, 99)
+        }
+        .await?;
         if record_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -148,8 +159,10 @@ impl Map {
                 GROUP BY player_id
             ) t ON t.record_date = r.record_date AND t.player_id = r.player_id
             WHERE map_id = ? AND r.player_id IN ({})
-            ORDER BY r.time ASC, r.record_date ASC",
-            player_ids_query, player_ids_query
+            ORDER BY r.time {order}, r.record_date ASC",
+            player_ids_query,
+            player_ids_query,
+            order = if reversed { "DESC" } else { "ASC" }
         );
 
         let mut query = sqlx::query_as::<_, Record>(&query).bind(self.id);
@@ -160,11 +173,13 @@ impl Map {
         for id in &record_ids {
             query = query.bind(id);
         }
-        let records = query.fetch_all(mysql_pool).await?;
-        let mut ranked_records = Vec::with_capacity(records.len());
 
-        for record in records {
-            let rank = get_rank_of(&mut redis_conn, &key, record.time)
+        let mut records = query.fetch(mysql_pool);
+        let mut ranked_records = Vec::with_capacity(records.size_hint().0);
+
+        while let Some(record) = records.next().await {
+            let record = record?;
+            let rank = get_rank_of_with(&mut redis_conn, &key, record.time, reversed)
                 .await?
                 .unwrap_or_else(|| {
                     panic!("redis leaderboard for (`{key}`) should be updated at this point")

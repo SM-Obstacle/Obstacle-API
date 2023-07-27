@@ -3,8 +3,10 @@
 
 use actix_web::web::{JsonConfig, Query};
 use actix_web::{web, Scope};
+use futures::StreamExt;
 use reqwest::Client;
 
+use crate::graphql::get_rank_of_with;
 use crate::utils::format_map_key;
 use crate::{
     models::{Map, Player},
@@ -63,18 +65,21 @@ async fn append_range(
     key: &str,
     start: u32,
     end: u32,
-) {
-    let mut redis_conn = db.redis_pool.get().await.unwrap();
+    reversed: bool,
+) -> RecordsResult<()> {
+    let mut redis_conn = db.redis_pool.get().await?;
 
     // transforms exclusive to inclusive range
     let end = end - 1;
-    let ids: Vec<i32> = redis_conn
-        .zrange(key, start as isize, end as isize)
-        .await
-        .unwrap();
+    let ids: Vec<i32> = if reversed {
+        redis_conn.zrevrange(key, start as isize, end as isize)
+    } else {
+        redis_conn.zrange(key, start as isize, end as isize)
+    }
+    .await?;
 
     if ids.is_empty() {
-        return;
+        return Ok(());
     }
 
     let params = ids
@@ -84,15 +89,16 @@ async fn append_range(
         .join(",");
 
     let query = format!(
-        "SELECT CAST(RANK() OVER (ORDER BY time ASC) AS UNSIGNED) + ? AS rank,
+        "SELECT CAST(0 AS UNSIGNED) + ? AS rank,
             players.login AS login,
             players.name AS nickname,
             MIN(time) as time
         FROM records INNER JOIN players ON records.player_id = players.id
         WHERE map_id = ? AND player_id IN ({})
         GROUP BY player_id
-        ORDER BY time ASC, record_date ASC",
-        params
+        ORDER BY time {order}, record_date ASC",
+        params,
+        order = if reversed { "DESC" } else { "ASC" }
     );
 
     let mut query = sqlx::query_as(&query).bind(start).bind(map_id);
@@ -100,16 +106,37 @@ async fn append_range(
         query = query.bind(id);
     }
 
-    ranked_records.extend(query.fetch_all(&db.mysql_pool).await.unwrap());
+    let mut records = query.fetch(&db.mysql_pool);
+    while let Some(record) = records.next().await {
+        let RankedRecord {
+            login,
+            nickname,
+            time,
+            ..
+        } = record?;
+
+        ranked_records.push(RankedRecord {
+            rank: get_rank_of_with(&mut redis_conn, key, time, reversed).await?.unwrap_or_else(|| {
+                panic!("redis leaderboard for (`{key}`) should be updated at this point")
+            }) as u32,
+            login,
+            nickname,
+            time,
+        });
+    }
+
+    Ok(())
 }
 
 async fn overview(
     db: Data<Database>,
     Query(body): Query<OverviewQuery>,
 ) -> RecordsResult<impl Responder> {
-    let Some(Map { id: map_id, .. }) = player::get_map_from_game_id(&db, &body.map_uid).await? else {
+    let Some(Map { id, linked_map, reversed, .. }) = player::get_map_from_game_id(&db, &body.map_uid).await? else {
         return Err(RecordsError::MapNotFound(body.map_uid));
     };
+    let map_id = linked_map.unwrap_or(id);
+    let reversed = reversed.unwrap_or(false);
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.login).await? else {
         return Err(RecordsError::PlayerNotFound(body.login));
     };
@@ -126,8 +153,13 @@ async fn overview(
     const TOTAL_ROWS: u32 = 15;
     const NO_RECORD_ROWS: u32 = TOTAL_ROWS - 1;
 
-    let player_rank: Option<i64> = redis_conn.zrank(&key, player_id).await.unwrap();
-    let player_rank = player_rank.map(|r: i64| (r as u64) as u32);
+    let player_rank: Option<i64> = if reversed {
+        redis_conn.zrevrank(&key, player_id)
+    } else {
+        redis_conn.zrank(&key, player_id)
+    }
+    .await?;
+    let player_rank = player_rank.map(|r| r as u64 as u32);
 
     let mut start: u32 = 0;
     let mut end: u32;
@@ -135,12 +167,21 @@ async fn overview(
     if let Some(player_rank) = player_rank {
         // The player has a record and is in top ROWS, display ROWS records
         if player_rank < TOTAL_ROWS {
-            append_range(&db, &mut ranked_records, map_id, &key, start, TOTAL_ROWS).await;
+            append_range(
+                &db,
+                &mut ranked_records,
+                map_id,
+                &key,
+                start,
+                TOTAL_ROWS,
+                reversed,
+            )
+            .await?;
         }
         // The player is not in the top ROWS records, display top3 and then center around the player rank
         else {
             // push top3
-            append_range(&db, &mut ranked_records, map_id, &key, start, 3).await;
+            append_range(&db, &mut ranked_records, map_id, &key, start, 3, reversed).await?;
 
             // the rest is centered around the player
             let row_minus_top3 = TOTAL_ROWS - 3;
@@ -150,7 +191,7 @@ async fn overview(
                 start -= end - count;
                 end = count;
             }
-            append_range(&db, &mut ranked_records, map_id, &key, start, end).await;
+            append_range(&db, &mut ranked_records, map_id, &key, start, end, reversed).await?;
         }
     }
     // The player has no record, so ROWS = ROWS - 1 to keep one last line for the player
@@ -166,11 +207,21 @@ async fn overview(
                 &key,
                 start,
                 NO_RECORD_ROWS - 3,
+                reversed,
             )
-            .await;
+            .await?;
 
             // last 3
-            append_range(&db, &mut ranked_records, map_id, &key, count - 3, count).await;
+            append_range(
+                &db,
+                &mut ranked_records,
+                map_id,
+                &key,
+                count - 3,
+                count,
+                reversed,
+            )
+            .await?;
         }
         // There is enough records to display them all
         else {
@@ -181,8 +232,9 @@ async fn overview(
                 &key,
                 start,
                 NO_RECORD_ROWS,
+                reversed,
             )
-            .await;
+            .await?;
         }
     }
 

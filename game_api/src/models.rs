@@ -31,6 +31,8 @@ pub struct Map {
     pub player_id: u32,
     pub name: String,
     pub cps_number: Option<u32>,
+    pub linked_map: Option<u32>,
+    pub reversed: Option<bool>,
 }
 
 #[derive(Serialize, FromRow, Clone, Debug)]

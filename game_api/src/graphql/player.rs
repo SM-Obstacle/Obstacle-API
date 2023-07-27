@@ -2,19 +2,23 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_graphql::{connection, dataloader::Loader, Context, ID};
 use deadpool_redis::Pool as RedisPool;
+use futures::StreamExt;
 use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use crate::{
-    models::{Banishment, Map, Player, RankedRecord, Record, Role},
+    models::{Banishment, Map, Player, RankedRecord, Role},
     redis,
     utils::format_map_key,
     Database,
 };
 
-use super::utils::{
-    connections_append_query_string_order, connections_append_query_string_page,
-    connections_bind_query_parameters_order, connections_bind_query_parameters_page,
-    connections_pages_info, decode_id, get_rank_of,
+use super::{
+    get_rank_of_with,
+    utils::{
+        connections_append_query_string_order, connections_append_query_string_page,
+        connections_bind_query_parameters_order, connections_bind_query_parameters_page,
+        connections_pages_info, decode_id, RecordAttr,
+    },
 };
 
 #[async_graphql::Object]
@@ -119,32 +123,35 @@ impl Player {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
 
         // Query the records with these ids
-        let records = sqlx::query_as::<_, Record>(
-            "SELECT r.* FROM records r
+        let mut records = sqlx::query_as::<_, RecordAttr>(
+            "SELECT r.*, m.reversed AS reversed FROM records r
+            INNER JOIN maps m ON m.id = r.map_id
             INNER JOIN (
                 SELECT MAX(record_date) AS record_date, map_id
                 FROM records
                 WHERE player_id = ?
                 GROUP BY map_id
             ) t ON t.record_date = r.record_date AND t.map_id = r.map_id
-            WHERE player_id = ?
+            WHERE r.player_id = ?
             ORDER BY record_date DESC LIMIT 100",
         )
         .bind(self.id)
         .bind(self.id)
-        .fetch_all(mysql_pool)
-        .await?;
+        .fetch(mysql_pool);
 
-        let mut ranked_records = Vec::with_capacity(records.len());
+        let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
-        for record in records {
+        while let Some(record) = records.next().await {
+            let RecordAttr { record, reversed } = record?;
+            let reversed = reversed.unwrap_or(false);
+
             let key = format_map_key(record.map_id);
 
-            let rank = match get_rank_of(&mut redis_conn, &key, record.time).await? {
+            let rank = match get_rank_of_with(&mut redis_conn, &key, record.time, reversed).await? {
                 Some(rank) => rank,
                 None => {
                     redis::update_leaderboard(db, &key, record.map_id).await?;
-                    get_rank_of(&mut redis_conn, &key, record.time)
+                    get_rank_of_with(&mut redis_conn, &key, record.time, reversed)
                         .await?
                         .unwrap_or_else(|| {
                             panic!(

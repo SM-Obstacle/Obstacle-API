@@ -1,8 +1,15 @@
 use async_graphql::ID;
 use deadpool_redis::{redis::AsyncCommands, Connection};
-use sqlx::mysql;
+use sqlx::{mysql, FromRow};
 
-use crate::RecordsResult;
+use crate::{models::Record, RecordsResult};
+
+#[derive(FromRow)]
+pub struct RecordAttr {
+    #[sqlx(flatten)]
+    pub record: Record,
+    pub reversed: Option<bool>,
+}
 
 pub fn decode_id(id: Option<&ID>) -> Option<u32> {
     let parts: Vec<&str> = id?.split(':').collect();
@@ -131,19 +138,27 @@ pub fn connections_pages_info(
     (has_previous_page, has_next_page)
 }
 
-/// Returns the competition rank corresponding to the time in a map leaderboard from its key.
-pub async fn get_rank_of(
+pub async fn get_rank_of_with(
     redis_conn: &mut Connection,
     key: &str,
     time: i32,
+    reversed: bool,
 ) -> RecordsResult<Option<i32>> {
-    let player_id: Vec<u32> = redis_conn
-        .zrangebyscore_limit(key, time, time, 0, 1)
-        .await?;
+    let player_id: Vec<u32> = if reversed {
+        redis_conn.zrevrangebyscore_limit(key, time, time, 0, 1)
+    } else {
+        redis_conn.zrangebyscore_limit(key, time, time, 0, 1)
+    }
+    .await?;
 
     match player_id.first() {
         Some(id) => {
-            let rank: i32 = redis_conn.zrank(key, id).await?;
+            let rank: i32 = if reversed {
+                redis_conn.zrevrank(key, id)
+            } else {
+                redis_conn.zrank(key, id)
+            }
+            .await?;
             Ok(Some(rank + 1))
         }
         None => Ok(None),

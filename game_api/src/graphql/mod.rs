@@ -6,6 +6,7 @@ use async_graphql::extensions::ApolloTracing;
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use async_graphql::{connection, ID};
 use async_graphql_actix_web::GraphQLRequest;
+use futures::StreamExt;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
 use std::env::var;
 use std::vec::Vec;
@@ -15,14 +16,14 @@ use deadpool_redis::Pool as RedisPool;
 use crate::auth::{self, WebToken, WEB_TOKEN_SESS_KEY};
 use crate::graphql::map::MapLoader;
 use crate::graphql::player::PlayerLoader;
-use crate::models::{Banishment, Event, Map, Player, RankedRecord, Record, Role};
+use crate::models::{Banishment, Event, Map, Player, RankedRecord, Role};
 use crate::utils::format_map_key;
 use crate::{redis, Database};
 
 use self::event::{EventCategoryLoader, EventLoader};
 use self::utils::{
     connections_append_query_string, connections_bind_query_parameters, connections_pages_info,
-    decode_id, get_rank_of,
+    decode_id, RecordAttr,
 };
 
 mod ban;
@@ -33,6 +34,8 @@ mod player;
 mod rating;
 mod record;
 mod utils;
+
+pub use utils::get_rank_of_with;
 
 #[derive(async_graphql::Interface)]
 #[graphql(field(name = "id", type = "ID"))]
@@ -237,36 +240,37 @@ impl QueryRoot {
         let mut redis_conn = redis_pool.get().await?;
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
 
-        let records = sqlx::query_as::<_, Record>(
-            "SELECT * FROM records r
-            WHERE record_date = (
+        let mut records = sqlx::query_as::<_, RecordAttr>(
+            "SELECT r.*, m.reversed AS reversed
+            FROM records r INNER JOIN maps m ON m.id = r.map_id
+            WHERE r.record_date = (
                 SELECT MAX(record_date) FROM records
                 WHERE player_id = r.player_id AND map_id = r.map_id
             )
             ORDER BY record_date DESC
             LIMIT 100",
         )
-        .fetch_all(mysql_pool)
-        .await?;
+        .fetch(mysql_pool);
 
-        let mut ranked_records = Vec::with_capacity(records.len());
+        let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
-        for record in records {
+        while let Some(record) = records.next().await {
+            let RecordAttr { record, reversed } = record?;
+            let reversed = reversed.unwrap_or(false);
+
             let key = format_map_key(record.map_id);
 
-            let rank = match get_rank_of(&mut redis_conn, &key, record.time).await? {
-                Some(rank) => rank,
-                None => {
-                    redis::update_leaderboard(db, &key, record.map_id).await?;
-                    get_rank_of(&mut redis_conn, &key, record.time)
-                        .await?
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "redis leaderboard for (`{key}`) should be updated at this point"
-                            )
-                        })
-                }
-            };
+            let rank =
+                match get_rank_of_with(&mut redis_conn, &key, record.time, reversed).await? {
+                    Some(rank) => rank,
+                    None => {
+                        redis::update_leaderboard(db, &key, record.map_id).await?;
+                        get_rank_of_with(&mut redis_conn, &key, record.time, reversed).await?
+                    .unwrap_or_else(|| {
+                        panic!("redis leaderboard for (`{key}`) should be updated at this point")
+                    })
+                    }
+                };
 
             ranked_records.push(RankedRecord { rank, record });
         }
