@@ -18,7 +18,7 @@ use crate::graphql::map::MapLoader;
 use crate::graphql::player::PlayerLoader;
 use crate::models::{Banishment, Event, Map, Player, RankedRecord, Role};
 use crate::utils::format_map_key;
-use crate::{redis, Database};
+use crate::Database;
 
 use self::event::{EventCategoryLoader, EventLoader};
 use self::utils::{
@@ -35,7 +35,7 @@ mod rating;
 mod record;
 mod utils;
 
-pub use utils::get_rank_of_with;
+pub use self::utils::get_rank_or_full_update;
 
 #[derive(async_graphql::Interface)]
 #[graphql(field(name = "id", type = "ID"))]
@@ -256,21 +256,18 @@ impl QueryRoot {
 
         while let Some(record) = records.next().await {
             let RecordAttr { record, reversed } = record?;
-            let reversed = reversed.unwrap_or(false);
 
             let key = format_map_key(record.map_id);
 
-            let rank =
-                match get_rank_of_with(&mut redis_conn, &key, record.time, reversed).await? {
-                    Some(rank) => rank,
-                    None => {
-                        redis::update_leaderboard(db, &key, record.map_id).await?;
-                        get_rank_of_with(&mut redis_conn, &key, record.time, reversed).await?
-                    .unwrap_or_else(|| {
-                        panic!("redis leaderboard for (`{key}`) should be updated at this point")
-                    })
-                    }
-                };
+            let rank = get_rank_or_full_update(
+                db,
+                &mut redis_conn,
+                &key,
+                record.map_id,
+                record.time,
+                reversed.unwrap_or(false),
+            )
+            .await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }

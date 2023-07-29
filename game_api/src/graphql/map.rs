@@ -15,7 +15,7 @@ use crate::{
     utils::format_map_key,
 };
 
-use super::{get_rank_of_with, player::PlayerLoader};
+use super::{player::PlayerLoader, utils::get_rank_or_full_update};
 
 #[async_graphql::Object]
 impl Map {
@@ -179,11 +179,9 @@ impl Map {
 
         while let Some(record) = records.next().await {
             let record = record?;
-            let rank = get_rank_of_with(&mut redis_conn, &key, record.time, reversed)
-                .await?
-                .unwrap_or_else(|| {
-                    panic!("redis leaderboard for (`{key}`) should be updated at this point")
-                });
+            let rank =
+                get_rank_or_full_update(db, &mut redis_conn, &key, self.id, record.time, reversed)
+                    .await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }

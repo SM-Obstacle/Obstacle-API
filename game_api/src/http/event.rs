@@ -300,8 +300,7 @@ async fn convert_maps(
             .json::<Vec<MxAuthor>>()
             .await?
             .into_iter()
-            .filter(|m| !m.uploader)
-            .map(|m| m.username)
+            .filter_map(|m| (!m.uploader).then_some(m.username))
             .collect();
 
         out_maps.push(Map {

@@ -6,7 +6,7 @@ use actix_web::{web, Scope};
 use futures::StreamExt;
 use reqwest::Client;
 
-use crate::graphql::get_rank_of_with;
+use crate::graphql::get_rank_or_full_update;
 use crate::utils::format_map_key;
 use crate::{
     models::{Map, Player},
@@ -116,9 +116,8 @@ async fn append_range(
         } = record?;
 
         ranked_records.push(RankedRecord {
-            rank: get_rank_of_with(&mut redis_conn, key, time, reversed).await?.unwrap_or_else(|| {
-                panic!("redis leaderboard for (`{key}`) should be updated at this point")
-            }) as u32,
+            rank: get_rank_or_full_update(db, &mut redis_conn, key, map_id, time, reversed).await?
+                as u32,
             login,
             nickname,
             time,

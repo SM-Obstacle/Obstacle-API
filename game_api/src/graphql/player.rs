@@ -7,13 +7,12 @@ use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use crate::{
     models::{Banishment, Map, Player, RankedRecord, Role},
-    redis,
     utils::format_map_key,
     Database,
 };
 
 use super::{
-    get_rank_of_with,
+    get_rank_or_full_update,
     utils::{
         connections_append_query_string_order, connections_append_query_string_page,
         connections_bind_query_parameters_order, connections_bind_query_parameters_page,
@@ -143,23 +142,18 @@ impl Player {
 
         while let Some(record) = records.next().await {
             let RecordAttr { record, reversed } = record?;
-            let reversed = reversed.unwrap_or(false);
 
             let key = format_map_key(record.map_id);
 
-            let rank = match get_rank_of_with(&mut redis_conn, &key, record.time, reversed).await? {
-                Some(rank) => rank,
-                None => {
-                    redis::update_leaderboard(db, &key, record.map_id).await?;
-                    get_rank_of_with(&mut redis_conn, &key, record.time, reversed)
-                        .await?
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "redis leaderboard for (`{key}`) should be updated at this point"
-                            )
-                        })
-                }
-            };
+            let rank = get_rank_or_full_update(
+                db,
+                &mut redis_conn,
+                &key,
+                record.map_id,
+                record.time,
+                reversed.unwrap_or(false),
+            )
+            .await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }
