@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use async_graphql::{connection, dataloader::Loader, Context, ID};
+use async_graphql::{connection, dataloader::Loader, Context, Enum, ID};
 use deadpool_redis::Pool as RedisPool;
 use futures::StreamExt;
 use sqlx::{mysql, FromRow, MySqlPool, Row};
@@ -8,7 +8,7 @@ use sqlx::{mysql, FromRow, MySqlPool, Row};
 use crate::{
     models::{Banishment, Map, Player, RankedRecord, Role},
     utils::format_map_key,
-    Database,
+    Database, RecordsError,
 };
 
 use super::{
@@ -19,6 +19,27 @@ use super::{
         connections_pages_info, decode_id, RecordAttr,
     },
 };
+
+#[derive(Copy, Clone, Eq, PartialEq, Enum)]
+#[repr(u8)]
+enum PlayerRole {
+    Player = 0,
+    Moderator = 1,
+    Admin = 2,
+}
+
+impl TryFrom<Role> for PlayerRole {
+    type Error = RecordsError;
+
+    fn try_from(role: Role) -> Result<Self, Self::Error> {
+        if role.id < 3 {
+            // SAFETY: enum is repr(u8) and role id is in range
+            Ok(unsafe { std::mem::transmute(role.id) })
+        } else {
+            Err(RecordsError::UnknownRole(role.id, role.role_name))
+        }
+    }
+}
 
 #[async_graphql::Object]
 impl Player {
@@ -48,12 +69,15 @@ impl Player {
         )
     }
 
-    async fn role(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Role> {
+    async fn role(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<PlayerRole> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        Ok(sqlx::query_as("SELECT * FROM role WHERE id = ?")
+
+        let r: Role = sqlx::query_as("SELECT * FROM role WHERE id = ?")
             .bind(self.role)
             .fetch_one(db)
-            .await?)
+            .await?;
+
+        Ok(r.try_into()?)
     }
 
     async fn maps(

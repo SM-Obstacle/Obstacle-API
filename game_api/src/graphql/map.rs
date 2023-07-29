@@ -9,10 +9,11 @@ use futures::StreamExt;
 use sqlx::{mysql, FromRow, MySqlPool};
 
 use crate::{
-    auth::{self, WebToken},
-    models::{Map, MedalPrice, Player, PlayerRating, RankedRecord, Rating, Record, Role},
+    auth::{self, privilege, WebToken},
+    models::{Map, MedalPrice, Player, PlayerRating, RankedRecord, Rating, Record},
     redis,
     utils::format_map_key,
+    Database,
 };
 
 use super::{player::PlayerLoader, utils::get_rank_or_full_update};
@@ -53,21 +54,21 @@ impl Map {
     async fn medal_for(
         &self,
         ctx: &async_graphql::Context<'_>,
-        login: String,
+        req_login: String,
     ) -> async_graphql::Result<Option<MedalPrice>> {
-        let Some(auth_header) = ctx.data_opt::<WebToken>() else {
+        let Some(WebToken { login, token }) = ctx.data_opt::<WebToken>() else {
             return Err(async_graphql::Error::new("Unauthorized."));
         };
 
-        let role = if auth_header.login != login {
-            Role::Admin
+        let role = if *login != req_login {
+            privilege::ADMIN
         } else {
-            Role::Player
+            privilege::PLAYER
         };
 
         let db = ctx.data_unchecked();
 
-        auth::website_check_auth_for(db, auth_header.clone(), role).await?;
+        auth::website_check_auth_for(db, login, token, role).await?;
 
         let player_id: u32 = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
             .bind(login)
@@ -87,18 +88,23 @@ impl Map {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<Rating>> {
-        let db = ctx.data_unchecked();
-        let Some(auth_header) = ctx.data_opt::<WebToken>() else {
+        let db: &Database = ctx.data_unchecked();
+        let Some(WebToken { login, token }) = ctx.data_opt::<WebToken>() else {
             return Err(async_graphql::Error::new("Unauthorized."));
         };
 
-        let role = if self.player(ctx).await?.login != auth_header.login {
-            Role::Admin
+        let author_login: String = sqlx::query_scalar("SELECT login FROM player WHERE id = ?")
+            .bind(self.player_id)
+            .fetch_one(&db.mysql_pool)
+            .await?;
+
+        let role = if author_login != *login {
+            privilege::ADMIN
         } else {
-            Role::Player
+            privilege::PLAYER
         };
 
-        auth::website_check_auth_for(db, auth_header.clone(), role).await?;
+        auth::website_check_auth_for(db, login, token, role).await?;
 
         Ok(sqlx::query_as("SELECT * FROM rating WHERE map_id = ?")
             .bind(self.id)

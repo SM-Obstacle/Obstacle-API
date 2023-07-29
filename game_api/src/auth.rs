@@ -49,13 +49,16 @@
 //! for more information.
 
 use std::future::{ready, Ready};
+use std::pin::Pin;
 use std::sync::OnceLock;
 use std::{collections::HashMap, time::Duration};
 
 use actix_web::dev::Payload;
+use actix_web::web::Data;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
 use deadpool_redis::redis::AsyncCommands;
+use futures::Future;
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use tokio::sync::oneshot::{self, Receiver, Sender};
@@ -63,9 +66,18 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::Level;
 
-use crate::AccessTokenErr;
 use crate::utils::{format_mp_token_key, format_web_token_key, generate_token, get_env_var_as};
-use crate::{http::player, models::Role, Database, RecordsError, RecordsResult};
+use crate::AccessTokenErr;
+use crate::{http::player, Database, RecordsError, RecordsResult};
+
+#[allow(unused)]
+pub mod privilege {
+    pub type Flags = u8;
+
+    pub const PLAYER: Flags = 0b0001;
+    pub const MOD: Flags = 0b0011;
+    pub const ADMIN: Flags = 0b1111;
+}
 
 static EXPIRES_IN: OnceLock<u32> = OnceLock::new();
 
@@ -257,9 +269,9 @@ pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String,
 
 async fn inner_check_auth_for(
     db: &Database,
-    login: String,
-    token: String,
-    required: Role,
+    login: &str,
+    token: &str,
+    required: privilege::Flags,
     key: String,
 ) -> RecordsResult<()> {
     let mut connection = db.redis_pool.get().await?;
@@ -270,24 +282,25 @@ async fn inner_check_auth_for(
 
     // At this point, if Redis has registered a token with the login, it means that
     // the player is not yet added to the Obstacle database but effectively has a ManiaPlanet account
-    let Some(player) = player::get_player_from_login(db, &login).await? else {
-        return Err(RecordsError::PlayerNotFound(login));
+    let Some(player) = player::get_player_from_login(db, login).await? else {
+        return Err(RecordsError::PlayerNotFound(login.to_owned()));
     };
 
     if let Some(ban) = player::check_banned(&db.mysql_pool, player.id).await? {
         return Err(RecordsError::BannedPlayer(ban));
     };
 
-    let role: Role = sqlx::query_as(
-        "SELECT r.id, r.role_name FROM players p
-            INNER JOIN role r ON r.id = p.role
-            WHERE p.id = ?",
+    let role: privilege::Flags = sqlx::query_scalar(
+        "SELECT r.privileges
+        FROM players p
+        INNER JOIN role r ON r.id = p.role
+        WHERE p.id = ?",
     )
     .bind(player.id)
     .fetch_one(&db.mysql_pool)
     .await?;
 
-    if role < required {
+    if role & required != required {
         return Err(RecordsError::Forbidden);
     }
 
@@ -300,10 +313,11 @@ async fn inner_check_auth_for(
 /// It has the same return value behavior than [`check_auth_for`].
 pub async fn website_check_auth_for(
     db: &Database,
-    WebToken { login, token }: WebToken,
-    required: Role,
+    login: &str,
+    token: &str,
+    required: privilege::Flags,
 ) -> RecordsResult<()> {
-    let key = format_web_token_key(&login);
+    let key = format_web_token_key(login);
     inner_check_auth_for(db, login, token, required, key).await
 }
 
@@ -322,11 +336,65 @@ pub async fn website_check_auth_for(
 /// * Otherwise, it returns Ok(())
 pub async fn check_auth_for(
     db: &Database,
-    AuthHeader { login, token }: AuthHeader,
-    required: Role,
+    login: &str,
+    token: &str,
+    required: privilege::Flags,
 ) -> RecordsResult<()> {
-    let key = format_mp_token_key(&login);
+    let key = format_mp_token_key(login);
     inner_check_auth_for(db, login, token, required, key).await
+}
+
+struct ExtAuthHeaders {
+    player_login: Option<String>,
+    authorization: Option<String>,
+}
+
+fn ext_auth_headers(req: &HttpRequest) -> ExtAuthHeaders {
+    fn ext_header(req: &HttpRequest, header: &str) -> Option<String> {
+        req.headers()
+            .get(header)
+            .and_then(|h| h.to_str().map(str::to_owned).ok())
+    }
+
+    ExtAuthHeaders {
+        player_login: ext_header(req, "PlayerLogin"),
+        authorization: ext_header(req, "Authorization"),
+    }
+}
+
+pub struct MPAuthGuard<const ROLE: privilege::Flags>;
+
+impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
+    type Error = RecordsError;
+
+    type Future = Pin<Box<dyn Future<Output = RecordsResult<Self>>>>;
+
+    fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
+        async fn check<const ROLE: privilege::Flags>(
+            db: Data<Database>,
+            login: Option<String>,
+            token: Option<String>,
+        ) -> RecordsResult<MPAuthGuard<ROLE>> {
+            let (Some(login), Some(token)) = (login, token) else {
+                return Err(RecordsError::Unauthorized);
+            };
+
+            check_auth_for(&db, &login, &token, ROLE).await?;
+
+            Ok(MPAuthGuard)
+        }
+
+        let ExtAuthHeaders {
+            player_login,
+            authorization,
+        } = ext_auth_headers(req);
+        let db = req
+            .app_data::<Data<Database>>()
+            .expect("Data<Database> app data should be present")
+            .clone();
+
+        Box::pin(check(db, player_login, authorization))
+    }
 }
 
 /// Represents the `Authorization` and `PlayerLogin` headers retrieved from an HTTP request.
@@ -342,16 +410,11 @@ impl FromRequest for AuthHeader {
     type Future = Ready<Result<Self, Self::Error>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let ext_header = |header| {
-            req.headers()
-                .get(header)
-                .and_then(|h| h.to_str().map(str::to_string).ok())
-        };
-
-        let (Some(login), Some(token)) = (
-            ext_header("PlayerLogin"),
-            ext_header("Authorization"))
-        else {
+        let ExtAuthHeaders {
+            player_login,
+            authorization,
+        } = ext_auth_headers(req);
+        let (Some(login), Some(token)) = (player_login, authorization) else {
             return ready(Err(RecordsError::Unauthorized));
         };
 

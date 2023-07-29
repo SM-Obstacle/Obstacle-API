@@ -1,6 +1,6 @@
 use crate::{
-    auth::{self, AuthHeader},
-    models::{self, Map, Player, Role},
+    auth::{self, privilege, AuthHeader, MPAuthGuard},
+    models::{self, Map, Player},
     utils::{any_repeated, json},
     Database, RecordsError, RecordsResult,
 };
@@ -99,12 +99,10 @@ struct PlayerRatingResponse {
 }
 
 pub async fn player_rating(
+    _: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
-    auth: AuthHeader,
     Json(body): Json<PlayerRatingBody>,
 ) -> RecordsResult<impl Responder> {
-    auth::check_auth_for(&db, auth, Role::Player).await?;
-
     let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.login).await? else {
         return Err(RecordsError::PlayerNotFound(body.login));
     };
@@ -180,7 +178,7 @@ struct RatingsResponse {
 
 pub async fn ratings(
     db: Data<Database>,
-    auth: AuthHeader,
+    AuthHeader { login, token }: AuthHeader,
     Json(body): Json<RatingsBody>,
 ) -> RecordsResult<impl Responder> {
     let Some(player) = player::get_player_from_login(&db, &body.login).await? else {
@@ -191,16 +189,16 @@ pub async fn ratings(
     };
 
     let (role, author_login) = if map.player_id == player.id {
-        (Role::Player, body.login.clone())
+        (privilege::PLAYER, body.login.clone())
     } else {
         let login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
             .bind(map.player_id)
             .fetch_one(&db.mysql_pool)
             .await?;
-        (Role::Admin, login)
+        (privilege::ADMIN, login)
     };
 
-    auth::check_auth_for(&db, auth, role).await?;
+    auth::check_auth_for(&db, &login, &token, role).await?;
 
     let players_ratings =
         sqlx::query_as::<_, models::Rating>("SELECT * FROM rating WHERE map_id = ?")
@@ -316,12 +314,10 @@ struct RateResponse {
 }
 
 pub async fn rate(
+    _: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
-    auth: AuthHeader,
     Json(body): Json<RateBody>,
 ) -> RecordsResult<impl Responder> {
-    auth::check_auth_for(&db, auth, Role::Player).await?;
-
     let Some(Player { id: player_id, login: player_login, .. }) = sqlx::query_as(
         "SELECT * FROM players WHERE login = ?")
     .bind(&body.login)
@@ -482,12 +478,10 @@ struct ResetRatingsResponse {
 }
 
 pub async fn reset_ratings(
+    _: MPAuthGuard<{ privilege::ADMIN }>,
     db: Data<Database>,
-    auth: AuthHeader,
     Json(body): Json<ResetRatingsBody>,
 ) -> RecordsResult<impl Responder> {
-    auth::check_auth_for(&db, auth, Role::Admin).await?;
-
     let Some((map_id, map_name, author_login)) = sqlx::query_as(
         "SELECT m.id, m.name, login
         FROM maps m

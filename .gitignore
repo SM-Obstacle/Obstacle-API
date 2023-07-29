@@ -5,10 +5,4 @@ python_*
 cert
 .idea
 Cargo.lock
-
-# docker secret files
-db_*
-redis_*
-*.conf*
-mp_*
-sess_key
+.docker

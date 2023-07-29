@@ -53,29 +53,12 @@ pub struct RankedRecord {
     pub record: Record,
 }
 
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug, Enum, PartialOrd, Ord)]
+#[derive(Serialize, FromRow, Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
 #[non_exhaustive]
-pub enum Role {
-    Player,
-    Moderator,
-    Admin,
-}
-
-impl<'r> FromRow<'r, MySqlRow> for Role {
-    fn from_row(row: &'r MySqlRow) -> Result<Self, sqlx::Error> {
-        let id: u8 = row.try_get("id")?;
-        let role_name: String = row.try_get("role_name")?;
-
-        match (id, &*role_name) {
-            (0, "player") => Ok(Self::Player),
-            (1, "mod") => Ok(Self::Moderator),
-            (2, "admin") => Ok(Self::Admin),
-            (id, _) => Err(sqlx::Error::ColumnDecode {
-                index: "id".to_owned(),
-                source: Box::new(RecordsError::UnknownRole(id, role_name)),
-            }),
-        }
-    }
+pub struct Role {
+    pub id: u8,
+    pub role_name: String,
+    pub privileges: u8,
 }
 
 #[derive(Serialize, FromRow, Clone, Debug)]

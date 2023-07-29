@@ -13,10 +13,10 @@ use std::vec::Vec;
 
 use deadpool_redis::Pool as RedisPool;
 
-use crate::auth::{self, WebToken, WEB_TOKEN_SESS_KEY};
+use crate::auth::{self, privilege, WebToken, WEB_TOKEN_SESS_KEY};
 use crate::graphql::map::MapLoader;
 use crate::graphql::player::PlayerLoader;
-use crate::models::{Banishment, Event, Map, Player, RankedRecord, Role};
+use crate::models::{Banishment, Event, Map, Player, RankedRecord};
 use crate::utils::format_map_key;
 use crate::Database;
 
@@ -53,10 +53,10 @@ impl QueryRoot {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<Banishment>> {
         let db = ctx.data_unchecked();
-        let Some(web_token) = ctx.data_opt::<WebToken>() else {
+        let Some(WebToken { login, token }) = ctx.data_opt::<WebToken>() else {
             return Err(async_graphql::Error::new("Unauthorized"));
         };
-        auth::website_check_auth_for(db, web_token.clone(), Role::Admin).await?;
+        auth::website_check_auth_for(db, login, token, privilege::ADMIN).await?;
         Ok(query_as("SELECT * FROM banishments")
             .fetch_all(&db.mysql_pool)
             .await?)

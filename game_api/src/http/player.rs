@@ -14,8 +14,11 @@ use tokio::time::timeout;
 use tracing::Level;
 
 use crate::{
-    auth::{self, AuthHeader, AuthState, Message, WebToken, TIMEOUT, WEB_TOKEN_SESS_KEY},
-    models::{Banishment, Map, Player, Record, Role},
+    auth::{
+        self, privilege, AuthHeader, AuthState, MPAuthGuard, Message, WebToken, TIMEOUT,
+        WEB_TOKEN_SESS_KEY,
+    },
+    models::{Banishment, Map, Player, Record},
     redis,
     utils::{format_map_key, json, read_env_var_file},
     AccessTokenErr, Database, RecordsError, RecordsResult,
@@ -69,10 +72,10 @@ pub async fn get_or_insert(db: &Database, body: UpdatePlayerBody) -> RecordsResu
 
 pub async fn update(
     db: Data<Database>,
-    auth: AuthHeader,
+    AuthHeader { login, token }: AuthHeader,
     Json(body): Json<UpdatePlayerBody>,
 ) -> RecordsResult<impl Responder> {
-    match auth::check_auth_for(&db, auth, Role::Player).await {
+    match auth::check_auth_for(&db, &login, &token, privilege::PLAYER).await {
         Ok(()) => update_or_insert(&db, body).await?,
         Err(RecordsError::PlayerNotFound(_)) => {
             let _ = insert_player(&db, body).await?;
@@ -123,12 +126,10 @@ pub struct HasFinishedResponse {
 }
 
 pub async fn finished(
-    auth: AuthHeader,
+    _: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     Json(body): Json<HasFinishedBody>,
 ) -> RecordsResult<impl Responder> {
-    auth::check_auth_for(&db, auth, Role::Player).await?;
-
     let finished = player_finished(db, body).await?;
     json(finished)
 }
@@ -444,12 +445,10 @@ struct TimesResponseItem {
 }
 
 async fn times(
-    auth: AuthHeader,
+    _: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     Json(body): Json<TimesBody>,
 ) -> RecordsResult<impl Responder> {
-    auth::check_auth_for(&db, auth, Role::Player).await?;
-
     let Some(player) = get_player_from_login(&db, &body.login).await? else {
         return Err(RecordsError::PlayerNotFound(body.login));
     };
