@@ -34,14 +34,9 @@ pub struct UpdateMapBody {
 
 pub async fn insert(
     db: Data<Database>,
-    body: Json<UpdateMapBody>,
+    Json(body): Json<UpdateMapBody>,
 ) -> RecordsResult<impl Responder> {
-    let _ = get_or_insert(&db, &body).await?;
-    Ok(HttpResponse::Ok().finish())
-}
-
-pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult<u32> {
-    let res = player::get_map_from_game_id(db, &body.map_uid).await?;
+    let res = player::get_map_from_game_id(&db, &body.map_uid).await?;
 
     if let Some(Map { id, cps_number, .. }) = res {
         if cps_number.is_none() {
@@ -52,12 +47,12 @@ pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult
                 .await?;
         }
 
-        return Ok(id);
+        return Ok(HttpResponse::Ok().finish());
     }
 
-    let player_id = player::get_or_insert(db, body.author.clone()).await?;
+    let player_id = player::get_or_insert(&db, body.author).await?;
 
-    let id = sqlx::query_scalar(
+    sqlx::query(
         "INSERT INTO maps
         (game_id, player_id, name, cps_number)
         VALUES (?, ?, ?, ?) RETURNING id",
@@ -66,10 +61,10 @@ pub async fn get_or_insert(db: &Database, body: &UpdateMapBody) -> RecordsResult
     .bind(player_id)
     .bind(&body.name)
     .bind(body.cps_number)
-    .fetch_one(&db.mysql_pool)
+    .execute(&db.mysql_pool)
     .await?;
 
-    Ok(id)
+    Ok(HttpResponse::Ok().finish())
 }
 
 #[derive(Deserialize)]

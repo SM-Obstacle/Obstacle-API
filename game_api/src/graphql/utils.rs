@@ -188,7 +188,7 @@ pub async fn get_rank_or_full_update(
                 .unwrap_or_else(|| {
                     panic!(
                         "redis leaderboard for (`{key}`) should be updated \
-                                        at this point"
+                        at this point"
                     )
                 });
             Ok(rank)

@@ -18,6 +18,7 @@ use crate::{
         self, privilege, AuthHeader, AuthState, MPAuthGuard, Message, WebToken, TIMEOUT,
         WEB_TOKEN_SESS_KEY,
     },
+    graphql::get_rank_or_full_update,
     models::{Banishment, Map, Player, Record},
     redis,
     utils::{format_map_key, json, read_env_var_file},
@@ -117,12 +118,12 @@ pub struct HasFinishedBody {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(rename(serialize = "response"))]
-pub struct HasFinishedResponse {
-    pub has_improved: bool,
-    pub login: String,
-    pub old: i32,
-    pub new: i32,
+struct HasFinishedResponse {
+    has_improved: bool,
+    login: String,
+    old: i32,
+    new: i32,
+    current_rank: i32,
 }
 
 pub async fn finished(
@@ -171,39 +172,14 @@ async fn player_finished(
     db: Data<Database>,
     body: HasFinishedBody,
 ) -> RecordsResult<HasFinishedResponse> {
-    let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.login));
-    };
-    let Some(Map { id: map_id, cps_number, .. }) = get_map_from_game_id(&db, &body.map_uid).await? else {
-        return Err(RecordsError::MapNotFound(body.map_uid));
-    };
-
-    if matches!(cps_number, Some(num) if num + 1 != body.cps.len() as u32)
-        || body.cps.iter().sum::<i32>() != body.time
-    {
-        return Err(RecordsError::InvalidTimes);
-    }
-
-    let mut redis_conn = db.redis_pool.get().await.unwrap();
-
-    let old_record = sqlx::query_as::<_, Record>(
-        "SELECT * FROM records WHERE map_id = ? AND player_id = ?
-            ORDER BY record_date DESC LIMIT 1",
-    )
-    .bind(map_id)
-    .bind(player_id)
-    .fetch_optional(&db.mysql_pool)
-    .await?;
-
     async fn insert_record(
         db: &Database,
         redis_conn: &mut deadpool_redis::Connection,
         player_id: u32,
         map_id: u32,
         body: &HasFinishedBody,
+        key: &str,
     ) -> RecordsResult<()> {
-        let key = format_map_key(map_id);
-
         let added: Option<i64> = redis_conn.zadd(&key, player_id, body.time).await.ok();
         if added.is_none() {
             let _count = redis::update_leaderboard(db, &key, map_id).await?;
@@ -245,21 +221,57 @@ async fn player_finished(
         Ok(())
     }
 
+    let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.login).await? else {
+        return Err(RecordsError::PlayerNotFound(body.login));
+    };
+    let Some(Map { id: map_id, cps_number, reversed, .. }) = get_map_from_game_id(&db, &body.map_uid).await? else {
+        return Err(RecordsError::MapNotFound(body.map_uid));
+    };
+    let map_key = format_map_key(map_id);
+
+    if matches!(cps_number, Some(num) if num + 1 != body.cps.len() as u32)
+        || body.cps.iter().sum::<i32>() != body.time
+    {
+        return Err(RecordsError::InvalidTimes);
+    }
+
+    let mut redis_conn = db.redis_pool.get().await.unwrap();
+
+    let old_record = sqlx::query_as::<_, Record>(
+        "SELECT * FROM records WHERE map_id = ? AND player_id = ?
+            ORDER BY time ASC LIMIT 1",
+    )
+    .bind(map_id)
+    .bind(player_id)
+    .fetch_optional(&db.mysql_pool)
+    .await?;
+
     let (old, new, has_improved) = if let Some(Record { time: old, .. }) = old_record {
         if body.time < old {
-            insert_record(&db, &mut redis_conn, player_id, map_id, &body).await?;
+            insert_record(&db, &mut redis_conn, player_id, map_id, &body, &map_key).await?;
         }
         (old, body.time, body.time < old)
     } else {
-        insert_record(&db, &mut redis_conn, player_id, map_id, &body).await?;
+        insert_record(&db, &mut redis_conn, player_id, map_id, &body, &map_key).await?;
         (body.time, body.time, true)
     };
+
+    let current_rank = get_rank_or_full_update(
+        &db,
+        &mut redis_conn,
+        &map_key,
+        map_id,
+        old.min(new),
+        reversed.unwrap_or(false),
+    )
+    .await?;
 
     Ok(HasFinishedResponse {
         has_improved,
         login: body.login,
         old,
         new,
+        current_rank,
     })
 }
 

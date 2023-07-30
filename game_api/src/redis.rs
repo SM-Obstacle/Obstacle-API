@@ -25,7 +25,7 @@ pub async fn update_leaderboard(db: &Database, key: &str, map_id: u32) -> Record
 
     if redis_count != mysql_count {
         let all_map_records: Vec<(u32, i32)> = sqlx::query_as(
-            "SELECT player_id, MIN(time) FROM records
+            "SELECT player_id, MIN(time) AS time FROM records
                 WHERE map_id = ?
                 GROUP BY player_id
                 ORDER BY time ASC, record_date ASC",
