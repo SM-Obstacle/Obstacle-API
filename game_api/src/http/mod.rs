@@ -92,12 +92,13 @@ async fn append_range(
         "SELECT CAST(0 AS UNSIGNED) + ? AS rank,
             players.login AS login,
             players.name AS nickname,
-            MIN(time) as time
+            {func}(time) as time
         FROM records INNER JOIN players ON records.player_id = players.id
         WHERE map_id = ? AND player_id IN ({})
         GROUP BY player_id
         ORDER BY time {order}, record_date ASC",
         params,
+        func = if reversed { "MAX" } else { "MIN" },
         order = if reversed { "DESC" } else { "ASC" }
     );
 
@@ -144,7 +145,7 @@ async fn overview(
 
     // Update redis if needed
     let key = format_map_key(map_id);
-    let count = redis::update_leaderboard(&db, &key, map_id).await? as u32;
+    let count = redis::update_leaderboard(&db, &key, map_id, reversed).await? as u32;
 
     let mut ranked_records: Vec<RankedRecord> = vec![];
 

@@ -18,18 +18,25 @@ async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
 /// that in the database, and reupdates the Redis leaderboard completly if so.
 ///
 /// This is a check to avoid records duplicates, that may happen sometimes.
-pub async fn update_leaderboard(db: &Database, key: &str, map_id: u32) -> RecordsResult<i64> {
+pub async fn update_leaderboard(
+    db: &Database,
+    key: &str,
+    map_id: u32,
+    reversed_lb: bool,
+) -> RecordsResult<i64> {
     let mut redis_conn = db.redis_pool.get().await?;
     let redis_count: i64 = redis_conn.zcount(key, "-inf", "+inf").await?;
     let mysql_count: i64 = count_records_map(db, map_id).await?;
 
     if redis_count != mysql_count {
-        let all_map_records: Vec<(u32, i32)> = sqlx::query_as(
-            "SELECT player_id, MIN(time) AS time FROM records
+        let all_map_records: Vec<(u32, i32)> = sqlx::query_as(&format!(
+            "SELECT player_id, {}(time) AS time FROM records
                 WHERE map_id = ?
                 GROUP BY player_id
-                ORDER BY time ASC, record_date ASC",
-        )
+                ORDER BY time {}, record_date ASC",
+            if reversed_lb { "MAX" } else { "MIN" },
+            if reversed_lb { "DESC" } else { "ASC" }
+        ))
         .bind(map_id)
         .fetch_all(&db.mysql_pool)
         .await?;

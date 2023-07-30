@@ -140,7 +140,7 @@ impl Map {
         let key = format_map_key(self.id);
         let reversed = self.reversed.unwrap_or(false);
 
-        redis::update_leaderboard(db, &key, self.id).await?;
+        redis::update_leaderboard(db, &key, self.id, reversed).await?;
 
         let record_ids: Vec<i32> = if reversed {
             redis_conn.zrevrange(&key, 0, 99)

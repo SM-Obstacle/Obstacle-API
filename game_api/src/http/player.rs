@@ -124,6 +124,7 @@ struct HasFinishedResponse {
     old: i32,
     new: i32,
     current_rank: i32,
+    reversed: bool,
 }
 
 pub async fn finished(
@@ -179,10 +180,11 @@ async fn player_finished(
         map_id: u32,
         body: &HasFinishedBody,
         key: &str,
+        reversed: bool,
     ) -> RecordsResult<()> {
         let added: Option<i64> = redis_conn.zadd(&key, player_id, body.time).await.ok();
         if added.is_none() {
-            let _count = redis::update_leaderboard(db, &key, map_id).await?;
+            let _count = redis::update_leaderboard(db, &key, map_id, reversed).await?;
         }
 
         let now = Utc::now().naive_utc();
@@ -227,6 +229,7 @@ async fn player_finished(
     let Some(Map { id: map_id, cps_number, reversed, .. }) = get_map_from_game_id(&db, &body.map_uid).await? else {
         return Err(RecordsError::MapNotFound(body.map_uid));
     };
+    let reversed = reversed.unwrap_or(false);
     let map_key = format_map_key(map_id);
 
     if matches!(cps_number, Some(num) if num + 1 != body.cps.len() as u32)
@@ -235,24 +238,51 @@ async fn player_finished(
         return Err(RecordsError::InvalidTimes);
     }
 
-    let mut redis_conn = db.redis_pool.get().await.unwrap();
+    let mut redis_conn = db.redis_pool.get().await?;
 
-    let old_record = sqlx::query_as::<_, Record>(
+    let old_record = sqlx::query_as::<_, Record>(&format!(
         "SELECT * FROM records WHERE map_id = ? AND player_id = ?
-            ORDER BY time ASC LIMIT 1",
-    )
+            ORDER BY time {} LIMIT 1",
+        if reversed { "DESC" } else { "ASC" }
+    ))
     .bind(map_id)
     .bind(player_id)
     .fetch_optional(&db.mysql_pool)
     .await?;
 
     let (old, new, has_improved) = if let Some(Record { time: old, .. }) = old_record {
-        if body.time < old {
-            insert_record(&db, &mut redis_conn, player_id, map_id, &body, &map_key).await?;
+        let improved = if reversed {
+            body.time > old
+        } else {
+            body.time < old
+        };
+        println!("has improved: {improved:?}");
+
+        if improved {
+            insert_record(
+                &db,
+                &mut redis_conn,
+                player_id,
+                map_id,
+                &body,
+                &map_key,
+                reversed,
+            )
+            .await?;
         }
-        (old, body.time, body.time < old)
+
+        (old, body.time, improved)
     } else {
-        insert_record(&db, &mut redis_conn, player_id, map_id, &body, &map_key).await?;
+        insert_record(
+            &db,
+            &mut redis_conn,
+            player_id,
+            map_id,
+            &body,
+            &map_key,
+            reversed,
+        )
+        .await?;
         (body.time, body.time, true)
     };
 
@@ -261,8 +291,8 @@ async fn player_finished(
         &mut redis_conn,
         &map_key,
         map_id,
-        old.min(new),
-        reversed.unwrap_or(false),
+        if reversed { old.max(new) } else { old.min(new) },
+        reversed,
     )
     .await?;
 
@@ -272,6 +302,7 @@ async fn player_finished(
         old,
         new,
         current_rank,
+        reversed,
     })
 }
 

@@ -25,14 +25,16 @@ pub fn map_scope() -> Scope {
 }
 
 #[derive(Deserialize)]
-pub struct UpdateMapBody {
-    pub name: String,
-    pub map_uid: String,
-    pub cps_number: u32,
-    pub author: UpdatePlayerBody,
+struct UpdateMapBody {
+    name: String,
+    map_uid: String,
+    cps_number: u32,
+    author: UpdatePlayerBody,
+    // Keep it optional for backward compatibility
+    reversed: Option<bool>,
 }
 
-pub async fn insert(
+async fn insert(
     db: Data<Database>,
     Json(body): Json<UpdateMapBody>,
 ) -> RecordsResult<impl Responder> {
@@ -54,13 +56,14 @@ pub async fn insert(
 
     sqlx::query(
         "INSERT INTO maps
-        (game_id, player_id, name, cps_number)
-        VALUES (?, ?, ?, ?) RETURNING id",
+        (game_id, player_id, name, cps_number, reversed)
+        VALUES (?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(&body.map_uid)
     .bind(player_id)
     .bind(&body.name)
     .bind(body.cps_number)
+    .bind(body.reversed)
     .execute(&db.mysql_pool)
     .await?;
 
