@@ -4,7 +4,8 @@ use deadpool_redis::redis::RedisError;
 pub use deadpool_redis::Pool as RedisPool;
 use serde::{Serialize, Deserialize};
 pub use sqlx::MySqlPool;
-use std::io;
+use sqlx::mysql;
+use std::{io, time::Duration};
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 use std::fmt::Debug;
@@ -188,4 +189,17 @@ pub type RecordsResult<T> = Result<T, RecordsError>;
 pub struct Database {
     pub mysql_pool: MySqlPool,
     pub redis_pool: RedisPool,
+}
+
+pub async fn get_mysql_pool() -> RecordsResult<MySqlPool> {
+    let mysql_pool = mysql::MySqlPoolOptions::new().acquire_timeout(Duration::from_secs(10));
+    #[cfg(feature = "localhost_test")]
+    let mysql_pool = mysql_pool
+        .connect("mysql://records_api:api@localhost/obs_records")
+        .await?;
+    #[cfg(not(feature = "localhost_test"))]
+    let mysql_pool = mysql_pool
+        .connect(&read_env_var_file("DATABASE_URL"))
+        .await?;
+    Ok(mysql_pool)
 }

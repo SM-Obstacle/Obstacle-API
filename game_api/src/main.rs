@@ -11,13 +11,12 @@ use actix_web::{
 };
 use deadpool::Runtime;
 use game_api::{
-    api_route, get_tokens_ttl, graphql_route, read_env_var_file, AuthState, Database, RecordsResult, RecordsError,
+    api_route, get_mysql_pool, get_tokens_ttl, graphql_route, read_env_var_file, AuthState,
+    Database, RecordsError, RecordsResult,
 };
 #[cfg(not(feature = "localhost_test"))]
 use game_api::{get_env_var, get_env_var_as};
-use sqlx::mysql;
 use std::env::var;
-use std::time::Duration;
 use tracing_actix_web::TracingLogger;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -33,15 +32,7 @@ async fn main() -> RecordsResult<()> {
     #[cfg(not(feature = "localhost_test"))]
     let port = get_env_var_as("RECORDS_API_PORT");
 
-    let mysql_pool = mysql::MySqlPoolOptions::new().acquire_timeout(Duration::new(10, 0));
-    #[cfg(feature = "localhost_test")]
-    let mysql_pool = mysql_pool
-        .connect("mysql://records_api:api@localhost/obs_records")
-        .await?;
-    #[cfg(not(feature = "localhost_test"))]
-    let mysql_pool = mysql_pool
-        .connect(&read_env_var_file("DATABASE_URL"))
-        .await?;
+    let mysql_pool = get_mysql_pool().await?;
 
     let redis_pool = {
         let cfg = deadpool_redis::Config {

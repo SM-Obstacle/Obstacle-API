@@ -7,6 +7,7 @@ use actix_web::{
 };
 use chrono::Utc;
 use deadpool_redis::redis::AsyncCommands;
+use futures::StreamExt;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
@@ -21,8 +22,8 @@ use crate::{
     graphql::get_rank_or_full_update,
     models::{Banishment, Map, Player, Record},
     redis,
-    utils::{format_map_key, json, read_env_var_file},
-    AccessTokenErr, Database, RecordsError, RecordsResult,
+    utils::{format_map_key, json},
+    AccessTokenErr, Database, RecordsError, RecordsResult, read_env_var_file,
 };
 
 use super::admin;
@@ -33,6 +34,7 @@ pub fn player_scope() -> Scope {
         .route("/finished", web::post().to(finished))
         .route("/get_token", web::post().to(get_token))
         .route("/give_token", web::post().to(post_give_token))
+        .route("/pb", web::get().to(pb))
         .route("/times", web::post().to(times))
         .route("/info", web::get().to(info))
 }
@@ -44,13 +46,13 @@ pub struct UpdatePlayerBody {
     pub zone_path: Option<String>,
 }
 
-async fn insert_player(db: &Database, body: UpdatePlayerBody) -> RecordsResult<u32> {
+async fn insert_player(db: &Database, login: &str, body: UpdatePlayerBody) -> RecordsResult<u32> {
     let id = sqlx::query_scalar(
         "INSERT INTO players
         (login, name, join_date, zone_path, admins_note, role)
         VALUES (?, ?, SYSDATE(), ?, NULL, 0) RETURNING id",
     )
-    .bind(body.login)
+    .bind(login)
     .bind(body.name)
     .bind(body.zone_path)
     .fetch_one(&db.mysql_pool)
@@ -59,16 +61,20 @@ async fn insert_player(db: &Database, body: UpdatePlayerBody) -> RecordsResult<u
     Ok(id)
 }
 
-pub async fn get_or_insert(db: &Database, body: UpdatePlayerBody) -> RecordsResult<u32> {
+pub async fn get_or_insert(
+    db: &Database,
+    login: &str,
+    body: UpdatePlayerBody,
+) -> RecordsResult<u32> {
     if let Some(id) = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
-        .bind(&body.login)
+        .bind(login)
         .fetch_optional(&db.mysql_pool)
         .await?
     {
         return Ok(id);
     }
 
-    insert_player(db, body).await
+    insert_player(db, login, body).await
 }
 
 pub async fn update(
@@ -77,9 +83,9 @@ pub async fn update(
     Json(body): Json<UpdatePlayerBody>,
 ) -> RecordsResult<impl Responder> {
     match auth::check_auth_for(&db, &login, &token, privilege::PLAYER).await {
-        Ok(()) => update_or_insert(&db, body).await?,
+        Ok(()) => update_or_insert(&db, &login, body).await?,
         Err(RecordsError::PlayerNotFound(_)) => {
-            let _ = insert_player(&db, body).await?;
+            let _ = insert_player(&db, &login, body).await?;
         }
         Err(e) => return Err(e),
     }
@@ -87,9 +93,13 @@ pub async fn update(
     Ok(HttpResponse::Ok().finish())
 }
 
-pub async fn update_or_insert(db: &Database, body: UpdatePlayerBody) -> RecordsResult<()> {
+pub async fn update_or_insert(
+    db: &Database,
+    login: &str,
+    body: UpdatePlayerBody,
+) -> RecordsResult<()> {
     if let Some(id) = sqlx::query_scalar::<_, u32>("SELECT id FROM players WHERE login = ?")
-        .bind(&body.login)
+        .bind(login)
         .fetch_optional(&db.mysql_pool)
         .await?
     {
@@ -103,7 +113,7 @@ pub async fn update_or_insert(db: &Database, body: UpdatePlayerBody) -> RecordsR
         return Ok(());
     }
 
-    let _ = insert_player(db, body).await?;
+    let _ = insert_player(db, login, body).await?;
     Ok(())
 }
 
@@ -111,7 +121,6 @@ pub async fn update_or_insert(db: &Database, body: UpdatePlayerBody) -> RecordsR
 pub struct HasFinishedBody {
     pub time: i32,
     pub respawn_count: i32,
-    pub login: String,
     pub map_uid: String,
     pub flags: Option<u32>,
     pub cps: Vec<i32>,
@@ -128,11 +137,11 @@ struct HasFinishedResponse {
 }
 
 pub async fn finished(
-    _: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     Json(body): Json<HasFinishedBody>,
 ) -> RecordsResult<impl Responder> {
-    let finished = player_finished(db, body).await?;
+    let finished = player_finished(db, login, body).await?;
     json(finished)
 }
 
@@ -171,6 +180,7 @@ pub async fn get_map_from_game_id(
 
 async fn player_finished(
     db: Data<Database>,
+    login: String,
     body: HasFinishedBody,
 ) -> RecordsResult<HasFinishedResponse> {
     async fn insert_record(
@@ -223,8 +233,8 @@ async fn player_finished(
         Ok(())
     }
 
-    let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &body.login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.login));
+    let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &login).await? else {
+        return Err(RecordsError::PlayerNotFound(login));
     };
     let Some(Map { id: map_id, cps_number, reversed, .. }) = get_map_from_game_id(&db, &body.map_uid).await? else {
         return Err(RecordsError::MapNotFound(body.map_uid));
@@ -256,7 +266,6 @@ async fn player_finished(
         } else {
             body.time < old
         };
-        println!("has improved: {improved:?}");
 
         if improved {
             insert_record(
@@ -298,7 +307,7 @@ async fn player_finished(
 
     Ok(HasFinishedResponse {
         has_improved,
-        login: body.login,
+        login,
         old,
         new,
         current_rank,
@@ -476,8 +485,70 @@ struct IsBannedResponse {
 }
 
 #[derive(Deserialize)]
+struct PbBody {
+    map_uid: String,
+}
+
+#[derive(Serialize)]
+struct PbResponse {
+    rs_count: i32,
+    cps_times: Vec<PbCpTimesResponseItem>,
+}
+
+#[derive(FromRow)]
+struct PbResponseItem {
+    rs_count: i32,
+    cp_num: u32,
+    time: i32,
+}
+
+#[derive(Serialize, FromRow)]
+struct PbCpTimesResponseItem {
+    cp_num: u32,
+    time: i32,
+}
+
+async fn pb(
+    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    db: Data<Database>,
+    Query(PbBody { map_uid }): Query<PbBody>,
+) -> RecordsResult<impl Responder> {
+    let mut times = sqlx::query_as::<_, PbResponseItem>(
+        "SELECT r.respawn_count AS rs_count, cps.cp_num AS cp_num, cps.time AS time
+            FROM checkpoint_times cps
+            INNER JOIN maps m ON m.id = cps.map_id
+            INNER JOIN records r ON r.id = cps.record_id
+            INNER JOIN players p on r.player_id = p.id
+            WHERE m.game_id = ? AND p.login = ?
+                AND r.time = (
+                    SELECT MIN(time) FROM records r2
+                    WHERE r2.map_id = m.id AND p.id = r2.player_id
+                )",
+    )
+    .bind(map_uid)
+    .bind(login)
+    .fetch(&db.mysql_pool);
+
+    let mut res = PbResponse {
+        rs_count: 0,
+        cps_times: Vec::with_capacity(times.size_hint().0),
+    };
+
+    while let Some(PbResponseItem {
+        rs_count,
+        cp_num,
+        time,
+    }) = times.next().await.transpose()?
+    {
+        res.rs_count = rs_count;
+        res.cps_times.push(PbCpTimesResponseItem { cp_num, time });
+    }
+
+    json(res)
+}
+
+#[derive(Deserialize)]
 struct TimesBody {
-    login: String,
     maps_uids: Vec<String>,
 }
 
@@ -488,12 +559,12 @@ struct TimesResponseItem {
 }
 
 async fn times(
-    _: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     Json(body): Json<TimesBody>,
 ) -> RecordsResult<impl Responder> {
-    let Some(player) = get_player_from_login(&db, &body.login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.login));
+    let Some(player) = get_player_from_login(&db, &login).await? else {
+        return Err(RecordsError::PlayerNotFound(login));
     };
 
     let query = format!(

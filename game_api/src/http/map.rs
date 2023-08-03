@@ -52,7 +52,7 @@ async fn insert(
         return Ok(HttpResponse::Ok().finish());
     }
 
-    let player_id = player::get_or_insert(&db, body.author).await?;
+    let player_id = player::get_or_insert(&db, &body.author.login.clone(), body.author).await?;
 
     sqlx::query(
         "INSERT INTO maps
@@ -72,7 +72,6 @@ async fn insert(
 
 #[derive(Deserialize)]
 pub struct PlayerRatingBody {
-    login: String,
     map_uid: String,
 }
 
@@ -97,12 +96,12 @@ struct PlayerRatingResponse {
 }
 
 pub async fn player_rating(
-    _: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     Json(body): Json<PlayerRatingBody>,
 ) -> RecordsResult<impl Responder> {
-    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.login));
+    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &login).await? else {
+        return Err(RecordsError::PlayerNotFound(login));
     };
     let Some(Map { id: map_id, .. }) = player::get_map_from_game_id(&db, &body.map_uid).await? else {
         return Err(RecordsError::MapNotFound(body.map_uid));
@@ -147,7 +146,7 @@ pub async fn player_rating(
     .await?;
 
     json(PlayerRatingResponse {
-        player_login: body.login,
+        player_login: login,
         map_name,
         author_login,
         rating,
@@ -156,7 +155,6 @@ pub async fn player_rating(
 
 #[derive(Deserialize)]
 pub struct RatingsBody {
-    login: String,
     map_id: String,
 }
 
@@ -179,15 +177,15 @@ pub async fn ratings(
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<RatingsBody>,
 ) -> RecordsResult<impl Responder> {
-    let Some(player) = player::get_player_from_login(&db, &body.login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.login));
+    let Some(player) = player::get_player_from_login(&db, &login).await? else {
+        return Err(RecordsError::PlayerNotFound(login));
     };
     let Some(map) = player::get_map_from_game_id(&db, &body.map_id).await? else {
         return Err(RecordsError::MapNotFound(body.map_id));
     };
 
     let (role, author_login) = if map.player_id == player.id {
-        (privilege::PLAYER, body.login.clone())
+        (privilege::PLAYER, login.clone())
     } else {
         let login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
             .bind(map.player_id)
@@ -297,7 +295,6 @@ impl PartialEq for PlayerRate {
 
 #[derive(Deserialize)]
 pub struct RateBody {
-    login: String,
     map_id: String,
     ratings: Vec<PlayerRate>,
 }
@@ -312,16 +309,16 @@ struct RateResponse {
 }
 
 pub async fn rate(
-    _: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     Json(body): Json<RateBody>,
 ) -> RecordsResult<impl Responder> {
     let Some(Player { id: player_id, login: player_login, .. }) = sqlx::query_as(
         "SELECT * FROM players WHERE login = ?")
-    .bind(&body.login)
+    .bind(&login)
     .fetch_optional(&db.mysql_pool)
     .await? else {
-        return Err(RecordsError::PlayerNotFound(body.login));
+        return Err(RecordsError::PlayerNotFound(login));
     };
     let Some(Map { id: map_id, name: map_name, player_id: author_id, .. }) = sqlx::query_as(
         "SELECT * FROM maps WHERE game_id = ?")
@@ -355,7 +352,7 @@ pub async fn rate(
         .bind(map_id)
         .fetch_optional(&db.mysql_pool)
         .await? else {
-            return Err(RecordsError::NoRatingFound(body.login, body.map_id));
+            return Err(RecordsError::NoRatingFound(login, body.map_id));
         };
 
         return json(RateResponse {
@@ -464,7 +461,6 @@ pub async fn rate(
 
 #[derive(Deserialize)]
 pub struct ResetRatingsBody {
-    admin_login: String,
     map_id: String,
 }
 
@@ -476,7 +472,7 @@ struct ResetRatingsResponse {
 }
 
 pub async fn reset_ratings(
-    _: MPAuthGuard<{ privilege::ADMIN }>,
+    MPAuthGuard { login }: MPAuthGuard<{ privilege::ADMIN }>,
     db: Data<Database>,
     Json(body): Json<ResetRatingsBody>,
 ) -> RecordsResult<impl Responder> {
@@ -503,7 +499,7 @@ pub async fn reset_ratings(
         .await?;
 
     json(ResetRatingsResponse {
-        admin_login: body.admin_login,
+        admin_login: login,
         map_name,
         author_login,
     })

@@ -1,6 +1,6 @@
 use actix_web::{
     web::{self, Data, Json, Query},
-    Responder, Scope,
+    HttpResponse, Responder, Scope,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{mysql::MySqlRow, FromRow, Row};
@@ -24,22 +24,9 @@ pub fn admin_scope() -> Scope {
         .route("/player_note", web::get().to(player_note))
 }
 
-#[derive(Serialize, Deserialize)]
-struct AdminRequest {
-    admin_login: String,
-    player_login: String,
-}
-
 #[derive(Deserialize)]
 pub struct DelNoteBody {
-    #[serde(flatten)]
-    req: AdminRequest,
-}
-
-#[derive(Serialize)]
-struct DelNoteResponse {
-    #[serde(flatten)]
-    req: AdminRequest,
+    player_login: String,
 }
 
 pub async fn del_note(
@@ -48,24 +35,22 @@ pub async fn del_note(
     Json(body): Json<DelNoteBody>,
 ) -> RecordsResult<impl Responder> {
     sqlx::query("UPDATE players SET admins_note = NULL WHERE login = ?")
-        .bind(&body.req.player_login)
+        .bind(&body.player_login)
         .execute(&db.mysql_pool)
         .await?;
 
-    json(DelNoteResponse { req: body.req })
+    Ok(HttpResponse::Ok().finish())
 }
 
 #[derive(Deserialize)]
 pub struct SetRoleBody {
-    #[serde(flatten)]
-    req: AdminRequest,
+    player_login: String,
     role: u8,
 }
 
 #[derive(Serialize, Deserialize)]
 struct SetRoleResponse {
-    #[serde(flatten)]
-    req: AdminRequest,
+    player_login: String,
     role: String,
 }
 
@@ -76,7 +61,7 @@ pub async fn set_role(
 ) -> RecordsResult<impl Responder> {
     sqlx::query("UPDATE players SET role = ? WHERE login = ?")
         .bind(body.role)
-        .bind(&body.req.player_login)
+        .bind(&body.player_login)
         .execute(&db.mysql_pool)
         .await?;
 
@@ -86,15 +71,14 @@ pub async fn set_role(
         .await?;
 
     json(SetRoleResponse {
-        req: body.req,
+        player_login: body.player_login,
         role,
     })
 }
 
 #[derive(Deserialize)]
 pub struct BanishmentsBody {
-    #[serde(flatten)]
-    req: AdminRequest,
+    player_login: String,
 }
 
 #[derive(Serialize, FromRow)]
@@ -132,8 +116,7 @@ impl<'r> FromRow<'r, MySqlRow> for Banishment {
 
 #[derive(Serialize)]
 struct BanishmentsResponse {
-    #[serde(flatten)]
-    req: AdminRequest,
+    player_login: String,
     banishments: Vec<Banishment>,
 }
 
@@ -142,8 +125,8 @@ pub async fn banishments(
     db: Data<Database>,
     Query(body): Query<BanishmentsBody>,
 ) -> RecordsResult<impl Responder> {
-    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.req.player_login));
+    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.player_login).await? else {
+        return Err(RecordsError::PlayerNotFound(body.player_login));
     };
 
     let banishments = sqlx::query_as(
@@ -161,41 +144,39 @@ pub async fn banishments(
     .await?;
 
     json(BanishmentsResponse {
-        req: body.req,
+        player_login: body.player_login,
         banishments,
     })
 }
 
 #[derive(Deserialize)]
 pub struct BanBody {
-    #[serde(flatten)]
-    req: AdminRequest,
+    player_login: String,
     duration: Option<u32>,
     reason: Option<String>,
 }
 
 #[derive(Serialize)]
 struct BanResponse {
-    #[serde(flatten)]
-    req: AdminRequest,
+    player_login: String,
     ban: Banishment,
 }
 
 pub async fn ban(
-    _: MPAuthGuard<{ privilege::ADMIN }>,
+    MPAuthGuard { login }: MPAuthGuard<{ privilege::ADMIN }>,
     db: Data<Database>,
     Json(body): Json<BanBody>,
 ) -> RecordsResult<impl Responder> {
-    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.req.player_login));
+    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.player_login).await? else {
+        return Err(RecordsError::PlayerNotFound(body.player_login));
     };
-    let Some(Player { id: admin_id, .. }) = player::get_player_from_login(&db, &body.req.admin_login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.req.admin_login));
+    let Some(Player { id: admin_id, .. }) = player::get_player_from_login(&db, &login).await? else {
+        return Err(RecordsError::PlayerNotFound(login));
     };
 
     let was_reprieved =
         sqlx::query_as::<_, Banishment>("SELECT * FROM banishments WHERE player_id = ?")
-            .bind(&body.req.player_login)
+            .bind(&body.player_login)
             .fetch_optional(&db.mysql_pool)
             .await?
             .is_some();
@@ -222,7 +203,10 @@ pub async fn ban(
     .fetch_one(&db.mysql_pool)
     .await?;
 
-    json(BanResponse { req: body.req, ban })
+    json(BanResponse {
+        player_login: body.player_login,
+        ban,
+    })
 }
 
 pub async fn is_banned(db: &Database, player_id: u32) -> RecordsResult<Option<Banishment>> {
@@ -241,14 +225,12 @@ pub async fn is_banned(db: &Database, player_id: u32) -> RecordsResult<Option<Ba
 
 #[derive(Deserialize)]
 pub struct UnbanBody {
-    #[serde(flatten)]
-    req: AdminRequest,
+    player_login: String,
 }
 
 #[derive(Serialize)]
 struct UnbanResponse {
-    #[serde(flatten)]
-    inner: AdminRequest,
+    player_login: String,
     ban: Banishment,
 }
 
@@ -257,12 +239,12 @@ pub async fn unban(
     db: Data<Database>,
     Json(body): Json<UnbanBody>,
 ) -> RecordsResult<impl Responder> {
-    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.req.player_login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.req.player_login));
+    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.player_login).await? else {
+        return Err(RecordsError::PlayerNotFound(body.player_login));
     };
 
     let Some(ban) = is_banned(&db, player_id).await? else {
-        return Err(RecordsError::PlayerNotBanned(body.req.player_login));
+        return Err(RecordsError::PlayerNotBanned(body.player_login));
     };
 
     if let Some(duration) =
@@ -280,15 +262,14 @@ pub async fn unban(
         .await?;
 
     json(UnbanResponse {
-        inner: body.req,
+        player_login: body.player_login,
         ban,
     })
 }
 
 #[derive(Deserialize)]
 pub struct PlayerNoteBody {
-    #[serde(flatten)]
-    req: AdminRequest,
+    player_login: String,
 }
 
 #[derive(Serialize)]
@@ -305,13 +286,13 @@ pub async fn player_note(
     let Some(admins_note) = sqlx::query_scalar(
         "SELECT admins_note FROM players WHERE login = ?"
     )
-    .bind(&body.req.player_login)
+    .bind(&body.player_login)
     .fetch_optional(&db.mysql_pool).await? else {
-        return Err(RecordsError::PlayerNotFound(body.req.player_login));
+        return Err(RecordsError::PlayerNotFound(body.player_login));
     };
 
     json(PlayerNoteResponse {
-        player_login: body.req.player_login,
+        player_login: body.player_login,
         admins_note,
     })
 }

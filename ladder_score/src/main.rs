@@ -1,9 +1,9 @@
-use game_api::models::*;
+use futures::StreamExt;
+use game_api::{get_mysql_pool, models::*};
 use sqlx::mysql;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
-use std::time::Duration;
 
 struct MapStats {
     pub records_count: f64,
@@ -55,24 +55,24 @@ async fn compute_map_score(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let mysql_pool = mysql::MySqlPoolOptions::new()
-        .connect_timeout(Duration::new(10, 0))
-        .connect("mysql://records_api:api@localhost:3306/obs_records")
-        .await?;
+    let mysql_pool = get_mysql_pool().await?;
 
-    let maps: HashMap<u32, Map> = sqlx::query_as::<_, Map>("SELECT * FROM maps")
-        .map(|map| (map.id, map))
-        .fetch_all(&mysql_pool)
-        .await?
-        .into_iter()
-        .collect();
+    let mut maps_q = sqlx::query_as::<_, Map>("SELECT * FROM maps").fetch(&mysql_pool);
+    let mut maps = HashMap::with_capacity(maps_q.size_hint().0);
 
-    let players: HashMap<u32, Player> = sqlx::query_as::<_, Player>("SELECT * FROM players")
-        .map(|player| (player.id, player))
-        .fetch_all(&mysql_pool)
-        .await?
-        .into_iter()
-        .collect();
+    while let Some(map) = maps_q.next().await {
+        let map = map?;
+        maps.insert(map.id, map);
+    }
+
+    let mut players_q = sqlx::query_as::<_, Player>("SELECT * FROM players").fetch(&mysql_pool);
+
+    let mut players = HashMap::with_capacity(players_q.size_hint().0);
+
+    while let Some(player) = players_q.next().await {
+        let player = player?;
+        players.insert(player.id, player);
+    }
 
     let mut map_stats: HashMap<u32, MapStats> = HashMap::new();
     let mut map_scores: HashMap<u32, f64> = HashMap::new();
@@ -81,11 +81,27 @@ async fn main() -> anyhow::Result<()> {
     let to_sec = |time: i32| (time as f64) / 1000.0;
 
     for (_, map) in &maps {
-        let map_records =
-            sqlx::query_as::<_, Record>("SELECT * from records WHERE map_id = ? ORDER BY time")
-                .bind(map.id)
-                .fetch_all(&mysql_pool)
-                .await?;
+        let map_records = sqlx::query_as::<_, Record>(&format!(
+            "SELECT r.*
+            FROM records r
+            INNER JOIN (
+                SELECT MAX(record_date) AS record_date, player_id
+                FROM records
+                WHERE map_id = ?
+                GROUP BY player_id
+            ) t ON t.record_date = r.record_date AND t.player_id = r.player_id
+            WHERE map_id = ? 
+            ORDER BY r.time {order}, r.record_date ASC",
+            order = if map.reversed.unwrap_or(false) {
+                "DESC"
+            } else {
+                "ASC "
+            }
+        ))
+        .bind(map.id)
+        .bind(map.id)
+        .fetch_all(&mysql_pool)
+        .await?;
 
         // Skip maps without records
         if map_records.is_empty() {

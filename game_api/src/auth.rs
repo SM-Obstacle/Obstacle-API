@@ -66,8 +66,8 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::Level;
 
-use crate::utils::{format_mp_token_key, format_web_token_key, generate_token, get_env_var_as};
-use crate::AccessTokenErr;
+use crate::utils::{format_mp_token_key, format_web_token_key, generate_token};
+use crate::{get_env_var_as, AccessTokenErr};
 use crate::{http::player, Database, RecordsError, RecordsResult};
 
 #[allow(unused)]
@@ -362,7 +362,9 @@ fn ext_auth_headers(req: &HttpRequest) -> ExtAuthHeaders {
     }
 }
 
-pub struct MPAuthGuard<const ROLE: privilege::Flags>;
+pub struct MPAuthGuard<const ROLE: privilege::Flags> {
+    pub login: String,
+}
 
 impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
     type Error = RecordsError;
@@ -381,7 +383,7 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
 
             check_auth_for(&db, &login, &token, ROLE).await?;
 
-            Ok(MPAuthGuard)
+            Ok(MPAuthGuard { login })
         }
 
         let ExtAuthHeaders {

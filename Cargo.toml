@@ -2,6 +2,5 @@
 
 members = [
     "game_api",
-    "json_unformat",
     "ladder_score",
 ]
