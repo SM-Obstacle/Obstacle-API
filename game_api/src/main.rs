@@ -9,10 +9,11 @@ use actix_web::{
     web::{self, Data},
     App, HttpResponse, HttpServer,
 };
+use anyhow::Context;
 use deadpool::Runtime;
 use game_api::{
     api_route, get_mysql_pool, get_tokens_ttl, graphql_route, read_env_var_file, AuthState,
-    Database, RecordsError, RecordsResult,
+    Database, RecordsError,
 };
 #[cfg(not(feature = "localhost_test"))]
 use game_api::{get_env_var, get_env_var_as};
@@ -21,7 +22,7 @@ use tracing_actix_web::TracingLogger;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 #[tokio::main]
-async fn main() -> RecordsResult<()> {
+async fn main() -> anyhow::Result<()> {
     // Filter traces based on the RUST_LOG env var, or, if it's not set,
     // default to show the output of the example.
     let filter = var("RECORDS_API_LOG")
@@ -32,7 +33,7 @@ async fn main() -> RecordsResult<()> {
     #[cfg(not(feature = "localhost_test"))]
     let port = get_env_var_as("RECORDS_API_PORT");
 
-    let mysql_pool = get_mysql_pool().await?;
+    let mysql_pool = get_mysql_pool().await.context("Cannot create MySQL pool")?;
 
     let redis_pool = {
         let cfg = deadpool_redis::Config {
@@ -104,9 +105,11 @@ async fn main() -> RecordsResult<()> {
                 Err::<HttpResponse, _>(RecordsError::EndpointNotFound)
             }))
     })
-    .bind(("0.0.0.0", port))?
+    .bind(("0.0.0.0", port))
+    .context("Cannot bind 0.0.0.0 address")?
     .run()
-    .await?;
+    .await
+    .context("Cannot create actix-web server")?;
 
     Ok(())
 }

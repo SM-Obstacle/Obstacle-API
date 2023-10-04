@@ -17,7 +17,7 @@ use super::{
         connections_append_query_string_order, connections_append_query_string_page,
         connections_bind_query_parameters_order, connections_bind_query_parameters_page,
         connections_pages_info, decode_id, RecordAttr,
-    },
+    }, SortState,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Enum)]
@@ -98,7 +98,7 @@ impl Player {
                 let before = decode_id(before.as_ref());
 
                 // Build the query string
-                let mut query = String::from("SELECT id, game_id, player_id, name FROM maps m1 WHERE player_id = ? ");
+                let mut query = String::from("SELECT m1.* FROM maps m1 WHERE player_id = ? ");
                 connections_append_query_string_page(&mut query, true, after, before);
                 query.push_str(" GROUP BY name HAVING id = (SELECT MAX(id) FROM maps m2 WHERE player_id = ? AND m1.name = m2.name)");
                 connections_append_query_string_order(&mut query, first, last);
@@ -139,14 +139,18 @@ impl Player {
     async fn records(
         &self,
         ctx: &async_graphql::Context<'_>,
+        date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let mut redis_conn = redis_pool.get().await?;
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
 
+        let date_sort_by = SortState::sql_order_by(&date_sort_by);
+
         // Query the records with these ids
-        let mut records = sqlx::query_as::<_, RecordAttr>(
+
+        let query = format!(
             "SELECT r.*, m.reversed AS reversed FROM records r
             INNER JOIN maps m ON m.id = r.map_id
             INNER JOIN (
@@ -156,11 +160,14 @@ impl Player {
                 GROUP BY map_id
             ) t ON t.record_date = r.record_date AND t.map_id = r.map_id
             WHERE r.player_id = ?
-            ORDER BY record_date DESC LIMIT 100",
-        )
-        .bind(self.id)
-        .bind(self.id)
-        .fetch(mysql_pool);
+            ORDER BY record_date {date_sort_by}
+            LIMIT 100",
+        );
+
+        let mut records = sqlx::query_as::<_, RecordAttr>(&query)
+            .bind(self.id)
+            .bind(self.id)
+            .fetch(mysql_pool);
 
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 

@@ -4,7 +4,7 @@ use actix_web::{HttpResponse, Resource, Responder};
 use async_graphql::dataloader::DataLoader;
 use async_graphql::extensions::ApolloTracing;
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
-use async_graphql::{connection, ID};
+use async_graphql::{connection, Enum, ID};
 use async_graphql_actix_web::GraphQLRequest;
 use futures::StreamExt;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
@@ -16,7 +16,7 @@ use deadpool_redis::Pool as RedisPool;
 use crate::auth::{self, privilege, WebToken, WEB_TOKEN_SESS_KEY};
 use crate::graphql::map::MapLoader;
 use crate::graphql::player::PlayerLoader;
-use crate::models::{Banishment, Event, Map, Player, RankedRecord};
+use crate::models::{Banishment, Event, Map, Player, RankedRecord, Record};
 use crate::utils::format_map_key;
 use crate::Database;
 
@@ -37,9 +37,24 @@ mod utils;
 
 pub use self::utils::get_rank_or_full_update;
 
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Enum)]
+pub(crate) enum SortState {
+    Sort,
+    Reverse,
+}
+
+impl SortState {
+    pub fn sql_order_by(this: &Option<Self>) -> &'static str {
+        match this.as_ref() {
+            Some(Self::Reverse) => "ASC",
+            _ => "DESC",
+        }
+    }
+}
+
 #[derive(async_graphql::Interface)]
 #[graphql(field(name = "id", type = "ID"))]
-pub enum Node {
+enum Node {
     Map(Map),
     Player(Player),
 }
@@ -209,6 +224,40 @@ impl QueryRoot {
 
     // Old website
 
+    async fn record(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        record_id: u32,
+    ) -> async_graphql::Result<RankedRecord> {
+        let db = ctx.data_unchecked::<Database>();
+        let mut redis_conn = db.redis_pool.get().await?;
+
+        let Some(row) = sqlx::query(
+            "SELECT r.*, m.reversed FROM records r
+            INNER JOIN maps m ON m.id = r.map_id
+            WHERE r.id = ?"
+        ).bind(record_id).fetch_optional(&db.mysql_pool).await? else {
+            return Err(async_graphql::Error::new("Record not found."));
+        };
+        let (record, reversed) = (
+            Record::from_row(&row)?,
+            row.try_get::<Option<bool>, _>("reversed")?,
+        );
+
+        Ok(RankedRecord {
+            rank: get_rank_or_full_update(
+                &db,
+                &mut redis_conn,
+                &format_map_key(record.map_id),
+                record.map_id,
+                record.time,
+                reversed.unwrap_or_default(),
+            )
+            .await?,
+            record,
+        })
+    }
+
     async fn map(
         &self,
         ctx: &async_graphql::Context<'_>,
@@ -234,23 +283,26 @@ impl QueryRoot {
     async fn records(
         &self,
         ctx: &async_graphql::Context<'_>,
+        date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let mut redis_conn = redis_pool.get().await?;
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
 
-        let mut records = sqlx::query_as::<_, RecordAttr>(
+        let date_sort_by = SortState::sql_order_by(&date_sort_by);
+
+        let query = format!(
             "SELECT r.*, m.reversed AS reversed
             FROM records r INNER JOIN maps m ON m.id = r.map_id
             WHERE r.record_date = (
                 SELECT MAX(record_date) FROM records
                 WHERE player_id = r.player_id AND map_id = r.map_id
             )
-            ORDER BY record_date DESC
-            LIMIT 100",
-        )
-        .fetch(mysql_pool);
+            ORDER BY record_date {date_sort_by}
+            LIMIT 100"
+        );
+        let mut records = sqlx::query_as::<_, RecordAttr>(&query).fetch(mysql_pool);
 
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 

@@ -16,7 +16,7 @@ use crate::{
     Database,
 };
 
-use super::{player::PlayerLoader, utils::get_rank_or_full_update};
+use super::{player::PlayerLoader, utils::get_rank_or_full_update, SortState};
 
 #[async_graphql::Object]
 impl Map {
@@ -131,6 +131,8 @@ impl Map {
     async fn records(
         &self,
         ctx: &async_graphql::Context<'_>,
+        rank_sort_by: Option<SortState>,
+        date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked();
         let redis_pool = ctx.data_unchecked::<RedisPool>();
@@ -142,7 +144,12 @@ impl Map {
 
         redis::update_leaderboard(db, &key, self.id, reversed).await?;
 
-        let record_ids: Vec<i32> = if reversed {
+        let to_reverse = reversed
+            ^ rank_sort_by
+                .as_ref()
+                .filter(|s| **s == SortState::Reverse)
+                .is_some();
+        let record_ids: Vec<i32> = if to_reverse {
             redis_conn.zrevrange(&key, 0, 99)
         } else {
             redis_conn.zrange(&key, 0, 99)
@@ -154,30 +161,54 @@ impl Map {
 
         let player_ids_query = record_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
+        let (and_player_id_in, order_by_clause) = if let Some(s) = date_sort_by.as_ref() {
+            let date_sort_by = if *s == SortState::Reverse {
+                "ASC".to_owned()
+            } else {
+                "DESC".to_owned()
+            };
+            (String::new(), format!("r.record_date {date_sort_by}"))
+        } else {
+            (
+                format!("AND r.player_id IN ({player_ids_query})"),
+                format!(
+                    "r.time {order}, r.record_date ASC",
+                    order = if to_reverse { "DESC" } else { "ASC" }
+                ),
+            )
+        };
+
         // Query the records with these ids
         let query = format!(
             "SELECT r.*
             FROM records r
             INNER JOIN (
                 SELECT MAX(record_date) AS record_date, player_id
-                FROM records
-                WHERE map_id = ? AND player_id IN ({})
+                FROM records r
+                WHERE map_id = ? {and_player_id_in}
                 GROUP BY player_id
             ) t ON t.record_date = r.record_date AND t.player_id = r.player_id
-            WHERE map_id = ? AND r.player_id IN ({})
-            ORDER BY r.time {order}, r.record_date ASC",
-            player_ids_query,
-            player_ids_query,
-            order = if reversed { "DESC" } else { "ASC" }
+            WHERE map_id = ? {and_player_id_in}
+            ORDER BY {order_by_clause}
+            {}",
+            if date_sort_by.is_some() || rank_sort_by.is_some() {
+                "LIMIT 100".to_owned()
+            } else {
+                String::new()
+            }
         );
 
         let mut query = sqlx::query_as::<_, Record>(&query).bind(self.id);
-        for id in &record_ids {
-            query = query.bind(id);
+        if date_sort_by.is_none() {
+            for id in &record_ids {
+                query = query.bind(id);
+            }
         }
         query = query.bind(self.id);
-        for id in &record_ids {
-            query = query.bind(id);
+        if date_sort_by.is_none() {
+            for id in &record_ids {
+                query = query.bind(id);
+            }
         }
 
         let mut records = query.fetch(mysql_pool);
