@@ -8,6 +8,7 @@ use actix_web::{
 use chrono::Utc;
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
+use regex::Regex;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
@@ -21,9 +22,9 @@ use crate::{
     },
     graphql::get_rank_or_full_update,
     models::{Banishment, Map, Player, Record},
-    redis,
+    read_env_var_file, redis,
     utils::{format_map_key, json},
-    AccessTokenErr, Database, RecordsError, RecordsResult, read_env_var_file,
+    AccessTokenErr, Database, RecordsError, RecordsResult,
 };
 
 use super::admin;
@@ -137,52 +138,13 @@ struct HasFinishedResponse {
 }
 
 pub async fn finished(
-    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    // MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    AuthHeader { login, .. }: AuthHeader,
     db: Data<Database>,
     Json(body): Json<HasFinishedBody>,
 ) -> RecordsResult<impl Responder> {
-    let finished = player_finished(db, login, body).await?;
-    json(finished)
-}
+    let body = body;
 
-pub async fn get_player_from_login(
-    db: &Database,
-    player_login: &str,
-) -> Result<Option<Player>, RecordsError> {
-    let r = sqlx::query_as("SELECT * FROM players WHERE login = ?")
-        .bind(player_login)
-        .fetch_optional(&db.mysql_pool)
-        .await?;
-    Ok(r)
-}
-
-pub async fn check_banned(
-    db: &MySqlPool,
-    player_id: u32,
-) -> Result<Option<Banishment>, RecordsError> {
-    let r = sqlx::query_as("SELECT * FROM current_bans WHERE player_id = ?")
-        .bind(player_id)
-        .fetch_optional(db)
-        .await?;
-    Ok(r)
-}
-
-pub async fn get_map_from_game_id(
-    db: &Database,
-    map_game_id: &str,
-) -> Result<Option<Map>, RecordsError> {
-    let r = sqlx::query_as("SELECT * FROM maps WHERE game_id = ?")
-        .bind(map_game_id)
-        .fetch_optional(&db.mysql_pool)
-        .await?;
-    Ok(r)
-}
-
-async fn player_finished(
-    db: Data<Database>,
-    login: String,
-    body: HasFinishedBody,
-) -> RecordsResult<HasFinishedResponse> {
     async fn insert_record(
         db: &Database,
         redis_conn: &mut deadpool_redis::Connection,
@@ -236,9 +198,11 @@ async fn player_finished(
     let Some(Player { id: player_id, .. }) = get_player_from_login(&db, &login).await? else {
         return Err(RecordsError::PlayerNotFound(login));
     };
+
     let Some(Map { id: map_id, cps_number, reversed, .. }) = get_map_from_game_id(&db, &body.map_uid).await? else {
         return Err(RecordsError::MapNotFound(body.map_uid));
     };
+
     let reversed = reversed.unwrap_or(false);
     let map_key = format_map_key(map_id);
 
@@ -267,33 +231,55 @@ async fn player_finished(
             body.time < old
         };
 
-        if improved {
-            insert_record(
-                &db,
-                &mut redis_conn,
-                player_id,
-                map_id,
-                &body,
-                &map_key,
-                reversed,
-            )
-            .await?;
-        }
-
         (old, body.time, improved)
     } else {
-        insert_record(
-            &db,
-            &mut redis_conn,
-            player_id,
-            map_id,
-            &body,
-            &map_key,
-            reversed,
-        )
-        .await?;
         (body.time, body.time, true)
     };
+
+    insert_record(
+        &db,
+        &mut redis_conn,
+        player_id,
+        map_id,
+        &body,
+        &map_key,
+        reversed,
+    )
+    .await?;
+
+    let re = Regex::new("(?<gameId>\\w+)_benchmark").unwrap();
+    if let Some(game_id) = re
+        .captures(&body.map_uid)
+        .and_then(|cap| cap.name("gameId"))
+    {
+        if let Some(Map {
+            id: map_id,
+            cps_number: regular_cps_number,
+            reversed: regular_reversed,
+            ..
+        }) = get_map_from_game_id(&db, game_id.as_str()).await?
+        {
+            if cps_number == regular_cps_number && reversed == regular_reversed.unwrap_or(false) {
+                let map_key = format_map_key(map_id);
+                insert_record(
+                    &db,
+                    &mut redis_conn,
+                    player_id,
+                    map_id,
+                    &HasFinishedBody {
+                        time: body.time,
+                        respawn_count: body.respawn_count,
+                        map_uid: game_id.as_str().to_owned(),
+                        flags: body.flags,
+                        cps: body.cps,
+                    },
+                    &map_key,
+                    reversed,
+                )
+                .await?;
+            }
+        }
+    }
 
     let current_rank = get_rank_or_full_update(
         &db,
@@ -305,14 +291,47 @@ async fn player_finished(
     )
     .await?;
 
-    Ok(HasFinishedResponse {
+    json(HasFinishedResponse {
         has_improved,
-        login,
+        login: login,
         old,
         new,
         current_rank,
         reversed,
     })
+}
+
+pub async fn get_player_from_login(
+    db: &Database,
+    player_login: &str,
+) -> Result<Option<Player>, RecordsError> {
+    let r = sqlx::query_as("SELECT * FROM players WHERE login = ?")
+        .bind(player_login)
+        .fetch_optional(&db.mysql_pool)
+        .await?;
+    Ok(r)
+}
+
+pub async fn check_banned(
+    db: &MySqlPool,
+    player_id: u32,
+) -> Result<Option<Banishment>, RecordsError> {
+    let r = sqlx::query_as("SELECT * FROM current_bans WHERE player_id = ?")
+        .bind(player_id)
+        .fetch_optional(db)
+        .await?;
+    Ok(r)
+}
+
+pub async fn get_map_from_game_id(
+    db: &Database,
+    map_game_id: &str,
+) -> Result<Option<Map>, RecordsError> {
+    let r = sqlx::query_as("SELECT * FROM maps WHERE game_id = ?")
+        .bind(map_game_id)
+        .fetch_optional(&db.mysql_pool)
+        .await?;
+    Ok(r)
 }
 
 #[derive(Serialize)]

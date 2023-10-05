@@ -294,11 +294,14 @@ impl QueryRoot {
 
         let query = format!(
             "SELECT r.*, m.reversed AS reversed
-            FROM records r INNER JOIN maps m ON m.id = r.map_id
-            WHERE r.record_date = (
-                SELECT MAX(record_date) FROM records
+            FROM records r
+            INNER JOIN maps m ON m.id = r.map_id
+            WHERE r.time = (
+                SELECT IF(reversed, MAX(time), MIN(time))
+                FROM records
                 WHERE player_id = r.player_id AND map_id = r.map_id
             )
+            AND m.game_id NOT LIKE '%_benchmark'
             ORDER BY record_date {date_sort_by}
             LIMIT 100"
         );

@@ -17,7 +17,8 @@ use super::{
         connections_append_query_string_order, connections_append_query_string_page,
         connections_bind_query_parameters_order, connections_bind_query_parameters_page,
         connections_pages_info, decode_id, RecordAttr,
-    }, SortState,
+    },
+    SortState,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Enum)]
@@ -151,15 +152,17 @@ impl Player {
         // Query the records with these ids
 
         let query = format!(
-            "SELECT r.*, m.reversed AS reversed FROM records r
+            "SELECT r.*, m.reversed AS reversed
+            FROM records r
             INNER JOIN maps m ON m.id = r.map_id
             INNER JOIN (
-                SELECT MAX(record_date) AS record_date, map_id
-                FROM records
-                WHERE player_id = ?
+                SELECT IF(m.reversed, MAX(time), MIN(time)) AS time, map_id
+                FROM records r
+                INNER JOIN maps m ON m.id = r.map_id
+                WHERE r.player_id = ?
                 GROUP BY map_id
-            ) t ON t.record_date = r.record_date AND t.map_id = r.map_id
-            WHERE r.player_id = ?
+            ) t ON t.time = r.time AND t.map_id = r.map_id
+            WHERE r.player_id = ? AND m.game_id NOT LIKE '%_benchmark'
             ORDER BY record_date {date_sort_by}
             LIMIT 100",
         );

@@ -183,11 +183,12 @@ impl Map {
             "SELECT r.*
             FROM records r
             INNER JOIN (
-                SELECT MAX(record_date) AS record_date, player_id
+                SELECT IF(m.reversed, MAX(time), MIN(time)) AS time, r.player_id
                 FROM records r
+                INNER JOIN maps m ON m.id = r.map_id
                 WHERE map_id = ? {and_player_id_in}
-                GROUP BY player_id
-            ) t ON t.record_date = r.record_date AND t.player_id = r.player_id
+                GROUP BY r.player_id
+            ) t ON t.time = r.time AND t.player_id = r.player_id
             WHERE map_id = ? {and_player_id_in}
             ORDER BY {order_by_clause}
             {}",
