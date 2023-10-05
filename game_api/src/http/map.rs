@@ -337,9 +337,7 @@ pub async fn rate(
         .fetch_one(&db.mysql_pool)
         .await?;
     if body.ratings.len()
-        > rate_count
-            .try_into()
-            .expect("couldn't convert from i64 to usize")
+        > <i64 as TryInto<usize>>::try_into(rate_count).expect("couldn't convert from i64 to usize")
         || any_repeated(&body.ratings)
     {
         return Err(RecordsError::InvalidRates);
