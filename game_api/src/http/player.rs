@@ -138,8 +138,7 @@ struct HasFinishedResponse {
 }
 
 pub async fn finished(
-    // MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
-    AuthHeader { login, .. }: AuthHeader,
+    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     Json(body): Json<HasFinishedBody>,
 ) -> RecordsResult<impl Responder> {
