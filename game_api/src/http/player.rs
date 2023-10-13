@@ -99,23 +99,23 @@ pub async fn update_or_insert(
     login: &str,
     body: UpdatePlayerBody,
 ) -> RecordsResult<()> {
-    if let Some(id) = sqlx::query_scalar::<_, u32>("SELECT id FROM players WHERE login = ?")
+    let Some(id) = sqlx::query_scalar::<_, u32>("SELECT id FROM players WHERE login = ?")
         .bind(login)
         .fetch_optional(&db.mysql_pool)
         .await?
-    {
-        sqlx::query("UPDATE players SET name = ?, zone_path = ? WHERE id = ?")
-            .bind(body.name)
-            .bind(body.zone_path)
-            .bind(id)
-            .execute(&db.mysql_pool)
-            .await?;
-
+    else {
+        insert_player(db, login, body).await?;
         return Ok(());
-    }
+    };
 
-    let _ = insert_player(db, login, body).await?;
-    Ok(())
+    sqlx::query("UPDATE players SET name = ?, zone_path = ? WHERE id = ?")
+        .bind(body.name)
+        .bind(body.zone_path)
+        .bind(id)
+        .execute(&db.mysql_pool)
+        .await?;
+
+    return Ok(());
 }
 
 #[derive(Deserialize, Debug)]
