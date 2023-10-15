@@ -53,7 +53,7 @@ impl SortState {
 }
 
 #[derive(async_graphql::Interface)]
-#[graphql(field(name = "id", type = "ID"))]
+#[graphql(field(name = "id", ty = "ID"))]
 enum Node {
     Map(Map),
     Player(Player),

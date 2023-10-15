@@ -50,7 +50,11 @@ pub async fn get_categories_by_edition_id(
     edition_id: u32,
 ) -> RecordsResult<Vec<models::EventCategory>> {
     let r = sqlx::query_as(
-        "SELECT * FROM event_edition_categories WHERE event_id = ? AND edition_id = ?",
+        "SELECT DISTINCT ec.* FROM event_edition ee
+        INNER JOIN event_edition_categories eec ON eec.edition_id = ee.id
+        INNER JOIN event_categories ecs ON ecs.event_id = ee.event_id
+        INNER JOIN event_category ec ON ec.id IN (eec.category_id, ecs.category_id)
+        WHERE ee.event_id = ? AND ee.id = ?",
     )
     .bind(event_id)
     .bind(edition_id)
