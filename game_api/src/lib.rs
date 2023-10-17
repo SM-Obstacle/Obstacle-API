@@ -18,6 +18,7 @@ mod http;
 pub mod models;
 mod redis;
 mod utils;
+pub(crate) mod must;
 
 pub use auth::{get_tokens_ttl, AuthState};
 pub use graphql::graphql_route;
@@ -88,8 +89,10 @@ pub enum RecordsError {
     EventNotFound(String) = 310,
     #[error("event edition `{1}` not found for event `{0}`")]
     EventEditionNotFound(String, u32) = 311,
+    #[error("map with uid `{0}` is not registered for event `{1}` edition {2}")]
+    MapNotInEventEdition(String, String, u32) = 312,
     #[error("invalid times")]
-    InvalidTimes = 312,
+    InvalidTimes = 313,
 }
 
 impl RecordsError {
@@ -166,6 +169,7 @@ impl actix_web::ResponseError for RecordsError {
             Self::InvalidRates => actix_web::HttpResponse::BadRequest().json(self.to_err_res("invalid rates (too many, or repeated rate)".to_owned())),
             Self::EventNotFound(handle) => actix_web::HttpResponse::BadRequest().json(self.to_err_res(format!("event `{handle}` not found"))),
             Self::EventEditionNotFound(handle, edition) => actix_web::HttpResponse::BadRequest().json(self.to_err_res(format!("event edition `{edition}` not found for event `{handle}`"))),
+            Self::MapNotInEventEdition(uid, handle, edition) => actix_web::HttpResponse::BadRequest().json(self.to_err_res(format!("map with uid `{uid}` is not registered for event `{handle}` edition {edition}"))),
             Self::InvalidTimes => actix_web::HttpResponse::BadRequest().json(self.to_err_res("invalid times (total run time may not be equal to the sum of all checkpoint times)".to_owned())),
         }
     }

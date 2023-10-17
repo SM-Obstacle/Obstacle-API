@@ -139,10 +139,10 @@ impl Map {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
         let mut redis_conn = redis_pool.get().await?;
 
-        let key = format_map_key(self.id);
+        let key = format_map_key(self.id, None);
         let reversed = self.reversed.unwrap_or(false);
 
-        redis::update_leaderboard(db, &key, self.id, reversed).await?;
+        redis::update_leaderboard(db, &key, self.id, reversed, None).await?;
 
         let to_reverse = reversed
             ^ rank_sort_by
@@ -191,11 +191,11 @@ impl Map {
             ) t ON t.time = r.time AND t.player_id = r.player_id
             WHERE map_id = ? {and_player_id_in}
             ORDER BY {order_by_clause}
-            {}",
-            if date_sort_by.is_some() || rank_sort_by.is_some() {
-                "LIMIT 100".to_owned()
+            {limit}",
+            limit = if date_sort_by.is_some() || rank_sort_by.is_some() {
+                "LIMIT 100"
             } else {
-                String::new()
+                ""
             }
         );
 
@@ -218,7 +218,7 @@ impl Map {
         while let Some(record) = records.next().await {
             let record = record?;
             let rank =
-                get_rank_or_full_update(db, &mut redis_conn, &key, self.id, record.time, reversed)
+                get_rank_or_full_update(db, &mut redis_conn, &key, self.id, record.time, reversed, None)
                     .await?;
 
             ranked_records.push(RankedRecord { rank, record });

@@ -2,7 +2,7 @@ use async_graphql::ID;
 use deadpool_redis::{redis::AsyncCommands, Connection};
 use sqlx::{mysql, FromRow};
 
-use crate::{models::Record, redis, Database, RecordsResult};
+use crate::{models::{Record, self}, redis, Database, RecordsResult};
 
 #[derive(FromRow)]
 pub struct RecordAttr {
@@ -150,6 +150,7 @@ pub async fn get_rank_or_full_update(
     map_id: u32,
     time: i32,
     reversed: bool,
+    event: Option<&(models::Event, models::EventEdition)>,
 ) -> RecordsResult<i32> {
     async fn get_rank(
         redis_conn: &mut Connection,
@@ -182,10 +183,11 @@ pub async fn get_rank_or_full_update(
         Some(rank) => Ok(rank),
         None => {
             redis_conn.del(key).await?;
-            redis::update_leaderboard(db, key, map_id, reversed).await?;
+            redis::update_leaderboard(db, key, map_id, reversed, event).await?;
             let rank = get_rank(redis_conn, key, time, reversed)
                 .await?
                 .unwrap_or_else(|| {
+                    // TODO: make a more clear message showing diff
                     panic!(
                         "redis leaderboard for (`{key}`) should be updated \
                         at this point"

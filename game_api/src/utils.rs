@@ -4,6 +4,8 @@ use actix_web::{HttpResponse, Responder};
 use rand::Rng;
 use serde::Serialize;
 
+use crate::models;
+
 /// Converts the provided body to a `200 OK` JSON responses.
 pub fn json<T: Serialize, E>(obj: T) -> Result<impl Responder, E> {
     Ok(HttpResponse::Ok().json(obj))
@@ -25,8 +27,18 @@ fn format_key(sub: String) -> String {
 }
 
 /// Returns the formatted string for the map id, used to store its leaderboard
-pub fn format_map_key(map_id: u32) -> String {
-    format_key(format!("lb:{map_id}"))
+pub fn format_map_key(
+    map_id: u32,
+    event: Option<&(models::Event, models::EventEdition)>,
+) -> String {
+    if let Some((event, edition)) = event {
+        format_key(format!(
+            "event:{}:{}:lb:{map_id}",
+            event.handle, edition.id 
+        ))
+    } else {
+        format_key(format!("lb:{map_id}"))
+    }
 }
 
 fn inner_format_token_key(prefix: &str, login: &str) -> String {

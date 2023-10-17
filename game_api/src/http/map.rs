@@ -1,6 +1,7 @@
 use crate::{
     auth::{self, privilege, AuthHeader, MPAuthGuard},
     models::{self, Map, Player},
+    must,
     utils::{any_repeated, json},
     Database, RecordsError, RecordsResult,
 };
@@ -100,12 +101,8 @@ pub async fn player_rating(
     db: Data<Database>,
     Json(body): Json<PlayerRatingBody>,
 ) -> RecordsResult<impl Responder> {
-    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &login).await? else {
-        return Err(RecordsError::PlayerNotFound(login));
-    };
-    let Some(Map { id: map_id, .. }) = player::get_map_from_game_id(&db, &body.map_uid).await? else {
-        return Err(RecordsError::MapNotFound(body.map_uid));
-    };
+    let player_id = must::have_player(&db, &login).await?.id;
+    let map_id = must::have_map(&db, &body.map_uid).await?.id;
 
     let rating = match sqlx::query_scalar(
         "SELECT rating_date FROM rating WHERE player_id = ? AND map_id = ?",
@@ -177,12 +174,8 @@ pub async fn ratings(
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<RatingsBody>,
 ) -> RecordsResult<impl Responder> {
-    let Some(player) = player::get_player_from_login(&db, &login).await? else {
-        return Err(RecordsError::PlayerNotFound(login));
-    };
-    let Some(map) = player::get_map_from_game_id(&db, &body.map_id).await? else {
-        return Err(RecordsError::MapNotFound(body.map_id));
-    };
+    let player = must::have_player(&db, &login).await?;
+    let map = must::have_map(&db, &body.map_id).await?;
 
     let (role, author_login) = if map.player_id == player.id {
         (privilege::PLAYER, login.clone())
@@ -313,20 +306,18 @@ pub async fn rate(
     db: Data<Database>,
     Json(body): Json<RateBody>,
 ) -> RecordsResult<impl Responder> {
-    let Some(Player { id: player_id, login: player_login, .. }) = sqlx::query_as(
-        "SELECT * FROM players WHERE login = ?")
-    .bind(&login)
-    .fetch_optional(&db.mysql_pool)
-    .await? else {
-        return Err(RecordsError::PlayerNotFound(login));
-    };
-    let Some(Map { id: map_id, name: map_name, player_id: author_id, .. }) = sqlx::query_as(
-        "SELECT * FROM maps WHERE game_id = ?")
-    .bind(&body.map_id)
-    .fetch_optional(&db.mysql_pool)
-    .await? else {
-        return Err(RecordsError::MapNotFound(body.map_id));
-    };
+    let Player {
+        id: player_id,
+        login: player_login,
+        ..
+    } = must::have_player(&db, &login).await?;
+
+    let Map {
+        id: map_id,
+        name: map_name,
+        player_id: author_id,
+        ..
+    } = must::have_map(&db, &body.map_id).await?;
 
     let author_login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
         .bind(author_id)

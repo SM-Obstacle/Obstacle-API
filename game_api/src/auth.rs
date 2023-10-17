@@ -273,7 +273,7 @@ async fn inner_check_auth_for(
     token: &str,
     required: privilege::Flags,
     key: String,
-) -> RecordsResult<()> {
+) -> RecordsResult<u32> {
     let mut connection = db.redis_pool.get().await?;
     let stored_token: Option<String> = connection.get(&key).await?;
     if !matches!(stored_token, Some(t) if t == digest(token)) {
@@ -304,7 +304,7 @@ async fn inner_check_auth_for(
         return Err(RecordsError::Forbidden);
     }
 
-    Ok(())
+    Ok(player.id)
 }
 
 /// Checks for a successful authentication for the player with its login and Website token.
@@ -316,7 +316,7 @@ pub async fn website_check_auth_for(
     login: &str,
     token: &str,
     required: privilege::Flags,
-) -> RecordsResult<()> {
+) -> RecordsResult<u32> {
     let key = format_web_token_key(login);
     inner_check_auth_for(db, login, token, required, key).await
 }
@@ -339,7 +339,7 @@ pub async fn check_auth_for(
     login: &str,
     token: &str,
     required: privilege::Flags,
-) -> RecordsResult<()> {
+) -> RecordsResult<u32> {
     let key = format_mp_token_key(login);
     inner_check_auth_for(db, login, token, required, key).await
 }

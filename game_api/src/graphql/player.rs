@@ -177,7 +177,7 @@ impl Player {
         while let Some(record) = records.next().await {
             let RecordAttr { record, reversed } = record?;
 
-            let key = format_map_key(record.map_id);
+            let key = format_map_key(record.map_id, None);
 
             let rank = get_rank_or_full_update(
                 db,
@@ -186,6 +186,7 @@ impl Player {
                 record.map_id,
                 record.time,
                 reversed.unwrap_or(false),
+                None
             )
             .await?;
 

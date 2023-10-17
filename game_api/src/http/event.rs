@@ -6,18 +6,39 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-use crate::{models, utils::json, Database, RecordsError, RecordsResult};
+use crate::{
+    auth::{privilege, MPAuthGuard},
+    models, must,
+    utils::json,
+    Database, RecordsResult,
+};
 
-use super::player::UpdatePlayerBody;
+use super::{overview, pb, player::UpdatePlayerBody, player_finished as pf};
 
 pub fn event_scope() -> Scope {
     web::scope("/event")
-        .route("", web::get().to(event_list))
         .service(
-            web::scope("{event_handle}")
-                .route("", web::get().to(event_editions))
-                .route("/{edition_id}", web::get().to(edition)),
+            web::scope("/{event_handle}")
+                .service(
+                    web::scope("/{edition_id}")
+                        .route("/overview", web::get().to(edition_overview))
+                        .service(
+                            web::scope("/player")
+                                .route("/finished", web::post().to(edition_finished))
+                                .route("/pb", web::get().to(edition_pb)),
+                        )
+                        .default_service(web::get().to(edition)),
+                )
+                .default_service(web::get().to(event_editions)),
         )
+        .default_service(web::get().to(event_list))
+}
+
+pub fn get_sql_fragments() -> (&'static str, &'static str) {
+    (
+        "INNER JOIN event_edition_records eer ON r.id = eer.record_id",
+        "AND eer.event_id = ? AND eer.edition_id = ?",
+    )
 }
 
 pub async fn get_event_by_handle(
@@ -174,9 +195,7 @@ async fn event_editions(
     event_handle: Path<String>,
 ) -> RecordsResult<impl Responder> {
     let event_handle = event_handle.into_inner();
-    let Some(models::Event { id, .. }) = get_event_by_handle(&db, &event_handle).await? else {
-        return Err(RecordsError::EventNotFound(event_handle));
-    };
+    let id = must::have_event_handle(&db, &event_handle).await?.id;
 
     let res: Vec<EventHandleResponse> =
         sqlx::query_as("SELECT * FROM event_edition WHERE event_id = ? ORDER BY id DESC")
@@ -207,12 +226,8 @@ async fn edition(
     path: Path<(String, u32)>,
 ) -> RecordsResult<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
-    let Some(models::Event { id: event_id, .. }) = get_event_by_handle(&db, &event_handle).await? else {
-        return Err(RecordsError::EventNotFound(event_handle));
-    };
-    let Some(edition) = get_edition_by_id(&db, event_id, edition_id).await? else {
-        return Err(RecordsError::EventEditionNotFound(event_handle, edition_id));
-    };
+    let (models::Event { id: event_id, .. }, edition) =
+        must::have_event_edition(&db, &event_handle, edition_id).await?;
 
     let categories = get_categories_by_edition_id(&db, event_id, edition.id).await?;
     let content = if categories.is_empty() {
@@ -247,6 +262,57 @@ async fn edition(
         banner_img_url: edition.banner_img_url,
         content,
     })
+}
+
+async fn edition_overview(
+    db: Data<Database>,
+    path: Path<(String, u32)>,
+    query: overview::OverviewReq,
+) -> RecordsResult<impl Responder> {
+    overview::overview(db, query, Some(path.into_inner())).await
+}
+
+async fn edition_finished(
+    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    db: Data<Database>,
+    path: Path<(String, u32)>,
+    body: pf::PlayerFinishedBody,
+) -> RecordsResult<impl Responder> {
+    let (event_handle, edition_id) = path.into_inner();
+
+    // We first check that the event and its edition exist
+    // and that the map is registered on it.
+    let event =
+        must::have_event_edition_with_map(&db, &body.map_uid, event_handle, edition_id).await?;
+
+    // Then we insert the record for the global records
+    let res = pf::finished(login, &db, body, Some(&event)).await?;
+
+    // Then we insert it for the event edition records
+    let (event, edition) = event;
+    sqlx::query(
+        "INSERT INTO event_edition_records (record_id, event_id, edition_id)
+            VALUES (?, ?, ?)",
+    )
+    .bind(res.record_id)
+    .bind(event.id)
+    .bind(edition.id)
+    .execute(&db.mysql_pool)
+    .await?;
+
+    json(res.res)
+}
+
+async fn edition_pb(
+    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    path: Path<(String, u32)>,
+    db: Data<Database>,
+    body: pb::PbReq,
+) -> RecordsResult<impl Responder> {
+    let (event_handle, edition_id) = path.into_inner();
+    let event =
+        must::have_event_edition_with_map(&db, &body.map_uid, event_handle, edition_id).await?;
+    pb::pb(login, db, body, Some(event)).await
 }
 
 async fn convert_maps(

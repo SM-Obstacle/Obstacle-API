@@ -246,12 +246,13 @@ impl QueryRoot {
 
         Ok(RankedRecord {
             rank: get_rank_or_full_update(
-                &db,
+                db,
                 &mut redis_conn,
-                &format_map_key(record.map_id),
+                &format_map_key(record.map_id, None),
                 record.map_id,
                 record.time,
                 reversed.unwrap_or_default(),
+                None,
             )
             .await?,
             record,
@@ -312,7 +313,7 @@ impl QueryRoot {
         while let Some(record) = records.next().await {
             let RecordAttr { record, reversed } = record?;
 
-            let key = format_map_key(record.map_id);
+            let key = format_map_key(record.map_id, None);
 
             let rank = get_rank_or_full_update(
                 db,
@@ -321,6 +322,7 @@ impl QueryRoot {
                 record.map_id,
                 record.time,
                 reversed.unwrap_or(false),
+                None,
             )
             .await?;
 
