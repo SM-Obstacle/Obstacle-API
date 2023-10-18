@@ -297,10 +297,16 @@ impl QueryRoot {
             "SELECT r.*, m.reversed AS reversed
             FROM records r
             INNER JOIN maps m ON m.id = r.map_id
-            WHERE r.time = (
-                SELECT IF(reversed, MAX(time), MIN(time))
-                FROM records
-                WHERE player_id = r.player_id AND map_id = r.map_id
+            WHERE (r.time, r.record_date) = (
+                SELECT r2.time,
+                    MAX(r2.record_date)
+                FROM records r2
+                WHERE r2.time = (
+                    SELECT IF(m.reversed, MAX(r3.time), MIN(r3.time))
+                    FROM records r3
+                    WHERE r3.player_id = r2.player_id AND r3.map_id = r2.map_id
+                )
+                    AND r2.player_id = r.player_id AND r2.map_id = r.map_id
             )
             AND m.game_id NOT LIKE '%_benchmark'
             ORDER BY record_date {date_sort_by}

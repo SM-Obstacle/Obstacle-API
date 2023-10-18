@@ -170,6 +170,40 @@ pub async fn finished(
     )
     .await?;
 
+    // TODO: Remove this after having added event mode into the TP
+    let original_uid = body.map_uid.replace("_benchmark", "");
+    if original_uid != body.map_uid {
+        let Map {
+            id: map_id,
+            cps_number: original_cps_number,
+            reversed: original_reversed,
+            ..
+        } = must::have_map(db, &original_uid).await?;
+
+        if cps_number == original_cps_number && reversed == original_reversed.unwrap_or(false) {
+            let map_key = format_map_key(map_id, None);
+            insert_record(
+                db,
+                &mut redis_conn,
+                player_id,
+                map_id,
+                &HasFinishedBody {
+                    time: body.time,
+                    respawn_count: body.respawn_count,
+                    map_uid: original_uid,
+                    flags: body.flags,
+                    cps: body.cps,
+                },
+                &map_key,
+                reversed,
+                None,
+            )
+            .await?;
+        } else {
+            return Err(RecordsError::MapNotFound(original_uid));
+        }
+    }
+
     let current_rank = get_rank_or_full_update(
         db,
         &mut redis_conn,

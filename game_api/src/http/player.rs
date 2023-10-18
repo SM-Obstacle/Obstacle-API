@@ -80,6 +80,9 @@ pub async fn update(
 ) -> RecordsResult<impl Responder> {
     match auth::check_auth_for(&db, &login, &token, privilege::PLAYER).await {
         Ok(id) => update_player(&db, id, body).await?,
+        // At this point, if Redis has registered a token with the login, it means that
+        // the player is not yet added to the Obstacle database but effectively
+        // has a ManiaPlanet account
         Err(RecordsError::PlayerNotFound(_)) => {
             let _ = insert_player(&db, &login, body).await?;
         }

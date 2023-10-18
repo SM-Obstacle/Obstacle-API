@@ -183,12 +183,21 @@ impl Map {
             "SELECT r.*
             FROM records r
             INNER JOIN (
-                SELECT IF(m.reversed, MAX(time), MIN(time)) AS time, r.player_id
+                SELECT MAX(record_date) as record_date,
+                    r.time AS time,
+                    r.player_id AS player_id
                 FROM records r
-                INNER JOIN maps m ON m.id = r.map_id
+                INNER JOIN (
+                    SELECT IF(m.reversed, MAX(time), MIN(time)) as time,
+                        r.player_id
+                    FROM records r
+                    INNER JOIN maps m ON m.id = r.map_id
+                    WHERE map_id = ? {and_player_id_in}
+                    GROUP BY r.player_id
+                ) t ON t.time = r.time AND t.player_id = r.player_id
                 WHERE map_id = ? {and_player_id_in}
-                GROUP BY r.player_id
-            ) t ON t.time = r.time AND t.player_id = r.player_id
+                GROUP BY r.player_id, r.time
+            ) t ON t.time = r.time AND t.player_id = r.player_id AND r.record_date = t.record_date
             WHERE map_id = ? {and_player_id_in}
             ORDER BY {order_by_clause}
             {limit}",
@@ -199,7 +208,14 @@ impl Map {
             }
         );
 
-        let mut query = sqlx::query_as::<_, Record>(&query).bind(self.id);
+        let mut query = sqlx::query_as::<_, Record>(&query)
+            .bind(self.id);
+        if date_sort_by.is_none() {
+            for id in &record_ids {
+                query = query.bind(id);
+            }
+        }
+        query = query.bind(self.id);
         if date_sort_by.is_none() {
             for id in &record_ids {
                 query = query.bind(id);
@@ -217,9 +233,16 @@ impl Map {
 
         while let Some(record) = records.next().await {
             let record = record?;
-            let rank =
-                get_rank_or_full_update(db, &mut redis_conn, &key, self.id, record.time, reversed, None)
-                    .await?;
+            let rank = get_rank_or_full_update(
+                db,
+                &mut redis_conn,
+                &key,
+                self.id,
+                record.time,
+                reversed,
+                None,
+            )
+            .await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }

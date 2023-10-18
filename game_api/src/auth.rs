@@ -67,7 +67,7 @@ use tokio::time::timeout;
 use tracing::Level;
 
 use crate::utils::{format_mp_token_key, format_web_token_key, generate_token};
-use crate::{get_env_var_as, AccessTokenErr};
+use crate::{get_env_var_as, must, AccessTokenErr};
 use crate::{http::player, Database, RecordsError, RecordsResult};
 
 #[allow(unused)]
@@ -280,11 +280,7 @@ async fn inner_check_auth_for(
         return Err(RecordsError::Unauthorized);
     }
 
-    // At this point, if Redis has registered a token with the login, it means that
-    // the player is not yet added to the Obstacle database but effectively has a ManiaPlanet account
-    let Some(player) = player::get_player_from_login(db, login).await? else {
-        return Err(RecordsError::PlayerNotFound(login.to_owned()));
-    };
+    let player = must::have_player(db, login).await?;
 
     if let Some(ban) = player::check_banned(&db.mysql_pool, player.id).await? {
         return Err(RecordsError::BannedPlayer(ban));
