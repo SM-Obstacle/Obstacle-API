@@ -57,7 +57,7 @@ pub async fn pb(
         WHERE m.game_id = ? AND p.login = ?
             {and_event}
             AND r.time = (
-                SELECT MIN(time)
+                SELECT IF(m.reversed, MAX(time), MIN(time))
                 FROM records r
                 {join_event}
                 WHERE r.map_id = m.id AND p.id = r.player_id
