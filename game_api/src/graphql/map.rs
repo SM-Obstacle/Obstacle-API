@@ -180,24 +180,7 @@ impl Map {
 
         // Query the records with these ids
         let query = format!(
-            "SELECT r.*
-            FROM records r
-            INNER JOIN (
-                SELECT MAX(record_date) as record_date,
-                    r.time AS time,
-                    r.player_id AS player_id
-                FROM records r
-                INNER JOIN (
-                    SELECT IF(m.reversed, MAX(time), MIN(time)) as time,
-                        r.player_id
-                    FROM records r
-                    INNER JOIN maps m ON m.id = r.map_id
-                    WHERE map_id = ? {and_player_id_in}
-                    GROUP BY r.player_id
-                ) t ON t.time = r.time AND t.player_id = r.player_id
-                WHERE map_id = ? {and_player_id_in}
-                GROUP BY r.player_id, r.time
-            ) t ON t.time = r.time AND t.player_id = r.player_id AND r.record_date = t.record_date
+            "SELECT * FROM global_records r
             WHERE map_id = ? {and_player_id_in}
             ORDER BY {order_by_clause}
             {limit}",
@@ -210,18 +193,6 @@ impl Map {
 
         let mut query = sqlx::query_as::<_, Record>(&query)
             .bind(self.id);
-        if date_sort_by.is_none() {
-            for id in &record_ids {
-                query = query.bind(id);
-            }
-        }
-        query = query.bind(self.id);
-        if date_sort_by.is_none() {
-            for id in &record_ids {
-                query = query.bind(id);
-            }
-        }
-        query = query.bind(self.id);
         if date_sort_by.is_none() {
             for id in &record_ids {
                 query = query.bind(id);

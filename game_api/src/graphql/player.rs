@@ -152,32 +152,13 @@ impl Player {
         // Query the records with these ids
 
         let query = format!(
-            "SELECT r.*, m.reversed AS reversed
-            FROM records r
-            INNER JOIN maps m ON m.id = r.map_id
-            INNER JOIN (
-                SELECT MAX(r.record_date) AS record_date,
-                    r.time AS time,
-                    r.map_id AS map_id
-                FROM records r
-                INNER JOIN (
-                    SELECT IF(m.reversed, MAX(time), MIN(time)) AS time, map_id
-                    FROM records r
-                    INNER JOIN maps m ON m.id = r.map_id
-                    WHERE r.player_id = ?
-                    GROUP BY map_id
-                ) t ON t.time = r.time AND t.map_id = r.map_id
-                WHERE r.player_id = ?
-                GROUP BY r.map_id, r.time
-            ) t ON t.time = r.time AND t.map_id = r.map_id AND t.record_date = r.record_date
-            WHERE r.player_id = ? AND m.game_id NOT LIKE '%_benchmark'
+            "SELECT * FROM global_records
+            WHERE player_id = ?
             ORDER BY record_date {date_sort_by}
             LIMIT 100",
         );
 
         let mut records = sqlx::query_as::<_, RecordAttr>(&query)
-            .bind(self.id)
-            .bind(self.id)
             .bind(self.id)
             .fetch(mysql_pool);
 
