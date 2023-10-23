@@ -295,6 +295,7 @@ impl QueryRoot {
 
         let query = format!(
             "SELECT * FROM global_records
+            WHERE game_id NOT LIKE '%_benchmark'
             ORDER BY record_date {date_sort_by}
             LIMIT 100"
         );

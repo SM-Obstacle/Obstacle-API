@@ -153,7 +153,7 @@ impl Player {
 
         let query = format!(
             "SELECT * FROM global_records
-            WHERE player_id = ?
+            WHERE player_id = ? AND game_id NOT LIKE '%_benchmark'
             ORDER BY record_date {date_sort_by}
             LIMIT 100",
         );
