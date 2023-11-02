@@ -66,7 +66,10 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::Level;
 
-use crate::utils::{format_mp_token_key, format_web_token_key, generate_token};
+use crate::models::ApiStatusKind;
+use crate::utils::{
+    format_mp_token_key, format_web_token_key, generate_token, get_api_status, ApiStatus,
+};
 use crate::{get_env_var_as, must, AccessTokenErr};
 use crate::{http::player, Database, RecordsError, RecordsResult};
 
@@ -417,6 +420,34 @@ impl FromRequest for AuthHeader {
         };
 
         ready(Ok(Self { login, token }))
+    }
+}
+
+/// A guard that checks that the API isn't currently under maintenance.
+pub struct ApiAvailable;
+
+impl FromRequest for ApiAvailable {
+    type Error = RecordsError;
+
+    type Future = Pin<Box<dyn Future<Output = RecordsResult<Self>>>>;
+
+    fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
+        async fn check_status(db: Data<Database>) -> RecordsResult<ApiAvailable> {
+            match get_api_status(&db).await? {
+                ApiStatus {
+                    at,
+                    kind: ApiStatusKind::Maintenance,
+                } => Err(RecordsError::Maintenance(at)),
+                _ => Ok(ApiAvailable),
+            }
+        }
+
+        let db = req
+            .app_data::<Data<Database>>()
+            .expect("Data<Database> app data should be present")
+            .clone();
+
+        Box::pin(check_status(db))
     }
 }
 

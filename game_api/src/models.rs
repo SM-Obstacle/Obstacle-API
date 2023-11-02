@@ -257,3 +257,25 @@ pub struct EventEditionMaps {
     pub map_id: u32,
     pub category_id: Option<u32>,
 }
+
+#[derive(Serialize, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum ApiStatusKind {
+    Normal,
+    Maintenance,
+}
+
+impl<'r> FromRow<'r, MySqlRow> for ApiStatusKind {
+    fn from_row(row: &'r MySqlRow) -> Result<Self, sqlx::Error> {
+        let id: u8 = row.try_get("status_id")?;
+        let kind: String = row.try_get("status_name")?;
+
+        match (id, &*kind) {
+            (1, "normal") => Ok(Self::Normal),
+            (2, "maintenance") => Ok(Self::Maintenance),
+            (id, _) => Err(sqlx::Error::ColumnDecode {
+                index: "status_id".to_owned(),
+                source: Box::new(RecordsError::UnknownRatingKind(id, kind)),
+            }),
+        }
+    }
+}

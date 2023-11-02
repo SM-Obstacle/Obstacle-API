@@ -47,6 +47,8 @@ pub enum RecordsError {
     ExternalRequest(#[from] reqwest::Error) = 104,
     #[error("unknown error: {0}")]
     Unknown(String) = 105,
+    #[error("server is in maintenance since {0}")]
+    Maintenance(chrono::NaiveDateTime) = 106,
 
     // Authentication errors
     #[error("unauthorized")]
@@ -122,6 +124,7 @@ impl actix_web::ResponseError for RecordsError {
             Self::Unknown(s) => actix_web::HttpResponse::InternalServerError().json(self.to_err_res(format!(
                 "unknown error: `{s}`",
             ))),
+            Self::Maintenance(date) => actix_web::HttpResponse::InternalServerError().json(self.to_err_res(format!("server is in maintenance mode since {date:?}"))),
 
             // Authentication errors
             Self::Unauthorized => {

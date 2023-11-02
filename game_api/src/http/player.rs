@@ -13,9 +13,10 @@ use tracing::Level;
 
 use crate::{
     auth::{
-        self, privilege, AuthHeader, AuthState, MPAuthGuard, Message, WebToken, TIMEOUT,
-        WEB_TOKEN_SESS_KEY,
+        self, privilege, ApiAvailable, AuthHeader, AuthState, MPAuthGuard, Message, WebToken,
+        TIMEOUT, WEB_TOKEN_SESS_KEY,
     },
+    get_env_var,
     models::{Banishment, Map, Player},
     must, read_env_var_file,
     utils::json,
@@ -33,6 +34,7 @@ pub fn player_scope() -> Scope {
         .route("/pb", web::get().to(pb))
         .route("/times", web::post().to(times))
         .route("/info", web::get().to(info))
+        .route("/report_error", web::post().to(report_error))
 }
 
 #[derive(Serialize, Deserialize, Clone, FromRow, Debug)]
@@ -74,6 +76,7 @@ pub async fn get_or_insert(
 }
 
 pub async fn update(
+    _: ApiAvailable,
     db: Data<Database>,
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<UpdatePlayerBody>,
@@ -217,6 +220,7 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
 }
 
 async fn finished(
+    _: ApiAvailable,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     body: pf::PlayerFinishedBody,
@@ -238,6 +242,7 @@ struct GetTokenResponse {
 }
 
 pub async fn get_token(
+    _: ApiAvailable,
     db: Data<Database>,
     client: Data<Client>,
     state: Data<AuthState>,
@@ -319,6 +324,7 @@ struct IsBannedResponse {
 }
 
 async fn pb(
+    _: ApiAvailable,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     body: pb::PbReq,
@@ -398,4 +404,103 @@ pub async fn info(
     };
 
     json(info)
+}
+
+#[derive(Deserialize)]
+struct ReportErrorBody {
+    on_route: String,
+    map_uid: String,
+    err_type: i32,
+    err_msg: String,
+    time: i32,
+    respawn_count: i32,
+}
+
+async fn report_error(
+    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    client: Data<Client>,
+    Json(body): Json<ReportErrorBody>,
+) -> RecordsResult<impl Responder> {
+    #[derive(Serialize)]
+    struct WebhookBodyEmbedField {
+        name: String,
+        value: String,
+    }
+
+    #[derive(Serialize)]
+    struct WebhookBodyEmbed {
+        title: String,
+        description: Option<String>,
+        color: u32,
+        fields: Option<Vec<WebhookBodyEmbedField>>,
+    }
+
+    #[derive(Serialize)]
+    struct WebhookBody {
+        content: String,
+        embeds: Vec<WebhookBodyEmbed>,
+    }
+
+    let url = get_env_var("WEBHOOK_REPORT_URL");
+
+    let mut fields = vec![
+        WebhookBodyEmbedField {
+            name: "Map UID".to_owned(),
+            value: format!("`{}`", body.map_uid),
+        },
+        WebhookBodyEmbedField {
+            name: "When called this API route".to_owned(),
+            value: format!("`{}`", body.on_route),
+        },
+    ];
+
+    let (content, color) = if body.on_route == "/player/finished" {
+        fields.extend(
+            vec![
+                WebhookBodyEmbedField {
+                    name: "Run time".to_owned(),
+                    value: format!("`{}`", body.time),
+                },
+                WebhookBodyEmbedField {
+                    name: "Respawn count".to_owned(),
+                    value: format!("`{}`", body.respawn_count),
+                },
+            ]
+            .into_iter(),
+        );
+
+        (
+            format!("🚨 Player `{login}` finished a map but got an error."),
+            11862016,
+        )
+    } else {
+        (
+            format!("⚠️ Player `{login}` got an error while playing."),
+            5814783,
+        )
+    };
+
+    client
+        .post(url)
+        .json(&WebhookBody {
+            content,
+            embeds: vec![
+                WebhookBodyEmbed {
+                    title: format!("Error type {}", body.err_type),
+                    description: Some(format!("`{}`", body.err_msg)),
+                    color,
+                    fields: None,
+                },
+                WebhookBodyEmbed {
+                    title: "Context".to_owned(),
+                    description: None,
+                    color,
+                    fields: Some(fields),
+                },
+            ],
+        })
+        .send()
+        .await?;
+
+    Ok(HttpResponse::Ok().finish())
 }

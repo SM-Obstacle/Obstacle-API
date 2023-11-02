@@ -4,7 +4,7 @@ use actix_web::{HttpResponse, Responder};
 use rand::Rng;
 use serde::Serialize;
 
-use crate::models;
+use crate::{models, Database, RecordsResult};
 
 /// Converts the provided body to a `200 OK` JSON responses.
 pub fn json<T: Serialize, E>(obj: T) -> Result<impl Responder, E> {
@@ -32,10 +32,7 @@ pub fn format_map_key(
     event: Option<&(models::Event, models::EventEdition)>,
 ) -> String {
     if let Some((event, edition)) = event {
-        format_key(format!(
-            "event:{}:{}:lb:{map_id}",
-            event.handle, edition.id 
-        ))
+        format_key(format!("event:{}:{}:lb:{map_id}", event.handle, edition.id))
     } else {
         format_key(format!("lb:{map_id}"))
     }
@@ -95,4 +92,24 @@ where
 /// behavior because all the environment variable of the Records API are read as configuration.
 pub fn read_env_var_file(v: &str) -> String {
     read_to_string(get_env_var(v)).unwrap_or_else(|e| panic!("unable to read from {v} path: {e:?}"))
+}
+
+#[derive(sqlx::FromRow)]
+pub struct ApiStatus {
+    pub at: chrono::NaiveDateTime,
+    #[sqlx(flatten)]
+    pub kind: models::ApiStatusKind,
+}
+
+pub async fn get_api_status(db: &Database) -> RecordsResult<ApiStatus> {
+    let result = sqlx::query_as(
+        "SELECT a.*, sh1.status_history_date as `at`
+        FROM api_status_history sh1
+        INNER JOIN api_status a ON a.status_id = sh1.status_id
+        WHERE sh1.status_history_id = (SELECT MAX(status_history_id) FROM api_status_history)",
+    )
+    .fetch_one(&db.mysql_pool)
+    .await?;
+
+    Ok(result)
 }
