@@ -2,13 +2,19 @@ use async_graphql::ID;
 use deadpool_redis::{redis::AsyncCommands, Connection};
 use sqlx::{mysql, FromRow};
 
-use crate::{models::{Record, self}, redis, Database, RecordsResult};
+use crate::models::Map;
+use crate::utils::format_map_key;
+use crate::{
+    models::{self, Record},
+    redis, Database, RecordsResult,
+};
 
 #[derive(FromRow)]
 pub struct RecordAttr {
     #[sqlx(flatten)]
     pub record: Record,
-    pub reversed: Option<bool>,
+    #[sqlx(flatten)]
+    pub map: Map,
 }
 
 pub fn decode_id(id: Option<&ID>) -> Option<u32> {
@@ -145,11 +151,12 @@ pub fn connections_pages_info(
 /// but the times were not corresponding. It generally happens after a database migration.
 pub async fn get_rank_or_full_update(
     db: &Database,
-    redis_conn: &mut Connection,
-    key: &str,
-    map_id: u32,
+    models::Map {
+        id: map_id,
+        reversed,
+        ..
+    }: &models::Map,
     time: i32,
-    reversed: bool,
     event: Option<&(models::Event, models::EventEdition)>,
 ) -> RecordsResult<i32> {
     async fn get_rank(
@@ -179,11 +186,15 @@ pub async fn get_rank_or_full_update(
         }
     }
 
+    let redis_conn = &mut db.redis_pool.get().await?;
+    let reversed = reversed.unwrap_or(false);
+    let key = &format_map_key(*map_id, event);
+
     match get_rank(redis_conn, key, time, reversed).await? {
         Some(rank) => Ok(rank),
         None => {
             redis_conn.del(key).await?;
-            redis::update_leaderboard(db, key, map_id, reversed, event).await?;
+            redis::update_leaderboard(db, key, *map_id, reversed, event).await?;
             let rank = get_rank(redis_conn, key, time, reversed)
                 .await?
                 .unwrap_or_else(|| {

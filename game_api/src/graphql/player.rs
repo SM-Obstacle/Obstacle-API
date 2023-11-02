@@ -1,13 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_graphql::{connection, dataloader::Loader, Context, Enum, ID};
-use deadpool_redis::Pool as RedisPool;
 use futures::StreamExt;
 use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use crate::{
     models::{Banishment, Map, Player, RankedRecord, Role},
-    utils::format_map_key,
     Database, RecordsError,
 };
 
@@ -143,9 +141,7 @@ impl Player {
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let mut redis_conn = redis_pool.get().await?;
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
+        let mysql_pool = &db.mysql_pool;
 
         let date_sort_by = SortState::sql_order_by(&date_sort_by);
 
@@ -165,20 +161,9 @@ impl Player {
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
         while let Some(record) = records.next().await {
-            let RecordAttr { record, reversed } = record?;
+            let RecordAttr { record, map } = record?;
 
-            let key = format_map_key(record.map_id, None);
-
-            let rank = get_rank_or_full_update(
-                db,
-                &mut redis_conn,
-                &key,
-                record.map_id,
-                record.time,
-                reversed.unwrap_or(false),
-                None,
-            )
-            .await?;
+            let rank = get_rank_or_full_update(db, &map, record.time, None).await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }

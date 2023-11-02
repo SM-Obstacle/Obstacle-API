@@ -37,8 +37,8 @@ pub struct Map {
 
 #[derive(Serialize, FromRow, Clone, Debug)]
 pub struct Record {
-    pub id: u32,
-    pub player_id: u32,
+    pub record_id: u32,
+    pub record_player_id: u32,
     pub map_id: u32,
     pub time: i32,
     pub respawn_count: i32,

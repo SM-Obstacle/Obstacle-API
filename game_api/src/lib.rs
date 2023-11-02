@@ -197,13 +197,14 @@ pub struct Database {
 
 pub async fn get_mysql_pool() -> RecordsResult<MySqlPool> {
     let mysql_pool = mysql::MySqlPoolOptions::new().acquire_timeout(Duration::from_secs(10));
+
     #[cfg(feature = "localhost_test")]
-    let mysql_pool = mysql_pool
-        .connect("mysql://records_api:api@localhost/obs_records")
-        .await?;
+    let url = &get_env_var("DATABASE_URL");
     #[cfg(not(feature = "localhost_test"))]
+    let url = &read_env_var_file("DATABASE_URL");
+
     let mysql_pool = mysql_pool
-        .connect(&read_env_var_file("DATABASE_URL"))
+        .connect(url)
         .await?;
     Ok(mysql_pool)
 }

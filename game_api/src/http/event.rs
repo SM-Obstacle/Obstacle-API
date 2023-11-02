@@ -36,7 +36,7 @@ pub fn event_scope() -> Scope {
 
 pub fn get_sql_fragments() -> (&'static str, &'static str) {
     (
-        "INNER JOIN event_edition_records eer ON r.id = eer.record_id",
+        "INNER JOIN event_edition_records eer ON r.record_id = eer.record_id",
         "AND eer.event_id = ? AND eer.edition_id = ?",
     )
 }

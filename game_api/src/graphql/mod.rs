@@ -11,13 +11,10 @@ use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
 use std::env::var;
 use std::vec::Vec;
 
-use deadpool_redis::Pool as RedisPool;
-
 use crate::auth::{self, privilege, WebToken, WEB_TOKEN_SESS_KEY};
 use crate::graphql::map::MapLoader;
 use crate::graphql::player::PlayerLoader;
 use crate::models::{Banishment, Event, Map, Player, RankedRecord, Record};
-use crate::utils::format_map_key;
 use crate::Database;
 
 use self::event::{EventCategoryLoader, EventLoader};
@@ -230,31 +227,23 @@ impl QueryRoot {
         record_id: u32,
     ) -> async_graphql::Result<RankedRecord> {
         let db = ctx.data_unchecked::<Database>();
-        let mut redis_conn = db.redis_pool.get().await?;
 
         let Some(row) = sqlx::query(
-            "SELECT r.*, m.reversed FROM records r
+            "SELECT r.*, m.* FROM records r
             INNER JOIN maps m ON m.id = r.map_id
-            WHERE r.id = ?"
-        ).bind(record_id).fetch_optional(&db.mysql_pool).await? else {
+            WHERE r.id = ?",
+        )
+        .bind(record_id)
+        .fetch_optional(&db.mysql_pool)
+        .await?
+        else {
             return Err(async_graphql::Error::new("Record not found."));
         };
-        let (record, reversed) = (
-            Record::from_row(&row)?,
-            row.try_get::<Option<bool>, _>("reversed")?,
-        );
+
+        let (record, map) = (Record::from_row(&row)?, Map::from_row(&row)?);
 
         Ok(RankedRecord {
-            rank: get_rank_or_full_update(
-                db,
-                &mut redis_conn,
-                &format_map_key(record.map_id, None),
-                record.map_id,
-                record.time,
-                reversed.unwrap_or_default(),
-                None,
-            )
-            .await?,
+            rank: get_rank_or_full_update(db, &map, record.time, None).await?,
             record,
         })
     }
@@ -287,8 +276,6 @@ impl QueryRoot {
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let mut redis_conn = redis_pool.get().await?;
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
 
         let date_sort_by = SortState::sql_order_by(&date_sort_by);
@@ -304,20 +291,9 @@ impl QueryRoot {
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
         while let Some(record) = records.next().await {
-            let RecordAttr { record, reversed } = record?;
+            let RecordAttr { record, map } = record?;
 
-            let key = format_map_key(record.map_id, None);
-
-            let rank = get_rank_or_full_update(
-                db,
-                &mut redis_conn,
-                &key,
-                record.map_id,
-                record.time,
-                reversed.unwrap_or(false),
-                None,
-            )
-            .await?;
+            let rank = get_rank_or_full_update(db, &map, record.time, None).await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }
@@ -383,6 +359,7 @@ fn create_schema(db: Database) -> Schema {
     {
         println!("----------- Schema:");
         println!("{}", &schema.sdl());
+        println!("----------- End schema");
     }
 
     schema

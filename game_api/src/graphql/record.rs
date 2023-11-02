@@ -10,7 +10,7 @@ use super::{map::MapLoader, player::PlayerLoader};
 #[async_graphql::Object]
 impl RankedRecord {
     async fn id(&self) -> u32 {
-        self.record.id
+        self.record.record_id
     }
 
     async fn rank(&self) -> i32 {
@@ -26,7 +26,7 @@ impl RankedRecord {
 
     async fn player(&self, ctx: &Context<'_>) -> async_graphql::Result<Player> {
         ctx.data_unchecked::<DataLoader<PlayerLoader>>()
-            .load_one(self.record.player_id)
+            .load_one(self.record.record_player_id)
             .await?
             .ok_or_else(|| async_graphql::Error::new("Player not found."))
     }
@@ -58,7 +58,7 @@ impl RankedRecord {
         Ok(sqlx::query_as(
             "SELECT * FROM checkpoint_times WHERE record_id = ? AND map_id = ? ORDER BY cp_num",
         )
-        .bind(self.record.id)
+        .bind(self.record.record_id)
         .bind(self.record.map_id)
         .fetch_all(db)
         .await?)

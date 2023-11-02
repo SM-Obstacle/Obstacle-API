@@ -30,13 +30,13 @@ impl Banishment {
         ctx.data_unchecked::<DataLoader<PlayerLoader>>()
             .load_one(self.inner.player_id)
             .await?
-            .ok_or_else(|| async_graphql::Error::new("Bannished player not found."))
+            .ok_or_else(|| async_graphql::Error::new("Banned player not found."))
     }
 
     async fn banished_by(&self, ctx: &Context<'_>) -> async_graphql::Result<Player> {
         ctx.data_unchecked::<DataLoader<PlayerLoader>>()
             .load_one(self.inner.banished_by)
             .await?
-            .ok_or_else(|| async_graphql::Error::new("Bannisher player not found."))
+            .ok_or_else(|| async_graphql::Error::new("Banner player not found."))
     }
 }

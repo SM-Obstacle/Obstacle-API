@@ -51,16 +51,16 @@ pub async fn pb(
         "SELECT r.respawn_count AS rs_count, cps.cp_num AS cp_num, cps.time AS time
         FROM checkpoint_times cps
         INNER JOIN maps m ON m.id = cps.map_id
-        INNER JOIN records r ON r.id = cps.record_id
+        INNER JOIN records r ON r.record_id = cps.record_id
         {join_event}
-        INNER JOIN players p on r.player_id = p.id
+        INNER JOIN players p on r.record_player_id = p.id
         WHERE m.game_id = ? AND p.login = ?
             {and_event}
             AND r.time = (
                 SELECT IF(m.reversed, MAX(time), MIN(time))
                 FROM records r
                 {join_event}
-                WHERE r.map_id = m.id AND p.id = r.player_id
+                WHERE r.map_id = m.id AND p.id = r.record_player_id
                     {and_event}
             )"
     );
@@ -70,7 +70,11 @@ pub async fn pb(
         .bind(login);
 
     if let Some((event, edition)) = event {
-        query = query.bind(event.id).bind(edition.id).bind(event.id).bind(edition.id);
+        query = query
+            .bind(event.id)
+            .bind(edition.id)
+            .bind(event.id)
+            .bind(edition.id);
     }
 
     let mut times = query.fetch(&db.mysql_pool);

@@ -54,8 +54,8 @@ async fn insert_record(
     let now = Utc::now().naive_utc();
 
     let record_id: u32 = sqlx::query_scalar(
-        "INSERT INTO records (player_id, map_id, time, respawn_count, record_date, flags)
-            VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO records (record_player_id, map_id, time, respawn_count, record_date, flags)
+            VALUES (?, ?, ?, ?, ?, ?) RETURNING record_id",
     )
     .bind(player_id)
     .bind(map_id)
@@ -100,7 +100,7 @@ pub async fn finished(
 ) -> RecordsResult<FinishedOutput> {
     // First, we retrieve all what we need to save the record
     let player_id = must::have_player(db, &login).await?.id;
-    let Map {
+    let ref map @ Map {
         id: map_id,
         cps_number,
         reversed,
@@ -126,7 +126,7 @@ pub async fn finished(
     let query = format!(
         "SELECT r.* FROM records r
         {join_event}
-        WHERE map_id = ? AND player_id = ?
+        WHERE map_id = ? AND record_player_id = ?
         {and_event}
         ORDER BY time {order} LIMIT 1",
         join_event = join_event,
@@ -206,11 +206,8 @@ pub async fn finished(
 
     let current_rank = get_rank_or_full_update(
         db,
-        &mut redis_conn,
-        &map_key,
-        map_id,
+        map,
         if reversed { old.max(new) } else { old.min(new) },
-        reversed,
         event,
     )
     .await?;

@@ -6,7 +6,7 @@ async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
         "SELECT COUNT(*)
         FROM (SELECT * FROM records
         WHERE map_id = ?
-        GROUP BY player_id) r",
+        GROUP BY record_player_id) r",
     )
     .bind(map_id)
     .fetch_one(&db.mysql_pool)
@@ -36,12 +36,12 @@ pub async fn update_leaderboard(
 
     if redis_count != mysql_count {
         let query = format!(
-            "SELECT player_id, {}(time) AS time
+            "SELECT record_player_id, {}(time) AS time
             FROM records r
             {join_event}
                 WHERE map_id = ?
                     {and_event}
-                GROUP BY player_id
+                GROUP BY record_player_id
                 ORDER BY time {}, record_date ASC",
             if reversed_lb { "MAX" } else { "MIN" },
             if reversed_lb { "DESC" } else { "ASC" },

@@ -170,7 +170,7 @@ impl Map {
             (String::new(), format!("r.record_date {date_sort_by}"))
         } else {
             (
-                format!("AND r.player_id IN ({player_ids_query})"),
+                format!("AND r.record_player_id IN ({player_ids_query})"),
                 format!(
                     "r.time {order}, r.record_date ASC",
                     order = if to_reverse { "DESC" } else { "ASC" }
@@ -191,8 +191,7 @@ impl Map {
             }
         );
 
-        let mut query = sqlx::query_as::<_, Record>(&query)
-            .bind(self.id);
+        let mut query = sqlx::query_as::<_, Record>(&query).bind(self.id);
         if date_sort_by.is_none() {
             for id in &record_ids {
                 query = query.bind(id);
@@ -204,16 +203,7 @@ impl Map {
 
         while let Some(record) = records.next().await {
             let record = record?;
-            let rank = get_rank_or_full_update(
-                db,
-                &mut redis_conn,
-                &key,
-                self.id,
-                record.time,
-                reversed,
-                None,
-            )
-            .await?;
+            let rank = get_rank_or_full_update(db, self, record.time, None).await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }

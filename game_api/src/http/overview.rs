@@ -26,6 +26,15 @@ pub struct OverviewQuery {
 
 pub type OverviewReq = Query<OverviewQuery>;
 
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct RecordQueryRow {
+    pub login: String,
+    pub nickname: String,
+    pub time: i32,
+    #[sqlx(flatten)]
+    pub map: Map,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, sqlx::FromRow)]
 #[serde(rename = "records")]
 pub struct RankedRecord {
@@ -77,13 +86,15 @@ async fn append_range(
         "SELECT CAST(0 AS UNSIGNED) AS rank,
             p.login AS login,
             p.name AS nickname,
-            {func}(time) as time
+            {func}(time) as time,
+            m.*
         FROM records r
         {join_event}
-        INNER JOIN players p ON r.player_id = p.id
-        WHERE map_id = ? AND player_id IN ({params})
+        INNER JOIN players p ON r.record_player_id = p.id
+        INNER JOIN maps m ON m.id = r.map_id
+        WHERE map_id = ? AND record_player_id IN ({params})
             {and_event}
-        GROUP BY player_id
+        GROUP BY record_player_id
         ORDER BY time {order}, record_date ASC",
         params = params,
         func = if reversed { "MAX" } else { "MIN" },
@@ -103,16 +114,15 @@ async fn append_range(
 
     let mut records = query.fetch(&db.mysql_pool);
     while let Some(record) = records.next().await {
-        let RankedRecord {
+        let RecordQueryRow {
             login,
             nickname,
             time,
-            ..
+            map,
         } = record?;
 
         ranked_records.push(RankedRecord {
-            rank: get_rank_or_full_update(db, &mut redis_conn, key, map_id, time, reversed, event)
-                .await? as u32,
+            rank: get_rank_or_full_update(db, &map, time, event).await? as u32,
             login,
             nickname,
             time,

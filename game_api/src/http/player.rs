@@ -176,8 +176,8 @@ fn get_mp_app_client_secret() -> &'static str {
 async fn test_access_token(
     client: &Client,
     login: &str,
-    ref code: String,
-    ref redirect_uri: String,
+    code: &str,
+    redirect_uri: &str,
 ) -> RecordsResult<bool> {
     let res = client
         .post("https://prod.live.maniaplanet.com/login/oauth2/access_token")
@@ -261,7 +261,7 @@ pub async fn get_token(
     let err_msg = "/get_token rx should not be dropped at this point";
 
     // check access_token and generate new token for player ...
-    match test_access_token(&client, &body.login, code, body.redirect_uri).await {
+    match test_access_token(&client, &body.login, &code, &body.redirect_uri).await {
         Ok(true) => (),
         Ok(false) => {
             tx.send(Message::InvalidMPCode).expect(err_msg);
@@ -348,7 +348,7 @@ async fn times(
         "SELECT m.game_id AS map_uid, MIN(r.time) AS time
         FROM maps m
         INNER JOIN records r ON r.map_id = m.id
-        WHERE r.player_id = ? AND m.game_id IN ({})
+        WHERE r.record_player_id = ? AND m.game_id IN ({})
         GROUP BY m.id",
         body.maps_uids
             .iter()
@@ -388,9 +388,12 @@ pub async fn info(
 ) -> RecordsResult<impl Responder> {
     let Some(info) = sqlx::query_as::<_, InfoResponse>(
         "SELECT *, (SELECT role_name FROM role WHERE id = role) as role_name
-        FROM players WHERE login = ?")
+        FROM players WHERE login = ?",
+    )
     .bind(&body.login)
-    .fetch_optional(&db.mysql_pool).await? else {
+    .fetch_optional(&db.mysql_pool)
+    .await?
+    else {
         return Err(RecordsError::PlayerNotFound(body.login));
     };
 
