@@ -2,7 +2,6 @@ use actix_web::web::Json;
 use chrono::Utc;
 use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
-use sqlx::Connection;
 
 use crate::{
     graphql::get_rank_or_full_update,
@@ -49,47 +48,38 @@ async fn send_query(
     player_id: u32,
     body: InsertRecordParams,
 ) -> RecordsResult<u32> {
-    let mut mysql_conn = db.mysql_pool.acquire().await?;
     let now = Utc::now().naive_utc();
 
-    let record_id = mysql_conn
-        .transaction(|txn| {
-            Box::pin(async move {
-                let record_id: u32 = sqlx::query_scalar(
-                "INSERT INTO records (record_player_id, map_id, time, respawn_count, record_date, flags)
+    let record_id: u32 = sqlx::query_scalar(
+        "INSERT INTO records (record_player_id, map_id, time, respawn_count, record_date, flags)
                     VALUES (?, ?, ?, ?, ?, ?) RETURNING record_id",
-                )
-                .bind(player_id)
-                .bind(map_id)
-                .bind(body.time)
-                .bind(body.respawn_count)
-                .bind(now)
-                .bind(body.flags)
-                .fetch_one(&mut **txn)
-                .await?;
+    )
+    .bind(player_id)
+    .bind(map_id)
+    .bind(body.time)
+    .bind(body.respawn_count)
+    .bind(now)
+    .bind(body.flags)
+    .fetch_one(&db.mysql_pool)
+    .await?;
 
-                let cps_times = body
-                    .cps
-                    .iter()
-                    .enumerate()
-                    .map(|(i, t)| format!("({i}, {map_id}, {record_id}, {t})"))
-                    .collect::<Vec<String>>()
-                    .join(", ");
+    let cps_times = body
+        .cps
+        .iter()
+        .enumerate()
+        .map(|(i, t)| format!("({i}, {map_id}, {record_id}, {t})"))
+        .collect::<Vec<String>>()
+        .join(", ");
 
-                sqlx::query(
-                    format!(
-                        "INSERT INTO checkpoint_times (cp_num, map_id, record_id, time)
+    sqlx::query(
+        format!(
+            "INSERT INTO checkpoint_times (cp_num, map_id, record_id, time)
                         VALUES {cps_times}"
-                    )
-                    .as_str(),
-                )
-                .execute(&mut **txn)
-                .await?;
-
-                Ok::<_, RecordsError>(record_id)
-            })
-        })
-        .await?;
+        )
+        .as_str(),
+    )
+    .execute(&db.mysql_pool)
+    .await?;
 
     Ok(record_id)
 }
