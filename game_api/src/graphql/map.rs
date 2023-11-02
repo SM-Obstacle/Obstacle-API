@@ -142,7 +142,7 @@ impl Map {
         let key = format_map_key(self.id, None);
         let reversed = self.reversed.unwrap_or(false);
 
-        redis::update_leaderboard(db, &key, self.id, reversed, None).await?;
+        redis::update_leaderboard(db, self, None).await?;
 
         let to_reverse = reversed
             ^ rank_sort_by

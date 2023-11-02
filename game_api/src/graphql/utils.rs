@@ -151,7 +151,7 @@ pub fn connections_pages_info(
 /// but the times were not corresponding. It generally happens after a database migration.
 pub async fn get_rank_or_full_update(
     db: &Database,
-    models::Map {
+    map @ models::Map {
         id: map_id,
         reversed,
         ..
@@ -194,7 +194,7 @@ pub async fn get_rank_or_full_update(
         Some(rank) => Ok(rank),
         None => {
             redis_conn.del(key).await?;
-            redis::update_leaderboard(db, key, *map_id, reversed, event).await?;
+            redis::update_leaderboard(db, map, event).await?;
             let rank = get_rank(redis_conn, key, time, reversed)
                 .await?
                 .unwrap_or_else(|| {

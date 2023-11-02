@@ -44,18 +44,19 @@ pub struct RankedRecord {
     pub time: i32,
 }
 
-// TODO: group parameters
-#[allow(clippy::too_many_arguments)]
-async fn append_range(
+async fn get_range(
     db: &Database,
-    ranked_records: &mut Vec<RankedRecord>,
-    map_id: u32,
-    key: &str,
-    start: u32,
-    end: u32,
-    reversed: bool,
+    Map {
+        id: map_id,
+        reversed,
+        ..
+    }: &Map,
+    (start, end): (u32, u32),
     event: Option<&(models::Event, models::EventEdition)>,
-) -> RecordsResult<()> {
+) -> RecordsResult<Vec<RankedRecord>> {
+    let reversed = reversed.unwrap_or(false);
+    let key = format_map_key(*map_id, event);
+
     let (join_event, and_event) = event
         .is_some()
         .then(event::get_sql_fragments)
@@ -73,7 +74,8 @@ async fn append_range(
     .await?;
 
     if ids.is_empty() {
-        return Ok(());
+        // Avoids the query building to have a `AND record_player_id IN ()` fragment
+        return Ok(Vec::new());
     }
 
     let params = ids
@@ -113,6 +115,7 @@ async fn append_range(
     }
 
     let mut records = query.fetch(&db.mysql_pool);
+    let mut out = Vec::with_capacity(records.size_hint().0);
     while let Some(record) = records.next().await {
         let RecordQueryRow {
             login,
@@ -121,7 +124,7 @@ async fn append_range(
             map,
         } = record?;
 
-        ranked_records.push(RankedRecord {
+        out.push(RankedRecord {
             rank: get_rank_or_full_update(db, &map, time, event).await? as u32,
             login,
             nickname,
@@ -129,7 +132,7 @@ async fn append_range(
         });
     }
 
-    Ok(())
+    Ok(out)
 }
 
 pub async fn overview(
@@ -137,7 +140,7 @@ pub async fn overview(
     Query(body): Query<OverviewQuery>,
     event: Option<(String, u32)>,
 ) -> RecordsResult<impl Responder> {
-    let Map {
+    let ref map @ Map {
         id,
         linked_map,
         reversed,
@@ -158,8 +161,7 @@ pub async fn overview(
 
     // Update redis if needed
     let key = format_map_key(map_id, event.as_ref());
-    let count =
-        redis::update_leaderboard(&db, &key, map_id, reversed, event.as_ref()).await? as u32;
+    let count = redis::update_leaderboard(&db, map, event.as_ref()).await? as u32;
 
     let mut ranked_records: Vec<RankedRecord> = vec![];
 
@@ -175,58 +177,29 @@ pub async fn overview(
     .await?;
     let player_rank = player_rank.map(|r| r as u64 as u32);
 
-    let mut start: u32 = 0;
-    let mut end: u32;
-
     if let Some(player_rank) = player_rank {
         // The player has a record and is in top ROWS, display ROWS records
         if player_rank < TOTAL_ROWS {
-            append_range(
-                &db,
-                &mut ranked_records,
-                map_id,
-                &key,
-                start,
-                TOTAL_ROWS,
-                reversed,
-                event.as_ref(),
-            )
-            .await?;
+            ranked_records.extend(get_range(&db, map, (0, TOTAL_ROWS), event.as_ref()).await?);
         }
         // The player is not in the top ROWS records, display top3 and then center around the player rank
         else {
             // push top3
-            append_range(
-                &db,
-                &mut ranked_records,
-                map_id,
-                &key,
-                start,
-                3,
-                reversed,
-                event.as_ref(),
-            )
-            .await?;
+            ranked_records.extend(get_range(&db, map, (0, 3), event.as_ref()).await?);
 
             // the rest is centered around the player
             let row_minus_top3 = TOTAL_ROWS - 3;
-            start = player_rank - row_minus_top3 / 2;
-            end = player_rank + row_minus_top3 / 2;
-            if end >= count {
-                start -= end - count;
-                end = count;
-            }
-            append_range(
-                &db,
-                &mut ranked_records,
-                map_id,
-                &key,
-                start,
-                end,
-                reversed,
-                event.as_ref(),
-            )
-            .await?;
+            let range = {
+                let start = player_rank - row_minus_top3 / 2;
+                let end = player_rank + row_minus_top3 / 2;
+                if end >= count {
+                    (start - end - count, count)
+                } else {
+                    (start, end)
+                }
+            };
+
+            ranked_records.extend(get_range(&db, map, range, event.as_ref()).await?);
         }
     }
     // The player has no record, so ROWS = ROWS - 1 to keep one last line for the player
@@ -235,44 +208,14 @@ pub async fn overview(
         // So display all top ROWS records and then the last 3
         if count > NO_RECORD_ROWS {
             // top (ROWS - 1 - 3)
-            append_range(
-                &db,
-                &mut ranked_records,
-                map_id,
-                &key,
-                start,
-                NO_RECORD_ROWS - 3,
-                reversed,
-                event.as_ref(),
-            )
-            .await?;
+            get_range(&db, map, (0, NO_RECORD_ROWS - 3), event.as_ref()).await?;
 
             // last 3
-            append_range(
-                &db,
-                &mut ranked_records,
-                map_id,
-                &key,
-                count - 3,
-                count,
-                reversed,
-                event.as_ref(),
-            )
-            .await?;
+            ranked_records.extend(get_range(&db, map, (count - 3, count), event.as_ref()).await?);
         }
         // There is enough records to display them all
         else {
-            append_range(
-                &db,
-                &mut ranked_records,
-                map_id,
-                &key,
-                start,
-                NO_RECORD_ROWS,
-                reversed,
-                event.as_ref(),
-            )
-            .await?;
+            ranked_records.extend(get_range(&db, map, (0, NO_RECORD_ROWS), event.as_ref()).await?);
         }
     }
 

@@ -288,7 +288,9 @@ async fn edition_finished(
     // Then we insert the record for the global records
     let res = pf::finished(login, &db, body, Some(&event)).await?;
 
-    // Then we insert it for the event edition records
+    // Then we insert it for the event edition records.
+    // This is not part of the transaction for now, because it's not so bad
+    // if this query fails.
     let (event, edition) = event;
     sqlx::query(
         "INSERT INTO event_edition_records (record_id, event_id, edition_id)

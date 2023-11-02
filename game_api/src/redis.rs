@@ -1,4 +1,4 @@
-use crate::{http::event, models, Database, RecordsResult};
+use crate::{http::event, models, utils::format_map_key, Database, RecordsResult};
 use deadpool_redis::redis::AsyncCommands;
 
 async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
@@ -20,14 +20,18 @@ async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
 /// This is a check to avoid records duplicates, that may happen sometimes.
 pub async fn update_leaderboard(
     db: &Database,
-    key: &str,
-    map_id: u32,
-    reversed_lb: bool,
+    models::Map {
+        id: map_id,
+        reversed,
+        ..
+    }: &models::Map,
     event: Option<&(models::Event, models::EventEdition)>,
 ) -> RecordsResult<i64> {
+    let reversed_lb = reversed.unwrap_or(false);
+    let key = format_map_key(*map_id, event);
     let mut redis_conn = db.redis_pool.get().await?;
-    let redis_count: i64 = redis_conn.zcount(key, "-inf", "+inf").await?;
-    let mysql_count: i64 = count_records_map(db, map_id).await?;
+    let redis_count: i64 = redis_conn.zcount(&key, "-inf", "+inf").await?;
+    let mysql_count: i64 = count_records_map(db, *map_id).await?;
 
     let (join_event, and_event) = event
         .is_some()
@@ -55,10 +59,10 @@ pub async fn update_leaderboard(
 
         let all_map_records: Vec<(u32, i32)> = query.fetch_all(&db.mysql_pool).await?;
 
-        let _removed_count: i64 = redis_conn.del(key).await?;
+        let _removed_count: i64 = redis_conn.del(&key).await?;
 
         for record in all_map_records {
-            let _: i64 = redis_conn.zadd(key, record.0, record.1).await?;
+            let _: i64 = redis_conn.zadd(&key, record.0, record.1).await?;
         }
     }
 
