@@ -274,7 +274,7 @@ impl<'r> FromRow<'r, MySqlRow> for ApiStatusKind {
             (2, "maintenance") => Ok(Self::Maintenance),
             (id, _) => Err(sqlx::Error::ColumnDecode {
                 index: "status_id".to_owned(),
-                source: Box::new(RecordsError::UnknownRatingKind(id, kind)),
+                source: Box::new(RecordsError::UnknownStatus(id, kind)),
             }),
         }
     }
