@@ -137,7 +137,7 @@ impl Map {
         let db = ctx.data_unchecked();
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let mut redis_conn = redis_pool.get().await?;
+        let redis_conn = &mut redis_pool.get().await?;
 
         let key = format_map_key(self.id, None);
         let reversed = self.reversed.unwrap_or(false);
@@ -203,7 +203,7 @@ impl Map {
 
         while let Some(record) = records.next().await {
             let record = record?;
-            let rank = get_rank_or_full_update(db, self, record.time, None).await?;
+            let rank = get_rank_or_full_update(db, redis_conn, self, record.time, None).await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }

@@ -242,8 +242,10 @@ impl QueryRoot {
 
         let (record, map) = (Record::from_row(&row)?, Map::from_row(&row)?);
 
+        let redis_conn = &mut db.redis_pool.get().await?;
+
         Ok(RankedRecord {
-            rank: get_rank_or_full_update(db, &map, record.time, None).await?,
+            rank: get_rank_or_full_update(db, redis_conn, &map, record.time, None).await?,
             record,
         })
     }
@@ -290,10 +292,12 @@ impl QueryRoot {
 
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
+        let redis_conn = &mut db.redis_pool.get().await?;
+
         while let Some(record) = records.next().await {
             let RecordAttr { record, map } = record?;
 
-            let rank = get_rank_or_full_update(db, &map, record.time, None).await?;
+            let rank = get_rank_or_full_update(db, redis_conn, &map, record.time, None).await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }

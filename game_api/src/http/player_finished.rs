@@ -196,8 +196,10 @@ pub async fn finished(
         }
     }
 
+    let redis_conn = &mut db.redis_pool.get().await?;
     let current_rank = get_rank_or_full_update(
         db,
+        redis_conn,
         map,
         if reversed { old.max(new) } else { old.min(new) },
         event,

@@ -62,7 +62,7 @@ async fn get_range(
         .then(event::get_sql_fragments)
         .unwrap_or_default();
 
-    let mut redis_conn = db.redis_pool.get().await?;
+    let redis_conn = &mut db.redis_pool.get().await?;
 
     // transforms exclusive to inclusive range
     let end = end - 1;
@@ -125,7 +125,7 @@ async fn get_range(
         } = record?;
 
         out.push(RankedRecord {
-            rank: get_rank_or_full_update(db, &map, time, event).await? as u32,
+            rank: get_rank_or_full_update(db, redis_conn, &map, time, event).await? as _,
             login,
             nickname,
             time,
