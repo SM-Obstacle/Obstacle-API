@@ -206,7 +206,7 @@ pub async fn overview(
                 let start = player_rank - row_minus_top3 / 2;
                 let end = player_rank + row_minus_top3 / 2;
                 if end >= count {
-                    (start - end - count, count)
+                    (start - (end - count), count)
                 } else {
                     (start, end)
                 }
