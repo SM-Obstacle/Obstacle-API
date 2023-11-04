@@ -10,15 +10,18 @@
 //! things to be already existing, without checking it repeatedly and returning the error to
 //! the client.
 
+use actix_web::{web::Data, HttpMessage, HttpRequest};
+use tracing_actix_web::RequestId;
+
 use crate::{
     http::{event, player},
-    models, Database, RecordsError, RecordsResult,
+    models, Database, RecordsErrorKind, RecordsResult,
 };
 
 pub async fn have_event_handle(db: &Database, handle: &str) -> RecordsResult<models::Event> {
     event::get_event_by_handle(db, handle)
         .await?
-        .ok_or_else(|| RecordsError::EventNotFound(handle.to_owned()))
+        .ok_or_else(|| RecordsErrorKind::EventNotFound(handle.to_owned()))
 }
 
 pub async fn have_event_edition(
@@ -28,9 +31,11 @@ pub async fn have_event_edition(
 ) -> RecordsResult<(models::Event, models::EventEdition)> {
     let event = have_event_handle(db, event_handle).await?;
 
-    let Some(event_edition) = event::get_edition_by_id(db, event.id, edition_id).await?
-    else {
-        return Err(RecordsError::EventEditionNotFound(event_handle.to_owned(), edition_id));
+    let Some(event_edition) = event::get_edition_by_id(db, event.id, edition_id).await? else {
+        return Err(RecordsErrorKind::EventEditionNotFound(
+            event_handle.to_owned(),
+            edition_id,
+        ));
     };
 
     Ok((event, event_edition))
@@ -39,13 +44,13 @@ pub async fn have_event_edition(
 pub async fn have_player(db: &Database, login: &str) -> RecordsResult<models::Player> {
     player::get_player_from_login(db, login)
         .await?
-        .ok_or_else(|| RecordsError::PlayerNotFound(login.to_owned()))
+        .ok_or_else(|| RecordsErrorKind::PlayerNotFound(login.to_owned()))
 }
 
 pub async fn have_map(db: &Database, map_uid: &str) -> RecordsResult<models::Map> {
     player::get_map_from_game_id(db, map_uid)
         .await?
-        .ok_or_else(|| RecordsError::MapNotFound(map_uid.to_owned()))
+        .ok_or_else(|| RecordsErrorKind::MapNotFound(map_uid.to_owned()))
 }
 
 pub async fn have_event_edition_with_map(
@@ -69,7 +74,7 @@ pub async fn have_event_edition_with_map(
     .await?
         == 0
     {
-        return Err(RecordsError::MapNotInEventEdition(
+        return Err(RecordsErrorKind::MapNotInEventEdition(
             game_id.to_owned(),
             event_handle,
             edition_id,
@@ -77,4 +82,16 @@ pub async fn have_event_edition_with_map(
     }
 
     Ok((event, event_edition))
+}
+
+pub fn have_request_id(req: &HttpRequest) -> RequestId {
+    *req.extensions()
+        .get::<RequestId>()
+        .expect("RequestId should be present")
+}
+
+pub fn have_db(req: &HttpRequest) -> Data<Database> {
+    req.app_data::<Data<Database>>()
+        .expect("Data<Database> app data should be present")
+        .clone()
 }

@@ -194,7 +194,7 @@ pub async fn get_rank_or_full_update(
         Some(rank) => Ok(rank),
         None => {
             redis_conn.del(key).await?;
-            redis::update_leaderboard(db, map, event).await?;
+            redis::update_leaderboard(db, redis_conn, map, event).await?;
             let rank = get_rank(redis_conn, key, time, reversed)
                 .await?
                 .unwrap_or_else(|| {

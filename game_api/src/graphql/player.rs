@@ -6,7 +6,7 @@ use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use crate::{
     models::{Banishment, Map, Player, RankedRecord, Role},
-    Database, RecordsError,
+    Database, RecordsErrorKind,
 };
 
 use super::{
@@ -28,14 +28,14 @@ enum PlayerRole {
 }
 
 impl TryFrom<Role> for PlayerRole {
-    type Error = RecordsError;
+    type Error = RecordsErrorKind;
 
     fn try_from(role: Role) -> Result<Self, Self::Error> {
         if role.id < 3 {
             // SAFETY: enum is repr(u8) and role id is in range
             Ok(unsafe { std::mem::transmute(role.id) })
         } else {
-            Err(RecordsError::UnknownRole(role.id, role.role_name))
+            Err(RecordsErrorKind::UnknownRole(role.id, role.role_name))
         }
     }
 }

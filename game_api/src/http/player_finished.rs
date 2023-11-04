@@ -8,7 +8,7 @@ use crate::{
     models::{self, Map, Record},
     must, redis,
     utils::format_map_key,
-    Database, RecordsError, RecordsResult,
+    Database, RecordsErrorKind, RecordsResult,
 };
 
 use super::event;
@@ -42,6 +42,7 @@ struct InsertRecordParams {
     cps: Vec<i32>,
 }
 
+// TODO: use a SQL transaction
 async fn send_query(
     db: &Database,
     map_id: u32,
@@ -91,11 +92,11 @@ async fn insert_record(
     body: &InsertRecordParams,
     event: Option<&(models::Event, models::EventEdition)>,
 ) -> RecordsResult<u32> {
-    let mut redis_conn = db.redis_pool.get().await?;
+    let redis_conn = &mut db.redis_pool.get().await?;
     let key = format_map_key(*map_id, event);
     let added: Option<i64> = redis_conn.zadd(key, player_id, body.time).await.ok();
     if added.is_none() {
-        let _count = redis::update_leaderboard(db, map, event).await?;
+        let _count = redis::update_leaderboard(db, redis_conn, map, event).await?;
     }
 
     let record_id = send_query(db, *map_id, player_id, body.clone()).await?;
@@ -140,7 +141,7 @@ pub async fn finished(
     if matches!(cps_number, Some(num) if num + 1 != params.cps.len() as u32)
         || params.cps.iter().sum::<i32>() != params.time
     {
-        return Err(RecordsError::InvalidTimes);
+        return Err(RecordsErrorKind::InvalidTimes);
     }
 
     let query = format!(
@@ -192,7 +193,7 @@ pub async fn finished(
         if cps_number == original_cps_number && reversed == original_reversed.unwrap_or(false) {
             insert_record(db, map, player_id, &params, None).await?;
         } else {
-            return Err(RecordsError::MapNotFound(original_uid));
+            return Err(RecordsErrorKind::MapNotFound(original_uid));
         }
     }
 

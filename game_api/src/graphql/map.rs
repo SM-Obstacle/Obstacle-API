@@ -13,7 +13,7 @@ use crate::{
     models::{Map, MedalPrice, Player, PlayerRating, RankedRecord, Rating, Record},
     redis,
     utils::format_map_key,
-    Database,
+    Database
 };
 
 use super::{player::PlayerLoader, utils::get_rank_or_full_update, SortState};
@@ -142,7 +142,7 @@ impl Map {
         let key = format_map_key(self.id, None);
         let reversed = self.reversed.unwrap_or(false);
 
-        redis::update_leaderboard(db, self, None).await?;
+        redis::update_leaderboard(db, redis_conn, self, None).await?;
 
         let to_reverse = reversed
             ^ rank_sort_by

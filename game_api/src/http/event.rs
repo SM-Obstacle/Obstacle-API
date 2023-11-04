@@ -5,12 +5,13 @@ use actix_web::{
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use tracing_actix_web::RequestId;
 
 use crate::{
     auth::{privilege, MPAuthGuard},
     models, must,
     utils::json,
-    Database, RecordsResult,
+    Database, FitRequestId, RecordsResponse, RecordsResult,
 };
 
 use super::{overview, pb, player::UpdatePlayerBody, player_finished as pf};
@@ -176,7 +177,7 @@ struct EventHandleEditionResponse {
     content: Content,
 }
 
-async fn event_list(db: Data<Database>) -> RecordsResult<impl Responder> {
+async fn event_list(req_id: RequestId, db: Data<Database>) -> RecordsResponse<impl Responder> {
     let res = sqlx::query_as::<_, EventResponse>(
         "SELECT ev.handle, MAX(ed.id) AS last_edition_id
         FROM event ev
@@ -185,23 +186,29 @@ async fn event_list(db: Data<Database>) -> RecordsResult<impl Responder> {
         ORDER BY ed.id DESC",
     )
     .fetch_all(&db.mysql_pool)
-    .await?;
+    .await
+    .fit(&req_id)?;
 
     json(res)
 }
 
 async fn event_editions(
     db: Data<Database>,
+    req_id: RequestId,
     event_handle: Path<String>,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     let event_handle = event_handle.into_inner();
-    let id = must::have_event_handle(&db, &event_handle).await?.id;
+    let id = must::have_event_handle(&db, &event_handle)
+        .await
+        .fit(&req_id)?
+        .id;
 
     let res: Vec<EventHandleResponse> =
         sqlx::query_as("SELECT * FROM event_edition WHERE event_id = ? ORDER BY id DESC")
             .bind(id)
             .fetch_all(&db.mysql_pool)
-            .await?;
+            .await
+            .fit(&req_id)?;
 
     json(res)
 }
@@ -222,33 +229,43 @@ struct MxAuthor {
 
 async fn edition(
     db: Data<Database>,
+    req_id: RequestId,
     client: Data<Client>,
     path: Path<(String, u32)>,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
     let (models::Event { id: event_id, .. }, edition) =
-        must::have_event_edition(&db, &event_handle, edition_id).await?;
+        must::have_event_edition(&db, &event_handle, edition_id)
+            .await
+            .fit(&req_id)?;
 
-    let categories = get_categories_by_edition_id(&db, event_id, edition.id).await?;
+    let categories = get_categories_by_edition_id(&db, event_id, edition.id)
+        .await
+        .fit(&req_id)?;
     let content = if categories.is_empty() {
         let maps = convert_maps(
             &db,
             &client,
-            get_maps_by_edition_id(&db, event_id, edition.id).await?,
+            get_maps_by_edition_id(&db, event_id, edition.id)
+                .await
+                .fit(&req_id)?,
         )
-        .await?;
+        .await
+        .fit(&req_id)?;
 
         Content::Maps { maps }
     } else {
         let mut cat = Vec::with_capacity(categories.len());
 
         for m in categories {
-            let maps = get_maps_by_category_id(&db, event_id, edition.id, m.id).await?;
+            let maps = get_maps_by_category_id(&db, event_id, edition.id, m.id)
+                .await
+                .fit(&req_id)?;
             cat.push(Category {
                 handle: m.handle,
                 name: m.name,
                 banner_img_url: m.banner_img_url,
-                maps: convert_maps(&db, &client, maps).await?,
+                maps: convert_maps(&db, &client, maps).await.fit(&req_id)?,
             });
         }
 
@@ -265,28 +282,33 @@ async fn edition(
 }
 
 async fn edition_overview(
+    req_id: RequestId,
     db: Data<Database>,
     path: Path<(String, u32)>,
     query: overview::OverviewReq,
-) -> RecordsResult<impl Responder> {
-    overview::overview(db, query, Some(path.into_inner())).await
+) -> RecordsResponse<impl Responder> {
+    overview::overview(req_id, db, query, Some(path.into_inner())).await
 }
 
 async fn edition_finished(
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    req_id: RequestId,
     db: Data<Database>,
     path: Path<(String, u32)>,
     body: pf::PlayerFinishedBody,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
 
     // We first check that the event and its edition exist
     // and that the map is registered on it.
-    let event =
-        must::have_event_edition_with_map(&db, &body.map_uid, event_handle, edition_id).await?;
+    let event = must::have_event_edition_with_map(&db, &body.map_uid, event_handle, edition_id)
+        .await
+        .fit(&req_id)?;
 
     // Then we insert the record for the global records
-    let res = pf::finished(login, &db, body, Some(&event)).await?;
+    let res = pf::finished(login, &db, body, Some(&event))
+        .await
+        .fit(&req_id)?;
 
     // Then we insert it for the event edition records.
     // This is not part of the transaction for now, because it's not so bad
@@ -300,21 +322,24 @@ async fn edition_finished(
     .bind(event.id)
     .bind(edition.id)
     .execute(&db.mysql_pool)
-    .await?;
+    .await
+    .fit(&req_id)?;
 
     json(res.res)
 }
 
 async fn edition_pb(
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    req_id: RequestId,
     path: Path<(String, u32)>,
     db: Data<Database>,
     body: pb::PbReq,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
-    let event =
-        must::have_event_edition_with_map(&db, &body.map_uid, event_handle, edition_id).await?;
-    pb::pb(login, db, body, Some(event)).await
+    let event = must::have_event_edition_with_map(&db, &body.map_uid, event_handle, edition_id)
+        .await
+        .fit(&req_id)?;
+    pb::pb(login, req_id, db, body, Some(event)).await
 }
 
 async fn convert_maps(

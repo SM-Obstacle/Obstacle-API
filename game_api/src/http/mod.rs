@@ -5,8 +5,9 @@ use actix_web::web::JsonConfig;
 use actix_web::{web, Scope};
 
 use reqwest::Client;
+use tracing_actix_web::RequestId;
 
-use crate::{Database, RecordsResult};
+use crate::{Database, RecordsResponse};
 use actix_web::{web::Data, Responder};
 
 use self::admin::admin_scope;
@@ -37,8 +38,9 @@ pub fn api_route() -> Scope {
 }
 
 async fn overview(
+    req_id: RequestId,
     db: Data<Database>,
     query: overview::OverviewReq,
-) -> RecordsResult<impl Responder> {
-    overview::overview(db, query, None).await
+) -> RecordsResponse<impl Responder> {
+    overview::overview(req_id, db, query, None).await
 }

@@ -65,13 +65,14 @@ use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::Level;
+use tracing_actix_web::RequestId;
 
 use crate::models::ApiStatusKind;
 use crate::utils::{
     format_mp_token_key, format_web_token_key, generate_token, get_api_status, ApiStatus,
 };
-use crate::{get_env_var_as, must, AccessTokenErr};
-use crate::{http::player, Database, RecordsError, RecordsResult};
+use crate::{get_env_var_as, must, AccessTokenErr, FitRequestId, RecordsError, RecordsResponse};
+use crate::{http::player, Database, RecordsErrorKind, RecordsResult};
 
 #[allow(unused)]
 pub mod privilege {
@@ -186,7 +187,7 @@ impl AuthState {
             let mut state_map = self.states_map.lock().await;
             let state_info = state.clone();
             if let Some(TokenState { instant, .. }) = state_map.get(&state) {
-                return Err(RecordsError::StateAlreadyReceived(*instant));
+                return Err(RecordsErrorKind::StateAlreadyReceived(*instant));
             }
             state_map.insert(state.clone(), TokenState::new(tx2, rx1));
             tracing::event!(
@@ -222,17 +223,19 @@ impl AuthState {
             match timeout(TIMEOUT, rx).await {
                 Ok(Ok(res)) => match res {
                     Message::Ok(web_token) => web_token,
-                    Message::InvalidMPCode => return Err(RecordsError::InvalidMPCode),
-                    Message::AccessTokenErr(err) => return Err(RecordsError::AccessTokenErr(err)),
+                    Message::InvalidMPCode => return Err(RecordsErrorKind::InvalidMPCode),
+                    Message::AccessTokenErr(err) => {
+                        return Err(RecordsErrorKind::AccessTokenErr(err))
+                    }
                     _ => unreachable!(),
                 },
                 _ => {
                     tracing::event!(Level::WARN, "Token state `{}` timed out", state);
-                    return Err(RecordsError::Timeout);
+                    return Err(RecordsErrorKind::Timeout);
                 }
             }
         } else {
-            return Err(RecordsError::MissingGetTokenReq);
+            return Err(RecordsErrorKind::MissingGetTokenReq);
         };
 
         tracing::event!(
@@ -280,13 +283,13 @@ async fn inner_check_auth_for(
     let mut connection = db.redis_pool.get().await?;
     let stored_token: Option<String> = connection.get(&key).await?;
     if !matches!(stored_token, Some(t) if t == digest(token)) {
-        return Err(RecordsError::Unauthorized);
+        return Err(RecordsErrorKind::Unauthorized);
     }
 
     let player = must::have_player(db, login).await?;
 
     if let Some(ban) = player::check_banned(&db.mysql_pool, player.id).await? {
-        return Err(RecordsError::BannedPlayer(ban));
+        return Err(RecordsErrorKind::BannedPlayer(ban));
     };
 
     let role: privilege::Flags = sqlx::query_scalar(
@@ -300,7 +303,7 @@ async fn inner_check_auth_for(
     .await?;
 
     if role & required != required {
-        return Err(RecordsError::Forbidden);
+        return Err(RecordsErrorKind::Forbidden);
     }
 
     Ok(player.id)
@@ -368,19 +371,25 @@ pub struct MPAuthGuard<const ROLE: privilege::Flags> {
 impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
     type Error = RecordsError;
 
-    type Future = Pin<Box<dyn Future<Output = RecordsResult<Self>>>>;
+    type Future = Pin<Box<dyn Future<Output = RecordsResponse<Self>>>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
         async fn check<const ROLE: privilege::Flags>(
+            request_id: RequestId,
             db: Data<Database>,
             login: Option<String>,
             token: Option<String>,
-        ) -> RecordsResult<MPAuthGuard<ROLE>> {
+        ) -> RecordsResponse<MPAuthGuard<ROLE>> {
             let (Some(login), Some(token)) = (login, token) else {
-                return Err(RecordsError::Unauthorized);
+                return Err(RecordsError {
+                    request_id,
+                    kind: RecordsErrorKind::Unauthorized,
+                });
             };
 
-            check_auth_for(&db, &login, &token, ROLE).await?;
+            check_auth_for(&db, &login, &token, ROLE)
+                .await
+                .fit(&request_id)?;
 
             Ok(MPAuthGuard { login })
         }
@@ -389,12 +398,11 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
             player_login,
             authorization,
         } = ext_auth_headers(req);
-        let db = req
-            .app_data::<Data<Database>>()
-            .expect("Data<Database> app data should be present")
-            .clone();
 
-        Box::pin(check(db, player_login, authorization))
+        let req_id = must::have_request_id(req);
+        let db = must::have_db(req);
+
+        Box::pin(check(req_id, db, player_login, authorization))
     }
 }
 
@@ -408,15 +416,20 @@ pub struct AuthHeader {
 impl FromRequest for AuthHeader {
     type Error = RecordsError;
 
-    type Future = Ready<Result<Self, Self::Error>>;
+    type Future = Ready<RecordsResponse<Self>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
+        let request_id = must::have_request_id(req);
+
         let ExtAuthHeaders {
             player_login,
             authorization,
         } = ext_auth_headers(req);
         let (Some(login), Some(token)) = (player_login, authorization) else {
-            return ready(Err(RecordsError::Unauthorized));
+            return ready(Err(RecordsError {
+                request_id,
+                kind: RecordsErrorKind::Unauthorized,
+            }));
         };
 
         ready(Ok(Self { login, token }))
@@ -429,25 +442,26 @@ pub struct ApiAvailable;
 impl FromRequest for ApiAvailable {
     type Error = RecordsError;
 
-    type Future = Pin<Box<dyn Future<Output = RecordsResult<Self>>>>;
+    type Future = Pin<Box<dyn Future<Output = RecordsResponse<Self>>>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        async fn check_status(db: Data<Database>) -> RecordsResult<ApiAvailable> {
-            match get_api_status(&db).await? {
+        async fn check_status(
+            db: Data<Database>,
+            req_id: RequestId,
+        ) -> RecordsResponse<ApiAvailable> {
+            match get_api_status(&db).await.fit(&req_id)? {
                 ApiStatus {
                     at,
                     kind: ApiStatusKind::Maintenance,
-                } => Err(RecordsError::Maintenance(at)),
+                } => Err(RecordsErrorKind::Maintenance(at)).fit(&req_id),
                 _ => Ok(ApiAvailable),
             }
         }
 
-        let db = req
-            .app_data::<Data<Database>>()
-            .expect("Data<Database> app data should be present")
-            .clone();
+        let req_id = must::have_request_id(req);
+        let db = must::have_db(req);
 
-        Box::pin(check_status(db))
+        Box::pin(check_status(db, req_id))
     }
 }
 

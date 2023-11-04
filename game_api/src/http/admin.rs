@@ -4,15 +4,14 @@ use actix_web::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{mysql::MySqlRow, FromRow, Row};
+use tracing_actix_web::RequestId;
 
 use crate::{
     auth::{privilege, MPAuthGuard},
-    models::Player,
+    must,
     utils::json,
-    Database, RecordsError, RecordsResult,
+    Database, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult,
 };
-
-use super::player;
 
 pub fn admin_scope() -> Scope {
     web::scope("/admin")
@@ -31,13 +30,15 @@ pub struct DelNoteBody {
 
 pub async fn del_note(
     _: MPAuthGuard<{ privilege::ADMIN }>,
+    req_id: RequestId,
     db: Data<Database>,
     Json(body): Json<DelNoteBody>,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     sqlx::query("UPDATE players SET admins_note = NULL WHERE login = ?")
         .bind(&body.player_login)
         .execute(&db.mysql_pool)
-        .await?;
+        .await
+        .fit(&req_id)?;
 
     Ok(HttpResponse::Ok().finish())
 }
@@ -56,19 +57,22 @@ struct SetRoleResponse {
 
 pub async fn set_role(
     _: MPAuthGuard<{ privilege::ADMIN }>,
+    req_id: RequestId,
     db: Data<Database>,
     Json(body): Json<SetRoleBody>,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     sqlx::query("UPDATE players SET role = ? WHERE login = ?")
         .bind(body.role)
         .bind(&body.player_login)
         .execute(&db.mysql_pool)
-        .await?;
+        .await
+        .fit(&req_id)?;
 
     let role = sqlx::query_scalar("SELECT role_name FROM role WHERE id = ?")
         .bind(body.role)
         .fetch_one(&db.mysql_pool)
-        .await?;
+        .await
+        .fit(&req_id)?;
 
     json(SetRoleResponse {
         player_login: body.player_login,
@@ -122,12 +126,14 @@ struct BanishmentsResponse {
 
 pub async fn banishments(
     _: MPAuthGuard<{ privilege::ADMIN }>,
+    req_id: RequestId,
     db: Data<Database>,
     Query(body): Query<BanishmentsBody>,
-) -> RecordsResult<impl Responder> {
-    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.player_login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.player_login));
-    };
+) -> RecordsResponse<impl Responder> {
+    let player_id = must::have_player(&db, &body.player_login)
+        .await
+        .fit(&req_id)?
+        .id;
 
     let banishments = sqlx::query_as(
         "SELECT
@@ -141,7 +147,8 @@ pub async fn banishments(
     .bind(player_id)
     .bind(player_id)
     .fetch_all(&db.mysql_pool)
-    .await?;
+    .await
+    .fit(&req_id)?;
 
     json(BanishmentsResponse {
         player_login: body.player_login,
@@ -164,21 +171,22 @@ struct BanResponse {
 
 pub async fn ban(
     MPAuthGuard { login }: MPAuthGuard<{ privilege::ADMIN }>,
+    req_id: RequestId,
     db: Data<Database>,
     Json(body): Json<BanBody>,
-) -> RecordsResult<impl Responder> {
-    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.player_login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.player_login));
-    };
-    let Some(Player { id: admin_id, .. }) = player::get_player_from_login(&db, &login).await? else {
-        return Err(RecordsError::PlayerNotFound(login));
-    };
+) -> RecordsResponse<impl Responder> {
+    let player_id = must::have_player(&db, &body.player_login)
+        .await
+        .fit(&req_id)?
+        .id;
+    let admin_id = must::have_player(&db, &login).await.fit(&req_id)?.id;
 
     let was_reprieved =
         sqlx::query_as::<_, Banishment>("SELECT * FROM banishments WHERE player_id = ?")
             .bind(&body.player_login)
             .fetch_optional(&db.mysql_pool)
-            .await?
+            .await
+            .fit(&req_id)?
             .is_some();
 
     let ban_id: u32 = sqlx::query_scalar(
@@ -193,7 +201,8 @@ pub async fn ban(
     .bind(player_id)
     .bind(admin_id)
     .fetch_one(&db.mysql_pool)
-    .await?;
+    .await
+    .fit(&req_id)?;
 
     let ban = sqlx::query_as(
         r#"SELECT id, date_ban, duration, reason, (SELECT login FROM players WHERE id = banished_by) as "banished_by", was_reprieved
@@ -201,7 +210,7 @@ pub async fn ban(
     )
     .bind(ban_id)
     .fetch_one(&db.mysql_pool)
-    .await?;
+    .await.fit(&req_id)?;
 
     json(BanResponse {
         player_login: body.player_login,
@@ -236,22 +245,25 @@ struct UnbanResponse {
 
 pub async fn unban(
     _: MPAuthGuard<{ privilege::ADMIN }>,
+    req_id: RequestId,
     db: Data<Database>,
     Json(body): Json<UnbanBody>,
-) -> RecordsResult<impl Responder> {
-    let Some(Player { id: player_id, .. }) = player::get_player_from_login(&db, &body.player_login).await? else {
-        return Err(RecordsError::PlayerNotFound(body.player_login));
-    };
+) -> RecordsResponse<impl Responder> {
+    let player_id = must::have_player(&db, &body.player_login)
+        .await
+        .fit(&req_id)?
+        .id;
 
-    let Some(ban) = is_banned(&db, player_id).await? else {
-        return Err(RecordsError::PlayerNotBanned(body.player_login));
+    let Some(ban) = is_banned(&db, player_id).await.fit(&req_id)? else {
+        return Err(RecordsErrorKind::PlayerNotBanned(body.player_login)).fit(&req_id);
     };
 
     if let Some(duration) =
         sqlx::query_scalar::<_, i64>("SELECT SYSDATE() - date_ban FROM banishments WHERE id = ?")
             .bind(ban.inner.id)
             .fetch_optional(&db.mysql_pool)
-            .await?
+            .await
+            .fit(&req_id)?
     {
         println!("duration: {duration}s");
     }
@@ -259,7 +271,8 @@ pub async fn unban(
     sqlx::query("UPDATE banishments SET duration = SYSDATE() - date_ban WHERE id = ?")
         .bind(ban.inner.id)
         .execute(&db.mysql_pool)
-        .await?;
+        .await
+        .fit(&req_id)?;
 
     json(UnbanResponse {
         player_login: body.player_login,
@@ -280,16 +293,14 @@ struct PlayerNoteResponse {
 
 pub async fn player_note(
     _: MPAuthGuard<{ privilege::ADMIN }>,
+    req_id: RequestId,
     db: Data<Database>,
     Json(body): Json<PlayerNoteBody>,
-) -> RecordsResult<impl Responder> {
-    let Some(admins_note) = sqlx::query_scalar(
-        "SELECT admins_note FROM players WHERE login = ?"
-    )
-    .bind(&body.player_login)
-    .fetch_optional(&db.mysql_pool).await? else {
-        return Err(RecordsError::PlayerNotFound(body.player_login));
-    };
+) -> RecordsResponse<impl Responder> {
+    let admins_note = must::have_player(&db, &body.player_login)
+        .await
+        .fit(&req_id)?
+        .admins_note;
 
     json(PlayerNoteResponse {
         player_login: body.player_login,

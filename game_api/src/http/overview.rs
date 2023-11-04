@@ -5,13 +5,14 @@ use actix_web::{
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tracing_actix_web::RequestId;
 
 use crate::{
     graphql::get_rank_or_full_update,
     models::{self, Map},
     must, redis,
     utils::{format_map_key, json},
-    Database, RecordsResult,
+    Database, FitRequestId, RecordsResponse, RecordsResult,
 };
 
 use super::event;
@@ -136,32 +137,37 @@ async fn get_range(
 }
 
 pub async fn overview(
+    req_id: RequestId,
     db: Data<Database>,
     Query(body): Query<OverviewQuery>,
     event: Option<(String, u32)>,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     let ref map @ Map {
         id,
         linked_map,
         reversed,
         ..
-    } = must::have_map(&db, &body.map_uid).await?;
-    let player_id = must::have_player(&db, &body.login).await?.id;
+    } = must::have_map(&db, &body.map_uid).await.fit(&req_id)?;
+    let player_id = must::have_player(&db, &body.login).await.fit(&req_id)?.id;
     let map_id = linked_map.unwrap_or(id);
     let reversed = reversed.unwrap_or(false);
 
     let event = match event {
         Some((event_handle, edition_id)) => Some(
-            must::have_event_edition_with_map(&db, &body.map_uid, event_handle, edition_id).await?,
+            must::have_event_edition_with_map(&db, &body.map_uid, event_handle, edition_id)
+                .await
+                .fit(&req_id)?,
         ),
         None => None,
     };
 
-    let mut redis_conn = db.redis_pool.get().await.unwrap();
+    let redis_conn = &mut db.redis_pool.get().await.fit(&req_id)?;
 
     // Update redis if needed
     let key = format_map_key(map_id, event.as_ref());
-    let count = redis::update_leaderboard(&db, map, event.as_ref()).await? as u32;
+    let count = redis::update_leaderboard(&db, redis_conn, map, event.as_ref())
+        .await
+        .fit(&req_id)? as u32;
 
     let mut ranked_records: Vec<RankedRecord> = vec![];
 
@@ -174,18 +180,25 @@ pub async fn overview(
     } else {
         redis_conn.zrank(&key, player_id)
     }
-    .await?;
+    .await
+    .fit(&req_id)?;
     let player_rank = player_rank.map(|r| r as u64 as u32);
 
     if let Some(player_rank) = player_rank {
         // The player has a record and is in top ROWS, display ROWS records
         if player_rank < TOTAL_ROWS {
-            ranked_records.extend(get_range(&db, map, (0, TOTAL_ROWS), event.as_ref()).await?);
+            let range = get_range(&db, map, (0, TOTAL_ROWS), event.as_ref())
+                .await
+                .fit(&req_id)?;
+            ranked_records.extend(range);
         }
         // The player is not in the top ROWS records, display top3 and then center around the player rank
         else {
             // push top3
-            ranked_records.extend(get_range(&db, map, (0, 3), event.as_ref()).await?);
+            let range = get_range(&db, map, (0, 3), event.as_ref())
+                .await
+                .fit(&req_id)?;
+            ranked_records.extend(range);
 
             // the rest is centered around the player
             let row_minus_top3 = TOTAL_ROWS - 3;
@@ -199,7 +212,10 @@ pub async fn overview(
                 }
             };
 
-            ranked_records.extend(get_range(&db, map, range, event.as_ref()).await?);
+            let range = get_range(&db, map, range, event.as_ref())
+                .await
+                .fit(&req_id)?;
+            ranked_records.extend(range);
         }
     }
     // The player has no record, so ROWS = ROWS - 1 to keep one last line for the player
@@ -208,14 +224,23 @@ pub async fn overview(
         // So display all top ROWS records and then the last 3
         if count > NO_RECORD_ROWS {
             // top (ROWS - 1 - 3)
-            get_range(&db, map, (0, NO_RECORD_ROWS - 3), event.as_ref()).await?;
+            let range = get_range(&db, map, (0, NO_RECORD_ROWS - 3), event.as_ref())
+                .await
+                .fit(&req_id)?;
+            ranked_records.extend(range);
 
             // last 3
-            ranked_records.extend(get_range(&db, map, (count - 3, count), event.as_ref()).await?);
+            let range = get_range(&db, map, (count - 3, count), event.as_ref())
+                .await
+                .fit(&req_id)?;
+            ranked_records.extend(range);
         }
         // There is enough records to display them all
         else {
-            ranked_records.extend(get_range(&db, map, (0, NO_RECORD_ROWS), event.as_ref()).await?);
+            let range = get_range(&db, map, (0, NO_RECORD_ROWS), event.as_ref())
+                .await
+                .fit(&req_id)?;
+            ranked_records.extend(range);
         }
     }
 

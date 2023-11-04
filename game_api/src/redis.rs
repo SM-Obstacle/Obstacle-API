@@ -1,5 +1,5 @@
 use crate::{http::event, models, utils::format_map_key, Database, RecordsResult};
-use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::{redis::AsyncCommands, Connection as RedisConnection};
 
 async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
     sqlx::query_scalar(
@@ -18,8 +18,11 @@ async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
 /// that in the database, and reupdates the Redis leaderboard completly if so.
 ///
 /// This is a check to avoid records duplicates, that may happen sometimes.
+///
+/// It returns the number of records in the map.
 pub async fn update_leaderboard(
     db: &Database,
+    redis_conn: &mut RedisConnection,
     models::Map {
         id: map_id,
         reversed,
@@ -29,7 +32,6 @@ pub async fn update_leaderboard(
 ) -> RecordsResult<i64> {
     let reversed_lb = reversed.unwrap_or(false);
     let key = format_map_key(*map_id, event);
-    let mut redis_conn = db.redis_pool.get().await?;
     let redis_count: i64 = redis_conn.zcount(&key, "-inf", "+inf").await?;
     let mysql_count: i64 = count_records_map(db, *map_id).await?;
 

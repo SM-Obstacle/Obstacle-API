@@ -4,7 +4,7 @@ use async_graphql::{Enum, SimpleObject};
 use serde::Serialize;
 use sqlx::{mysql::MySqlRow, FromRow, Row};
 
-use crate::RecordsError;
+use crate::RecordsErrorKind;
 
 #[derive(Serialize, FromRow, Clone, Debug)]
 pub struct Player {
@@ -150,7 +150,7 @@ impl<'r> FromRow<'r, MySqlRow> for Medal {
             (3, "champion") => Ok(Self::Champion),
             (id, _) => Err(sqlx::Error::ColumnDecode {
                 index: "id".to_owned(),
-                source: Box::new(RecordsError::UnknownMedal(id, medal_name)),
+                source: Box::new(RecordsErrorKind::UnknownMedal(id, medal_name)),
             }),
         }
     }
@@ -185,7 +185,7 @@ impl<'r> FromRow<'r, MySqlRow> for RatingKind {
             (3, "difficulty") => Ok(Self::Difficulty),
             (id, _) => Err(sqlx::Error::ColumnDecode {
                 index: "id".to_owned(),
-                source: Box::new(RecordsError::UnknownRatingKind(id, kind)),
+                source: Box::new(RecordsErrorKind::UnknownRatingKind(id, kind)),
             }),
         }
     }
@@ -274,7 +274,7 @@ impl<'r> FromRow<'r, MySqlRow> for ApiStatusKind {
             (2, "maintenance") => Ok(Self::Maintenance),
             (id, _) => Err(sqlx::Error::ColumnDecode {
                 index: "status_id".to_owned(),
-                source: Box::new(RecordsError::UnknownStatus(id, kind)),
+                source: Box::new(RecordsErrorKind::UnknownStatus(id, kind)),
             }),
         }
     }

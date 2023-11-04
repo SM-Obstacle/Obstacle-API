@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
 use tokio::time::timeout;
 use tracing::Level;
+use tracing_actix_web::RequestId;
 
 use crate::{
     auth::{
@@ -20,7 +21,7 @@ use crate::{
     models::{Banishment, Map, Player},
     must, read_env_var_file,
     utils::json,
-    AccessTokenErr, Database, RecordsError, RecordsResult,
+    AccessTokenErr, Database, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult,
 };
 
 use super::{admin, pb, player_finished as pf};
@@ -77,19 +78,20 @@ pub async fn get_or_insert(
 
 pub async fn update(
     _: ApiAvailable,
+    req_id: RequestId,
     db: Data<Database>,
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<UpdatePlayerBody>,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     match auth::check_auth_for(&db, &login, &token, privilege::PLAYER).await {
-        Ok(id) => update_player(&db, id, body).await?,
+        Ok(id) => update_player(&db, id, body).await.fit(&req_id)?,
         // At this point, if Redis has registered a token with the login, it means that
         // the player is not yet added to the Obstacle database but effectively
         // has a ManiaPlanet account
-        Err(RecordsError::PlayerNotFound(_)) => {
-            let _ = insert_player(&db, &login, body).await?;
+        Err(RecordsErrorKind::PlayerNotFound(_)) => {
+            let _ = insert_player(&db, &login, body).await.fit(&req_id)?;
         }
-        Err(e) => return Err(e),
+        Err(e) => return Err(e).fit(&req_id),
     }
 
     Ok(HttpResponse::Ok().finish())
@@ -113,7 +115,7 @@ pub async fn update_player(
 pub async fn get_player_from_login(
     db: &Database,
     player_login: &str,
-) -> Result<Option<Player>, RecordsError> {
+) -> Result<Option<Player>, RecordsErrorKind> {
     let r = sqlx::query_as("SELECT * FROM players WHERE login = ?")
         .bind(player_login)
         .fetch_optional(&db.mysql_pool)
@@ -124,7 +126,7 @@ pub async fn get_player_from_login(
 pub async fn check_banned(
     db: &MySqlPool,
     player_id: u32,
-) -> Result<Option<Banishment>, RecordsError> {
+) -> Result<Option<Banishment>, RecordsErrorKind> {
     let r = sqlx::query_as("SELECT * FROM current_bans WHERE player_id = ?")
         .bind(player_id)
         .fetch_optional(db)
@@ -135,7 +137,7 @@ pub async fn check_banned(
 pub async fn get_map_from_game_id(
     db: &Database,
     map_game_id: &str,
-) -> Result<Option<Map>, RecordsError> {
+) -> Result<Option<Map>, RecordsErrorKind> {
     let r = sqlx::query_as("SELECT * FROM maps WHERE game_id = ?")
         .bind(map_game_id)
         .fetch_optional(&db.mysql_pool)
@@ -198,7 +200,7 @@ async fn test_access_token(
 
     let access_token = match res {
         MPAccessTokenResponse::AccessToken { access_token } => access_token,
-        MPAccessTokenResponse::Error(err) => return Err(RecordsError::AccessTokenErr(err)),
+        MPAccessTokenResponse::Error(err) => return Err(RecordsErrorKind::AccessTokenErr(err)),
     };
 
     check_mp_token(client, login, access_token).await
@@ -221,11 +223,12 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
 
 async fn finished(
     _: ApiAvailable,
+    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     body: pf::PlayerFinishedBody,
-) -> RecordsResult<impl Responder> {
-    let res = pf::finished(login, &db, body, None).await?.res;
+) -> RecordsResponse<impl Responder> {
+    let res = pf::finished(login, &db, body, None).await.fit(&req_id)?.res;
     json(res)
 }
 
@@ -243,13 +246,17 @@ struct GetTokenResponse {
 
 pub async fn get_token(
     _: ApiAvailable,
+    req_id: RequestId,
     db: Data<Database>,
     client: Data<Client>,
     state: Data<AuthState>,
     Json(body): Json<GetTokenBody>,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     // retrieve access_token from browser redirection
-    let (tx, rx) = state.connect_with_browser(body.state.clone()).await?;
+    let (tx, rx) = state
+        .connect_with_browser(body.state.clone())
+        .await
+        .fit(&req_id)?;
     let code = match timeout(TIMEOUT, rx).await {
         Ok(Ok(Message::MPCode(access_token))) => access_token,
         _ => {
@@ -259,7 +266,7 @@ pub async fn get_token(
                 body.state.clone()
             );
             state.remove_state(body.state).await;
-            return Err(RecordsError::Timeout);
+            return Err(RecordsErrorKind::Timeout).fit(&req_id);
         }
     };
 
@@ -270,19 +277,19 @@ pub async fn get_token(
         Ok(true) => (),
         Ok(false) => {
             tx.send(Message::InvalidMPCode).expect(err_msg);
-            return Err(RecordsError::InvalidMPCode);
+            return Err(RecordsErrorKind::InvalidMPCode).fit(&req_id);
         }
-        Err(RecordsError::AccessTokenErr(err)) => {
+        Err(RecordsErrorKind::AccessTokenErr(err)) => {
             tx.send(Message::AccessTokenErr(err.clone()))
                 .expect(err_msg);
-            return Err(RecordsError::AccessTokenErr(err));
+            return Err(RecordsErrorKind::AccessTokenErr(err)).fit(&req_id);
         }
         err => {
-            let _ = err?;
+            let _ = err.fit(&req_id)?;
         }
     }
 
-    let (mp_token, web_token) = auth::gen_token_for(&db, &body.login).await?;
+    let (mp_token, web_token) = auth::gen_token_for(&db, &body.login).await.fit(&req_id)?;
     tx.send(Message::Ok(WebToken {
         login: body.login,
         token: web_token,
@@ -305,11 +312,15 @@ pub struct GiveTokenResponse {
 }
 
 pub async fn post_give_token(
+    req_id: RequestId,
     session: Session,
     state: Data<AuthState>,
     Json(body): Json<GiveTokenBody>,
-) -> RecordsResult<impl Responder> {
-    let web_token = state.browser_connected_for(body.state, body.code).await?;
+) -> RecordsResponse<impl Responder> {
+    let web_token = state
+        .browser_connected_for(body.state, body.code)
+        .await
+        .fit(&req_id)?;
     session
         .insert(WEB_TOKEN_SESS_KEY, web_token)
         .expect("unable to insert session web token");
@@ -325,11 +336,12 @@ struct IsBannedResponse {
 
 async fn pb(
     _: ApiAvailable,
+    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     body: pb::PbReq,
-) -> RecordsResult<impl Responder> {
-    pb::pb(login, db, body, None).await
+) -> RecordsResponse<impl Responder> {
+    pb::pb(login, req_id, db, body, None).await
 }
 
 #[derive(Deserialize)]
@@ -344,11 +356,12 @@ struct TimesResponseItem {
 }
 
 async fn times(
+    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     db: Data<Database>,
     Json(body): Json<TimesBody>,
-) -> RecordsResult<impl Responder> {
-    let player = must::have_player(&db, &login).await?;
+) -> RecordsResponse<impl Responder> {
+    let player = must::have_player(&db, &login).await.fit(&req_id)?;
 
     let query = format!(
         "SELECT m.game_id AS map_uid, MIN(r.time) AS time
@@ -369,7 +382,7 @@ async fn times(
         query = query.bind(map_uid);
     }
 
-    let result = query.fetch_all(&db.mysql_pool).await?;
+    let result = query.fetch_all(&db.mysql_pool).await.fit(&req_id)?;
     json(result)
 }
 
@@ -389,18 +402,20 @@ struct InfoResponse {
 }
 
 pub async fn info(
+    req_id: RequestId,
     db: Data<Database>,
     Query(body): Query<InfoBody>,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     let Some(info) = sqlx::query_as::<_, InfoResponse>(
         "SELECT *, (SELECT role_name FROM role WHERE id = role) as role_name
         FROM players WHERE login = ?",
     )
     .bind(&body.login)
     .fetch_optional(&db.mysql_pool)
-    .await?
+    .await
+    .fit(&req_id)?
     else {
-        return Err(RecordsError::PlayerNotFound(body.login));
+        return Err(RecordsErrorKind::PlayerNotFound(body.login)).fit(&req_id);
     };
 
     json(info)
@@ -417,10 +432,11 @@ struct ReportErrorBody {
 }
 
 async fn report_error(
+    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     client: Data<Client>,
     Json(body): Json<ReportErrorBody>,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     #[derive(Serialize)]
     struct WebhookBodyEmbedField {
         name: String,
@@ -500,7 +516,8 @@ async fn report_error(
             ],
         })
         .send()
-        .await?;
+        .await
+        .fit(&req_id)?;
 
     Ok(HttpResponse::Ok().finish())
 }

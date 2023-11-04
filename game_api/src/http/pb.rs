@@ -5,8 +5,9 @@ use actix_web::{
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use tracing_actix_web::RequestId;
 
-use crate::{models, utils::json, Database, RecordsResult};
+use crate::{models, utils::json, Database, FitRequestId, RecordsResponse};
 
 use super::event;
 
@@ -38,10 +39,11 @@ struct PbCpTimesResponseItem {
 
 pub async fn pb(
     login: String,
+    req_id: RequestId,
     db: Data<Database>,
     Query(PbBody { map_uid }): PbReq,
     event: Option<(models::Event, models::EventEdition)>,
-) -> RecordsResult<impl Responder> {
+) -> RecordsResponse<impl Responder> {
     let (join_event, and_event) = event
         .is_some()
         .then(event::get_sql_fragments)
@@ -88,7 +90,7 @@ pub async fn pb(
         rs_count,
         cp_num,
         time,
-    }) = times.next().await.transpose()?
+    }) = times.next().await.transpose().fit(&req_id)?
     {
         res.rs_count = rs_count;
         res.cps_times.push(PbCpTimesResponseItem { cp_num, time });

@@ -7,18 +7,22 @@ use actix_session::{
 use actix_web::{
     cookie::{time::Duration as CookieDuration, Key},
     web::{self, Data},
-    App, HttpResponse, HttpServer,
+    App, HttpServer, Responder,
 };
 use anyhow::Context;
 use deadpool::Runtime;
 use game_api::{
     api_route, get_mysql_pool, get_tokens_ttl, graphql_route, read_env_var_file, AuthState,
-    Database, RecordsError,
+    Database, FitRequestId, RecordsErrorKind, RecordsResponse,
 };
 use game_api::{get_env_var, get_env_var_as};
 use std::env::var;
-use tracing_actix_web::TracingLogger;
+use tracing_actix_web::{RequestId, TracingLogger};
 use tracing_subscriber::fmt::format::FmtSpan;
+
+async fn not_found(req_id: RequestId) -> RecordsResponse<impl Responder> {
+    Err::<String, _>(RecordsErrorKind::EndpointNotFound).fit(&req_id)
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -87,9 +91,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(Data::new(db.clone()))
             .service(graphql_route(db.clone()))
             .service(api_route())
-            .default_service(web::to(|| async {
-                Err::<HttpResponse, _>(RecordsError::EndpointNotFound)
-            }))
+            .default_service(web::to(not_found))
     })
     .bind(("0.0.0.0", port))
     .context("Cannot bind 0.0.0.0 address")?

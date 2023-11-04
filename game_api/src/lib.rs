@@ -1,14 +1,16 @@
 use chrono::{DateTime, Utc};
+use core::fmt;
 use deadpool::managed::PoolError;
 use deadpool_redis::redis::RedisError;
 pub use deadpool_redis::Pool as RedisPool;
-use serde::{Serialize, Deserialize};
-pub use sqlx::MySqlPool;
+use serde::{Deserialize, Serialize};
 use sqlx::mysql;
+pub use sqlx::MySqlPool;
+use std::fmt::Debug;
 use std::{io, time::Duration};
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
-use std::fmt::Debug;
+use tracing_actix_web::RequestId;
 
 use self::models::Banishment;
 
@@ -16,9 +18,9 @@ mod auth;
 mod graphql;
 mod http;
 pub mod models;
+pub(crate) mod must;
 mod redis;
 mod utils;
-pub(crate) mod must;
 
 pub use auth::{get_tokens_ttl, AuthState};
 pub use graphql::graphql_route;
@@ -35,7 +37,7 @@ pub struct AccessTokenErr {
 
 #[derive(Error, Debug)]
 #[repr(i32)]
-pub enum RecordsError {
+pub enum RecordsErrorKind {
     // Internal server errors
     #[error(transparent)]
     IOError(#[from] io::Error) = 101,
@@ -99,102 +101,127 @@ pub enum RecordsError {
     InvalidTimes = 313,
 }
 
+impl<E: Debug> From<PoolError<E>> for RecordsErrorKind {
+    fn from(value: PoolError<E>) -> Self {
+        Self::Unknown(format!("pool error: {value:?}"))
+    }
+}
+
+impl<T> From<SendError<T>> for RecordsErrorKind {
+    fn from(value: SendError<T>) -> Self {
+        Self::Unknown(format!("send error: {value:?}"))
+    }
+}
+
+#[derive(Debug)]
+pub struct RecordsError {
+    pub request_id: RequestId,
+    pub kind: RecordsErrorKind,
+}
+
+impl fmt::Display for RecordsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} --- request id: {}", self.kind, self.request_id)
+    }
+}
+
+impl std::error::Error for RecordsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.kind)
+    }
+}
+
 impl RecordsError {
-    fn to_err_res(&self, message: String) -> ErrorResponse {
+    fn to_err_res(&self) -> ErrorResponse {
+        let message = self.to_string();
         ErrorResponse {
-            r#type: unsafe { *(self as *const Self as *const i32) },
-            message
+            request_id: self.request_id.to_string(),
+            r#type: unsafe { *(&self.kind as *const RecordsErrorKind as *const _) },
+            message,
         }
     }
 }
 
 #[derive(Serialize)]
 struct ErrorResponse {
+    request_id: String,
     r#type: i32,
     message: String,
 }
 
 impl actix_web::ResponseError for RecordsError {
     fn error_response(&self) -> actix_web::HttpResponse {
-        match self {
+        use RecordsErrorKind as R;
+
+        match &self.kind {
             // Internal server errors
-            Self::IOError(err) => 
-                actix_web::HttpResponse::InternalServerError().json(self.to_err_res(err.to_string())),
-            Self::MySql(err) => actix_web::HttpResponse::InternalServerError().json(self.to_err_res(err.to_string())),
-            Self::Redis(err) => actix_web::HttpResponse::InternalServerError().json(self.to_err_res(err.to_string())),
-            Self::ExternalRequest(err) => actix_web::HttpResponse::InternalServerError().json(self.to_err_res(err.to_string())),
-            Self::Unknown(s) => actix_web::HttpResponse::InternalServerError().json(self.to_err_res(format!(
-                "unknown error: `{s}`",
-            ))),
-            Self::Maintenance(date) => actix_web::HttpResponse::InternalServerError().json(self.to_err_res(format!("server is in maintenance mode since {date:?}"))),
-            Self::UnknownStatus(id, kind) => actix_web::HttpResponse::InternalServerError()
-                .json(self.to_err_res(format!("unknown api status `{id}`: `{kind}`"))),
+            R::IOError(_) => actix_web::HttpResponse::InternalServerError().json(self.to_err_res()),
+            R::MySql(_) => actix_web::HttpResponse::InternalServerError().json(self.to_err_res()),
+            R::Redis(_) => actix_web::HttpResponse::InternalServerError().json(self.to_err_res()),
+            R::ExternalRequest(_) => {
+                actix_web::HttpResponse::InternalServerError().json(self.to_err_res())
+            }
+            R::Unknown(_) => actix_web::HttpResponse::InternalServerError().json(self.to_err_res()),
+            R::Maintenance(_) => {
+                actix_web::HttpResponse::InternalServerError().json(self.to_err_res())
+            }
+            R::UnknownStatus(..) => {
+                actix_web::HttpResponse::InternalServerError().json(self.to_err_res())
+            }
 
             // Authentication errors
-            Self::Unauthorized => {
-                actix_web::HttpResponse::Unauthorized().json(self.to_err_res("unauthorized action".to_owned()))
+            R::Unauthorized => actix_web::HttpResponse::Unauthorized().json(self.to_err_res()),
+            R::Forbidden => actix_web::HttpResponse::Forbidden().json(self.to_err_res()),
+            R::MissingGetTokenReq => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
+            R::StateAlreadyReceived(_) => {
+                actix_web::HttpResponse::BadRequest().json(self.to_err_res())
             }
-            Self::Forbidden => actix_web::HttpResponse::Forbidden().json(self.to_err_res("forbidden action".to_owned())),
-            Self::MissingGetTokenReq => {
-                actix_web::HttpResponse::BadRequest().json(self.to_err_res( "missing /player/get_token request".to_owned()))
-            }
-            Self::StateAlreadyReceived(instant) => actix_web::HttpResponse::BadRequest()
-                .json(self.to_err_res(format!("state already received at {instant:?}"))),
-            Self::BannedPlayer(ban) => {
+            R::BannedPlayer(ban) => {
                 #[derive(Serialize)]
                 struct BannedPlayerResponse<'a> {
                     message: String,
                     ban: &'a Banishment,
                 }
-                actix_web::HttpResponse::Forbidden().json(BannedPlayerResponse { message: ban.to_string(), ban })
+                actix_web::HttpResponse::Forbidden().json(BannedPlayerResponse {
+                    message: ban.to_string(),
+                    ban,
+                })
             }
-            Self::AccessTokenErr(err) =>
-                actix_web::HttpResponse::BadRequest().json(self.to_err_res(format!("{err:?}"))),
-            Self::InvalidMPCode => {
-                actix_web::HttpResponse::BadRequest().json(self.to_err_res("invalid MP code".to_owned()))
-            }
-            Self::Timeout => actix_web::HttpResponse::RequestTimeout().json(self.to_err_res("timeout exceeded (max 5 min)".to_owned())),
+            R::AccessTokenErr(_) => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
+            R::InvalidMPCode => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
+            R::Timeout => actix_web::HttpResponse::RequestTimeout().json(self.to_err_res()),
 
             // Logical errors
-            Self::EndpointNotFound => actix_web::HttpResponse::NotFound().json(self.to_err_res("not found".to_owned())),
-            Self::PlayerNotFound(login) => actix_web::HttpResponse::BadRequest()
-                .json(self.to_err_res(format!("player `{login}` not found in database"))),
-            Self::PlayerNotBanned(login) => actix_web::HttpResponse::BadRequest()
-                .json(self.to_err_res(format!("player `{login}` is not banned"))),
-            Self::MapNotFound(uid) => actix_web::HttpResponse::BadRequest()
-                .json(self.to_err_res(format!("map with uid `{uid}` not found in database"))),
-            Self::UnknownRole(id, name) => actix_web::HttpResponse::InternalServerError()
-                .json(self.to_err_res(format!("unknown role name `{id}`: `{name}`"))),
-            Self::UnknownMedal(id, name) => actix_web::HttpResponse::InternalServerError()
-                .json(self.to_err_res(format!("unknown medal name `{id}`: `{name}`"))),
-            Self::UnknownRatingKind(id, kind) => actix_web::HttpResponse::InternalServerError()
-                .json(self.to_err_res(format!("unknown rating kind name `{id}`: `{kind}`"))),
-            Self::NoRatingFound(login, map_uid) => actix_web::HttpResponse::BadRequest()
-                .json(self.to_err_res(format!(
-                "no rating found to update for player with login: `{login}` and map with uid: `{map_uid}`",
-            ))),
-            Self::InvalidRates => actix_web::HttpResponse::BadRequest().json(self.to_err_res("invalid rates (too many, or repeated rate)".to_owned())),
-            Self::EventNotFound(handle) => actix_web::HttpResponse::BadRequest().json(self.to_err_res(format!("event `{handle}` not found"))),
-            Self::EventEditionNotFound(handle, edition) => actix_web::HttpResponse::BadRequest().json(self.to_err_res(format!("event edition `{edition}` not found for event `{handle}`"))),
-            Self::MapNotInEventEdition(uid, handle, edition) => actix_web::HttpResponse::BadRequest().json(self.to_err_res(format!("map with uid `{uid}` is not registered for event `{handle}` edition {edition}"))),
-            Self::InvalidTimes => actix_web::HttpResponse::BadRequest().json(self.to_err_res("invalid times (total run time may not be equal to the sum of all checkpoint times)".to_owned())),
+            R::EndpointNotFound => actix_web::HttpResponse::NotFound().json(self.to_err_res()),
+            R::PlayerNotFound(_) => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
+            R::PlayerNotBanned(_) => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
+            R::MapNotFound(_) => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
+            R::UnknownRole(..) => {
+                actix_web::HttpResponse::InternalServerError().json(self.to_err_res())
+            }
+            R::UnknownMedal(..) => {
+                actix_web::HttpResponse::InternalServerError().json(self.to_err_res())
+            }
+            R::UnknownRatingKind(..) => {
+                actix_web::HttpResponse::InternalServerError().json(self.to_err_res())
+            }
+            R::NoRatingFound(..) => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
+            R::InvalidRates => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
+            R::EventNotFound(_) => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
+            R::EventEditionNotFound(..) => {
+                actix_web::HttpResponse::BadRequest().json(self.to_err_res())
+            }
+            R::MapNotInEventEdition(..) => {
+                actix_web::HttpResponse::BadRequest().json(self.to_err_res())
+            }
+            R::InvalidTimes => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
         }
     }
 }
 
-impl<E: Debug> From<PoolError<E>> for RecordsError {
-    fn from(err: PoolError<E>) -> Self {
-        Self::Unknown(format!("pool error: `{err:?}`"))
-    }
-}
+pub type RecordsResult<T> = Result<T, RecordsErrorKind>;
 
-impl<T> From<SendError<T>> for RecordsError {
-    fn from(err: SendError<T>) -> Self {
-        Self::Unknown(format!("send error: `{:?}`", err.to_string()))
-    }
-}
-
-pub type RecordsResult<T> = Result<T, RecordsError>;
+pub type RecordsResponse<T> = Result<T, RecordsError>;
 
 #[derive(Clone)]
 pub struct Database {
@@ -202,7 +229,7 @@ pub struct Database {
     pub redis_pool: RedisPool,
 }
 
-pub async fn get_mysql_pool() -> RecordsResult<MySqlPool> {
+pub async fn get_mysql_pool() -> anyhow::Result<MySqlPool> {
     let mysql_pool = mysql::MySqlPoolOptions::new().acquire_timeout(Duration::from_secs(10));
 
     #[cfg(feature = "localhost_test")]
@@ -210,8 +237,22 @@ pub async fn get_mysql_pool() -> RecordsResult<MySqlPool> {
     #[cfg(not(feature = "localhost_test"))]
     let url = &read_env_var_file("DATABASE_URL");
 
-    let mysql_pool = mysql_pool
-        .connect(url)
-        .await?;
+    let mysql_pool = mysql_pool.connect(url).await?;
     Ok(mysql_pool)
+}
+
+pub trait FitRequestId<T, E> {
+    fn fit(self, request_id: &RequestId) -> RecordsResponse<T>;
+}
+
+impl<T, E> FitRequestId<T, E> for Result<T, E>
+where
+    RecordsErrorKind: From<E>,
+{
+    fn fit(self, request_id: &RequestId) -> RecordsResponse<T> {
+        self.map_err(|e| RecordsError {
+            request_id: *request_id,
+            kind: e.into(),
+        })
+    }
 }

@@ -10,6 +10,7 @@ use futures::StreamExt;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
 use std::env::var;
 use std::vec::Vec;
+use tracing_actix_web::RequestId;
 
 use crate::auth::{self, privilege, WebToken, WEB_TOKEN_SESS_KEY};
 use crate::graphql::map::MapLoader;
@@ -370,6 +371,7 @@ fn create_schema(db: Database) -> Schema {
 }
 
 async fn index_graphql(
+    request_id: RequestId,
     session: Session,
     schema: Data<Schema>,
     GraphQLRequest(request): GraphQLRequest,
@@ -384,7 +386,8 @@ async fn index_graphql(
         } else {
             request
         }
-    };
+    }
+    .data(request_id);
 
     web::Json(schema.execute(request).await)
 }
