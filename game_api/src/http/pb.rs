@@ -90,7 +90,7 @@ pub async fn pb(
         rs_count,
         cp_num,
         time,
-    }) = times.next().await.transpose().fit(&req_id)?
+    }) = times.next().await.transpose().fit(req_id)?
     {
         res.rs_count = rs_count;
         res.cps_times.push(PbCpTimesResponseItem { cp_num, time });

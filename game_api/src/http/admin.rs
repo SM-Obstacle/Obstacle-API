@@ -38,7 +38,7 @@ pub async fn del_note(
         .bind(&body.player_login)
         .execute(&db.mysql_pool)
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
 
     Ok(HttpResponse::Ok().finish())
 }
@@ -66,13 +66,13 @@ pub async fn set_role(
         .bind(&body.player_login)
         .execute(&db.mysql_pool)
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
 
     let role = sqlx::query_scalar("SELECT role_name FROM role WHERE id = ?")
         .bind(body.role)
         .fetch_one(&db.mysql_pool)
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
 
     json(SetRoleResponse {
         player_login: body.player_login,
@@ -132,7 +132,7 @@ pub async fn banishments(
 ) -> RecordsResponse<impl Responder> {
     let player_id = must::have_player(&db, &body.player_login)
         .await
-        .fit(&req_id)?
+        .fit(req_id)?
         .id;
 
     let banishments = sqlx::query_as(
@@ -148,7 +148,7 @@ pub async fn banishments(
     .bind(player_id)
     .fetch_all(&db.mysql_pool)
     .await
-    .fit(&req_id)?;
+    .fit(req_id)?;
 
     json(BanishmentsResponse {
         player_login: body.player_login,
@@ -177,16 +177,16 @@ pub async fn ban(
 ) -> RecordsResponse<impl Responder> {
     let player_id = must::have_player(&db, &body.player_login)
         .await
-        .fit(&req_id)?
+        .fit(req_id)?
         .id;
-    let admin_id = must::have_player(&db, &login).await.fit(&req_id)?.id;
+    let admin_id = must::have_player(&db, &login).await.fit(req_id)?.id;
 
     let was_reprieved =
         sqlx::query_as::<_, Banishment>("SELECT * FROM banishments WHERE player_id = ?")
             .bind(&body.player_login)
             .fetch_optional(&db.mysql_pool)
             .await
-            .fit(&req_id)?
+            .fit(req_id)?
             .is_some();
 
     let ban_id: u32 = sqlx::query_scalar(
@@ -202,7 +202,7 @@ pub async fn ban(
     .bind(admin_id)
     .fetch_one(&db.mysql_pool)
     .await
-    .fit(&req_id)?;
+    .fit(req_id)?;
 
     let ban = sqlx::query_as(
         r#"SELECT id, date_ban, duration, reason, (SELECT login FROM players WHERE id = banished_by) as "banished_by", was_reprieved
@@ -210,7 +210,7 @@ pub async fn ban(
     )
     .bind(ban_id)
     .fetch_one(&db.mysql_pool)
-    .await.fit(&req_id)?;
+    .await.fit(req_id)?;
 
     json(BanResponse {
         player_login: body.player_login,
@@ -251,11 +251,11 @@ pub async fn unban(
 ) -> RecordsResponse<impl Responder> {
     let player_id = must::have_player(&db, &body.player_login)
         .await
-        .fit(&req_id)?
+        .fit(req_id)?
         .id;
 
-    let Some(ban) = is_banned(&db, player_id).await.fit(&req_id)? else {
-        return Err(RecordsErrorKind::PlayerNotBanned(body.player_login)).fit(&req_id);
+    let Some(ban) = is_banned(&db, player_id).await.fit(req_id)? else {
+        return Err(RecordsErrorKind::PlayerNotBanned(body.player_login)).fit(req_id);
     };
 
     if let Some(duration) =
@@ -263,7 +263,7 @@ pub async fn unban(
             .bind(ban.inner.id)
             .fetch_optional(&db.mysql_pool)
             .await
-            .fit(&req_id)?
+            .fit(req_id)?
     {
         println!("duration: {duration}s");
     }
@@ -272,7 +272,7 @@ pub async fn unban(
         .bind(ban.inner.id)
         .execute(&db.mysql_pool)
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
 
     json(UnbanResponse {
         player_login: body.player_login,
@@ -299,7 +299,7 @@ pub async fn player_note(
 ) -> RecordsResponse<impl Responder> {
     let admins_note = must::have_player(&db, &body.player_login)
         .await
-        .fit(&req_id)?
+        .fit(req_id)?
         .admins_note;
 
     json(PlayerNoteResponse {

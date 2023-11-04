@@ -242,16 +242,16 @@ pub async fn get_mysql_pool() -> anyhow::Result<MySqlPool> {
 }
 
 pub trait FitRequestId<T, E> {
-    fn fit(self, request_id: &RequestId) -> RecordsResponse<T>;
+    fn fit(self, request_id: RequestId) -> RecordsResponse<T>;
 }
 
 impl<T, E> FitRequestId<T, E> for Result<T, E>
 where
     RecordsErrorKind: From<E>,
 {
-    fn fit(self, request_id: &RequestId) -> RecordsResponse<T> {
+    fn fit(self, request_id: RequestId) -> RecordsResponse<T> {
         self.map_err(|e| RecordsError {
-            request_id: *request_id,
+            request_id,
             kind: e.into(),
         })
     }

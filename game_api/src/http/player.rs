@@ -84,14 +84,14 @@ pub async fn update(
     Json(body): Json<UpdatePlayerBody>,
 ) -> RecordsResponse<impl Responder> {
     match auth::check_auth_for(&db, &login, &token, privilege::PLAYER).await {
-        Ok(id) => update_player(&db, id, body).await.fit(&req_id)?,
+        Ok(id) => update_player(&db, id, body).await.fit(req_id)?,
         // At this point, if Redis has registered a token with the login, it means that
         // the player is not yet added to the Obstacle database but effectively
         // has a ManiaPlanet account
         Err(RecordsErrorKind::PlayerNotFound(_)) => {
-            let _ = insert_player(&db, &login, body).await.fit(&req_id)?;
+            let _ = insert_player(&db, &login, body).await.fit(req_id)?;
         }
-        Err(e) => return Err(e).fit(&req_id),
+        Err(e) => return Err(e).fit(req_id),
     }
 
     Ok(HttpResponse::Ok().finish())
@@ -228,7 +228,7 @@ async fn finished(
     db: Data<Database>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
-    let res = pf::finished(login, &db, body, None).await.fit(&req_id)?.res;
+    let res = pf::finished(login, &db, body, None).await.fit(req_id)?.res;
     json(res)
 }
 
@@ -256,7 +256,7 @@ pub async fn get_token(
     let (tx, rx) = state
         .connect_with_browser(body.state.clone())
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
     let code = match timeout(TIMEOUT, rx).await {
         Ok(Ok(Message::MPCode(access_token))) => access_token,
         _ => {
@@ -266,7 +266,7 @@ pub async fn get_token(
                 body.state.clone()
             );
             state.remove_state(body.state).await;
-            return Err(RecordsErrorKind::Timeout).fit(&req_id);
+            return Err(RecordsErrorKind::Timeout).fit(req_id);
         }
     };
 
@@ -277,19 +277,19 @@ pub async fn get_token(
         Ok(true) => (),
         Ok(false) => {
             tx.send(Message::InvalidMPCode).expect(err_msg);
-            return Err(RecordsErrorKind::InvalidMPCode).fit(&req_id);
+            return Err(RecordsErrorKind::InvalidMPCode).fit(req_id);
         }
         Err(RecordsErrorKind::AccessTokenErr(err)) => {
             tx.send(Message::AccessTokenErr(err.clone()))
                 .expect(err_msg);
-            return Err(RecordsErrorKind::AccessTokenErr(err)).fit(&req_id);
+            return Err(RecordsErrorKind::AccessTokenErr(err)).fit(req_id);
         }
         err => {
-            let _ = err.fit(&req_id)?;
+            let _ = err.fit(req_id)?;
         }
     }
 
-    let (mp_token, web_token) = auth::gen_token_for(&db, &body.login).await.fit(&req_id)?;
+    let (mp_token, web_token) = auth::gen_token_for(&db, &body.login).await.fit(req_id)?;
     tx.send(Message::Ok(WebToken {
         login: body.login,
         token: web_token,
@@ -320,7 +320,7 @@ pub async fn post_give_token(
     let web_token = state
         .browser_connected_for(body.state, body.code)
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
     session
         .insert(WEB_TOKEN_SESS_KEY, web_token)
         .expect("unable to insert session web token");
@@ -361,7 +361,7 @@ async fn times(
     db: Data<Database>,
     Json(body): Json<TimesBody>,
 ) -> RecordsResponse<impl Responder> {
-    let player = must::have_player(&db, &login).await.fit(&req_id)?;
+    let player = must::have_player(&db, &login).await.fit(req_id)?;
 
     let query = format!(
         "SELECT m.game_id AS map_uid, MIN(r.time) AS time
@@ -382,7 +382,7 @@ async fn times(
         query = query.bind(map_uid);
     }
 
-    let result = query.fetch_all(&db.mysql_pool).await.fit(&req_id)?;
+    let result = query.fetch_all(&db.mysql_pool).await.fit(req_id)?;
     json(result)
 }
 
@@ -413,9 +413,9 @@ pub async fn info(
     .bind(&body.login)
     .fetch_optional(&db.mysql_pool)
     .await
-    .fit(&req_id)?
+    .fit(req_id)?
     else {
-        return Err(RecordsErrorKind::PlayerNotFound(body.login)).fit(&req_id);
+        return Err(RecordsErrorKind::PlayerNotFound(body.login)).fit(req_id);
     };
 
     json(info)
@@ -517,7 +517,7 @@ async fn report_error(
         })
         .send()
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
 
     Ok(HttpResponse::Ok().finish())
 }

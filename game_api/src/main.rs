@@ -21,7 +21,7 @@ use tracing_actix_web::{RequestId, TracingLogger};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 async fn not_found(req_id: RequestId) -> RecordsResponse<impl Responder> {
-    Err::<String, _>(RecordsErrorKind::EndpointNotFound).fit(&req_id)
+    Err::<String, _>(RecordsErrorKind::EndpointNotFound).fit(req_id)
 }
 
 #[tokio::main]

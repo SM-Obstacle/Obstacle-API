@@ -389,7 +389,7 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
 
             check_auth_for(&db, &login, &token, ROLE)
                 .await
-                .fit(&request_id)?;
+                .fit(request_id)?;
 
             Ok(MPAuthGuard { login })
         }
@@ -449,11 +449,11 @@ impl FromRequest for ApiAvailable {
             db: Data<Database>,
             req_id: RequestId,
         ) -> RecordsResponse<ApiAvailable> {
-            match get_api_status(&db).await.fit(&req_id)? {
+            match get_api_status(&db).await.fit(req_id)? {
                 ApiStatus {
                     at,
                     kind: ApiStatusKind::Maintenance,
-                } => Err(RecordsErrorKind::Maintenance(at)).fit(&req_id),
+                } => Err(RecordsErrorKind::Maintenance(at)).fit(req_id),
                 _ => Ok(ApiAvailable),
             }
         }

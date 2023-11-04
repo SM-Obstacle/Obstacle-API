@@ -187,7 +187,7 @@ async fn event_list(req_id: RequestId, db: Data<Database>) -> RecordsResponse<im
     )
     .fetch_all(&db.mysql_pool)
     .await
-    .fit(&req_id)?;
+    .fit(req_id)?;
 
     json(res)
 }
@@ -200,7 +200,7 @@ async fn event_editions(
     let event_handle = event_handle.into_inner();
     let id = must::have_event_handle(&db, &event_handle)
         .await
-        .fit(&req_id)?
+        .fit(req_id)?
         .id;
 
     let res: Vec<EventHandleResponse> =
@@ -208,7 +208,7 @@ async fn event_editions(
             .bind(id)
             .fetch_all(&db.mysql_pool)
             .await
-            .fit(&req_id)?;
+            .fit(req_id)?;
 
     json(res)
 }
@@ -237,21 +237,21 @@ async fn edition(
     let (models::Event { id: event_id, .. }, edition) =
         must::have_event_edition(&db, &event_handle, edition_id)
             .await
-            .fit(&req_id)?;
+            .fit(req_id)?;
 
     let categories = get_categories_by_edition_id(&db, event_id, edition.id)
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
     let content = if categories.is_empty() {
         let maps = convert_maps(
             &db,
             &client,
             get_maps_by_edition_id(&db, event_id, edition.id)
                 .await
-                .fit(&req_id)?,
+                .fit(req_id)?,
         )
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
 
         Content::Maps { maps }
     } else {
@@ -260,12 +260,12 @@ async fn edition(
         for m in categories {
             let maps = get_maps_by_category_id(&db, event_id, edition.id, m.id)
                 .await
-                .fit(&req_id)?;
+                .fit(req_id)?;
             cat.push(Category {
                 handle: m.handle,
                 name: m.name,
                 banner_img_url: m.banner_img_url,
-                maps: convert_maps(&db, &client, maps).await.fit(&req_id)?,
+                maps: convert_maps(&db, &client, maps).await.fit(req_id)?,
             });
         }
 
@@ -303,12 +303,12 @@ async fn edition_finished(
     // and that the map is registered on it.
     let event = must::have_event_edition_with_map(&db, &body.map_uid, event_handle, edition_id)
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
 
     // Then we insert the record for the global records
     let res = pf::finished(login, &db, body, Some(&event))
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
 
     // Then we insert it for the event edition records.
     // This is not part of the transaction for now, because it's not so bad
@@ -323,7 +323,7 @@ async fn edition_finished(
     .bind(edition.id)
     .execute(&db.mysql_pool)
     .await
-    .fit(&req_id)?;
+    .fit(req_id)?;
 
     json(res.res)
 }
@@ -338,7 +338,7 @@ async fn edition_pb(
     let (event_handle, edition_id) = path.into_inner();
     let event = must::have_event_edition_with_map(&db, &body.map_uid, event_handle, edition_id)
         .await
-        .fit(&req_id)?;
+        .fit(req_id)?;
     pb::pb(login, req_id, db, body, Some(event)).await
 }
 

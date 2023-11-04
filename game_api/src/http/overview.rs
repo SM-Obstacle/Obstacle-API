@@ -147,8 +147,8 @@ pub async fn overview(
         linked_map,
         reversed,
         ..
-    } = must::have_map(&db, &body.map_uid).await.fit(&req_id)?;
-    let player_id = must::have_player(&db, &body.login).await.fit(&req_id)?.id;
+    } = must::have_map(&db, &body.map_uid).await.fit(req_id)?;
+    let player_id = must::have_player(&db, &body.login).await.fit(req_id)?.id;
     let map_id = linked_map.unwrap_or(id);
     let reversed = reversed.unwrap_or(false);
 
@@ -156,18 +156,18 @@ pub async fn overview(
         Some((event_handle, edition_id)) => Some(
             must::have_event_edition_with_map(&db, &body.map_uid, event_handle, edition_id)
                 .await
-                .fit(&req_id)?,
+                .fit(req_id)?,
         ),
         None => None,
     };
 
-    let redis_conn = &mut db.redis_pool.get().await.fit(&req_id)?;
+    let redis_conn = &mut db.redis_pool.get().await.fit(req_id)?;
 
     // Update redis if needed
     let key = format_map_key(map_id, event.as_ref());
     let count = redis::update_leaderboard(&db, redis_conn, map, event.as_ref())
         .await
-        .fit(&req_id)? as u32;
+        .fit(req_id)? as u32;
 
     let mut ranked_records: Vec<RankedRecord> = vec![];
 
@@ -181,7 +181,7 @@ pub async fn overview(
         redis_conn.zrank(&key, player_id)
     }
     .await
-    .fit(&req_id)?;
+    .fit(req_id)?;
     let player_rank = player_rank.map(|r| r as u64 as u32);
 
     if let Some(player_rank) = player_rank {
@@ -189,7 +189,7 @@ pub async fn overview(
         if player_rank < TOTAL_ROWS {
             let range = get_range(&db, map, (0, TOTAL_ROWS), event.as_ref())
                 .await
-                .fit(&req_id)?;
+                .fit(req_id)?;
             ranked_records.extend(range);
         }
         // The player is not in the top ROWS records, display top3 and then center around the player rank
@@ -197,7 +197,7 @@ pub async fn overview(
             // push top3
             let range = get_range(&db, map, (0, 3), event.as_ref())
                 .await
-                .fit(&req_id)?;
+                .fit(req_id)?;
             ranked_records.extend(range);
 
             // the rest is centered around the player
@@ -214,7 +214,7 @@ pub async fn overview(
 
             let range = get_range(&db, map, range, event.as_ref())
                 .await
-                .fit(&req_id)?;
+                .fit(req_id)?;
             ranked_records.extend(range);
         }
     }
@@ -226,20 +226,20 @@ pub async fn overview(
             // top (ROWS - 1 - 3)
             let range = get_range(&db, map, (0, NO_RECORD_ROWS - 3), event.as_ref())
                 .await
-                .fit(&req_id)?;
+                .fit(req_id)?;
             ranked_records.extend(range);
 
             // last 3
             let range = get_range(&db, map, (count - 3, count), event.as_ref())
                 .await
-                .fit(&req_id)?;
+                .fit(req_id)?;
             ranked_records.extend(range);
         }
         // There is enough records to display them all
         else {
             let range = get_range(&db, map, (0, NO_RECORD_ROWS), event.as_ref())
                 .await
-                .fit(&req_id)?;
+                .fit(req_id)?;
             ranked_records.extend(range);
         }
     }
