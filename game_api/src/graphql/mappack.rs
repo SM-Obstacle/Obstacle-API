@@ -18,8 +18,7 @@ use super::{get_rank_or_full_update, utils::RecordAttr};
 pub struct Rank {
     rank: i32,
     last_rank: i32,
-    map: String,
-    map_id: String,
+    map_idx: usize,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -32,6 +31,18 @@ pub struct PlayerScore {
     maps_finished: usize,
     rank: u32,
     worst: Rank,
+}
+
+#[derive(SimpleObject)]
+pub struct MappackMap {
+    map: String,
+    map_id: String,
+}
+
+#[derive(SimpleObject)]
+pub struct MappackScores {
+    maps: Vec<MappackMap>,
+    scores: Vec<PlayerScore>,
 }
 
 #[derive(Deserialize)]
@@ -85,23 +96,38 @@ struct RankedRecordRow {
 pub async fn calc_scores(
     ctx: &async_graphql::Context<'_>,
     mappack_id: String,
-) -> RecordsResult<Vec<PlayerScore>> {
+) -> RecordsResult<MappackScores> {
     let db = ctx.data_unchecked::<Database>();
     let mysql_conn = &mut db.mysql_pool.acquire().await?;
     let redis_conn = &mut db.redis_pool.get().await?;
     let mappack_key = format_mappack_key(&mappack_id);
 
     let mappack_uids: Vec<String> = redis_conn.smembers(&mappack_key).await?;
+
+    let mut maps = Vec::with_capacity(mappack_uids.len().max(5));
+
     let mappack = if mappack_uids.is_empty() {
         let Ok(mappack_id) = mappack_id.parse() else {
             return Err(RecordsErrorKind::InvalidMappackId(mappack_id));
         };
         let client = ctx.data_unchecked::<Client>();
-        load_campaign(client, mysql_conn, redis_conn, &mappack_key, mappack_id).await?
+        let out = load_campaign(client, mysql_conn, redis_conn, &mappack_key, mappack_id).await?;
+        for map in &out {
+            maps.push(MappackMap {
+                map: map.name.clone(),
+                map_id: map.game_id.clone(),
+            });
+        }
+        out
     } else {
         let mut out = Vec::with_capacity(mappack_uids.len());
         for map_uid in &mappack_uids {
-            out.push(must::have_map(&mut **mysql_conn, map_uid).await?);
+            let map = must::have_map(&mut **mysql_conn, map_uid).await?;
+            maps.push(MappackMap {
+                map: map.name.clone(),
+                map_id: map.game_id.clone(),
+            });
+            out.push(map);
         }
         out
     };
@@ -113,7 +139,7 @@ pub async fn calc_scores(
         redis_conn.expire(mappack_key, mappack_ttl).await?;
     }
 
-    let mut players = Vec::<PlayerScore>::with_capacity(mappack.len());
+    let mut scores = Vec::<PlayerScore>::with_capacity(mappack.len());
 
     let mut hashmap = HashMap::new();
 
@@ -135,8 +161,8 @@ pub async fn calc_scores(
         while let Some(record) = res.next().await {
             let record = record?;
 
-            if !players.iter().any(|p| p.player_id == record.player_id2) {
-                players.push(PlayerScore {
+            if !scores.iter().any(|p| p.player_id == record.player_id2) {
+                scores.push(PlayerScore {
                     player_id: record.player_id2,
                     login: record.player_login.clone(),
                     name: record.player_name.clone(),
@@ -166,7 +192,7 @@ pub async fn calc_scores(
 
     let mut map_number = 1;
 
-    for map in &mappack {
+    for (map_idx, map) in mappack.iter().enumerate() {
         let records = hashmap
             .get(&map.id)
             .unwrap_or_else(|| panic!("map not in hashmap: {}", map.id));
@@ -174,7 +200,7 @@ pub async fn calc_scores(
         let last_rank = records.iter().map(|p| p.rank).max().unwrap_or(99);
 
         for record in records {
-            let player = players
+            let player = scores
                 .iter_mut()
                 .find(|p| p.player_id == record.record.player_id2)
                 .unwrap();
@@ -182,20 +208,18 @@ pub async fn calc_scores(
             player.ranks.push(Rank {
                 rank: record.rank,
                 last_rank,
-                map: map.name.clone(),
-                map_id: map.game_id.clone(),
+                map_idx,
             });
 
             player.maps_finished += 1;
         }
 
-        for player in &mut players {
+        for player in &mut scores {
             if player.ranks.len() < map_number {
                 player.ranks.push(Rank {
                     rank: last_rank + 1,
                     last_rank,
-                    map: map.name.clone(),
-                    map_id: map.game_id.clone(),
+                    map_idx,
                 });
             }
         }
@@ -203,7 +227,7 @@ pub async fn calc_scores(
         map_number += 1;
     }
 
-    for player in &mut players {
+    for player in &mut scores {
         player.ranks.sort_by(|a, b| {
             ((a.rank / a.last_rank - b.rank / b.last_rank) + (a.rank - b.rank) / 1000).cmp(&0)
         });
@@ -222,7 +246,7 @@ pub async fn calc_scores(
             / player.ranks.len() as f64;
     }
 
-    players.sort_by(|a, b| {
+    scores.sort_by(|a, b| {
         if a.maps_finished != b.maps_finished {
             b.maps_finished.cmp(&a.maps_finished)
         } else {
@@ -234,7 +258,7 @@ pub async fn calc_scores(
     let mut old_finishes = 0;
     let mut old_rank = 0;
 
-    for (rank, player) in players.iter_mut().enumerate() {
+    for (rank, player) in scores.iter_mut().enumerate() {
         player.rank = if old_score.eq(&player.score) && old_finishes == player.maps_finished {
             old_rank
         } else {
@@ -246,5 +270,5 @@ pub async fn calc_scores(
         old_rank = player.rank;
     }
 
-    Ok(players)
+    Ok(MappackScores { maps, scores })
 }

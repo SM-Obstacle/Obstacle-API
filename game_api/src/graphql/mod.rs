@@ -20,7 +20,7 @@ use crate::models::{Banishment, Event, Map, Player, RankedRecord, Record};
 use crate::Database;
 
 use self::event::{EventCategoryLoader, EventLoader};
-use self::mappack::PlayerScore;
+use self::mappack::MappackScores;
 use self::utils::{
     connections_append_query_string, connections_bind_query_parameters, connections_pages_info,
     decode_id, RecordAttr,
@@ -68,7 +68,7 @@ impl QueryRoot {
         &self,
         ctx: &async_graphql::Context<'_>,
         mappack_id: String,
-    ) -> async_graphql::Result<Vec<PlayerScore>> {
+    ) -> async_graphql::Result<MappackScores> {
         let res = mappack::calc_scores(ctx, mappack_id).await?;
         Ok(res)
     }
