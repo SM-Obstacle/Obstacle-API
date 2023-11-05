@@ -2,6 +2,7 @@ use actix_web::web::Json;
 use chrono::Utc;
 use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use sqlx::Connection;
 
 use crate::{
     graphql::get_rank_or_full_update,
@@ -44,7 +45,7 @@ struct InsertRecordParams {
 
 // TODO: use a SQL transaction
 async fn send_query(
-    db: &Database,
+    db: &mut sqlx::MySqlConnection,
     map_id: u32,
     player_id: u32,
     body: InsertRecordParams,
@@ -61,7 +62,7 @@ async fn send_query(
     .bind(body.respawn_count)
     .bind(now)
     .bind(body.flags)
-    .fetch_one(&db.mysql_pool)
+    .fetch_one(&mut *db)
     .await?;
 
     let cps_times = body
@@ -79,7 +80,7 @@ async fn send_query(
         )
         .as_str(),
     )
-    .execute(&db.mysql_pool)
+    .execute(db)
     .await?;
 
     Ok(record_id)
@@ -99,7 +100,13 @@ async fn insert_record(
         let _count = redis::update_leaderboard(db, redis_conn, map, event).await?;
     }
 
-    let record_id = send_query(db, *map_id, player_id, body.clone()).await?;
+    let body = body.clone();
+    let mysql_conn = &mut db.mysql_pool.acquire().await?;
+    let map_id = *map_id;
+
+    let record_id = mysql_conn
+        .transaction(|txn| Box::pin(send_query(&mut **txn, map_id, player_id, body)))
+        .await?;
 
     Ok(record_id)
 }
