@@ -52,7 +52,7 @@ pub fn format_mp_token_key(login: &str) -> String {
     inner_format_token_key("mp", login)
 }
 
-pub fn format_mappack_key(mappack_id: u32) -> String {
+pub fn format_mappack_key(mappack_id: &str) -> String {
     format_key(format!("mappack:{mappack_id}"))
 }
 

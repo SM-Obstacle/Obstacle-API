@@ -105,6 +105,8 @@ pub enum RecordsErrorKind {
     MapNotInEventEdition(String, String, u32) = 312,
     #[error("invalid times")]
     InvalidTimes = 313,
+    #[error("map pack id should be an integer, got `{0}`")]
+    InvalidMappackId(String),
 }
 
 impl<E: Debug> From<PoolError<E>> for RecordsErrorKind {
@@ -221,6 +223,7 @@ impl actix_web::ResponseError for RecordsError {
                 actix_web::HttpResponse::BadRequest().json(self.to_err_res())
             }
             R::InvalidTimes => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
+            R::InvalidMappackId(_) => actix_web::HttpResponse::BadRequest().json(self.to_err_res()),
         }
     }
 }

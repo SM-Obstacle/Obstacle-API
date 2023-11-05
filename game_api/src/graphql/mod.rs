@@ -67,11 +67,10 @@ impl QueryRoot {
     async fn mappack(
         &self,
         ctx: &async_graphql::Context<'_>,
-        mappack_id: u32,
+        mappack_id: String,
     ) -> async_graphql::Result<Vec<PlayerScore>> {
-        let res = mappack::calc_scores(ctx, mappack_id).await;
-        println!("{res:#?}");
-        Ok(res?)
+        let res = mappack::calc_scores(ctx, mappack_id).await?;
+        Ok(res)
     }
 
     async fn banishments(

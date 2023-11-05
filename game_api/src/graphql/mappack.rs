@@ -7,7 +7,10 @@ use reqwest::Client;
 use serde::Deserialize;
 use sqlx::{FromRow, MySqlConnection};
 
-use crate::{get_env_var_as, models, must, utils::format_mappack_key, Database, RecordsResult};
+use crate::{
+    get_env_var_as, models, must, utils::format_mappack_key, Database, RecordsErrorKind,
+    RecordsResult,
+};
 
 use super::{get_rank_or_full_update, utils::RecordAttr};
 
@@ -81,15 +84,18 @@ struct RankedRecordRow {
 
 pub async fn calc_scores(
     ctx: &async_graphql::Context<'_>,
-    mappack_id: u32,
+    mappack_id: String,
 ) -> RecordsResult<Vec<PlayerScore>> {
     let db = ctx.data_unchecked::<Database>();
     let mysql_conn = &mut db.mysql_pool.acquire().await?;
     let redis_conn = &mut db.redis_pool.get().await?;
-    let mappack_key = format_mappack_key(mappack_id);
+    let mappack_key = format_mappack_key(&mappack_id);
 
     let mappack_uids: Vec<String> = redis_conn.smembers(&mappack_key).await?;
     let mappack = if mappack_uids.is_empty() {
+        let Ok(mappack_id) = mappack_id.parse() else {
+            return Err(RecordsErrorKind::InvalidMappackId(mappack_id));
+        };
         let client = ctx.data_unchecked::<Client>();
         load_campaign(client, mysql_conn, redis_conn, &mappack_key, mappack_id).await?
     } else {
@@ -100,9 +106,12 @@ pub async fn calc_scores(
         out
     };
 
-    // Update the expiration time of the redis key
-    let mappack_ttl = get_env_var_as("RECORDS_API_MAPPACK_TTL");
-    redis_conn.expire(mappack_key, mappack_ttl).await?;
+    let no_ttl: Vec<String> = redis_conn.smembers("v3:no_ttl_mappacks").await?;
+    if !no_ttl.contains(&mappack_id) {
+        // Update the expiration time of the redis key
+        let mappack_ttl = get_env_var_as("RECORDS_API_MAPPACK_TTL");
+        redis_conn.expire(mappack_key, mappack_ttl).await?;
+    }
 
     let mut players = Vec::<PlayerScore>::with_capacity(mappack.len());
 
