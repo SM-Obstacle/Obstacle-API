@@ -4,7 +4,7 @@ use actix_web::{HttpResponse, Resource, Responder};
 use async_graphql::dataloader::DataLoader;
 use async_graphql::extensions::ApolloTracing;
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
-use async_graphql::{connection, Enum, ID};
+use async_graphql::{connection, Enum, ErrorExtensionValues, Value, ID};
 use async_graphql_actix_web::GraphQLRequest;
 use futures::StreamExt;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
@@ -386,10 +386,18 @@ async fn index_graphql(
         } else {
             request
         }
-    }
-    .data(request_id);
+    };
 
-    web::Json(schema.execute(request).await)
+    let mut result = schema.execute(request).await;
+    for error in &mut result.errors {
+        let ex = error
+            .extensions
+            .get_or_insert_with(ErrorExtensionValues::default);
+
+        ex.set("request_id", Value::String(request_id.to_string()));
+    }
+
+    web::Json(result)
 }
 
 async fn index_playground() -> impl Responder {

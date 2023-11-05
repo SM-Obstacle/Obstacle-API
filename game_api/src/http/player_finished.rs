@@ -105,7 +105,7 @@ async fn insert_record(
     let map_id = *map_id;
 
     let record_id = mysql_conn
-        .transaction(|txn| Box::pin(send_query(&mut **txn, map_id, player_id, body)))
+        .transaction(|txn| Box::pin(send_query(txn, map_id, player_id, body)))
         .await?;
 
     Ok(record_id)
