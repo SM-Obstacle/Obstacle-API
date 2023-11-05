@@ -1,7 +1,11 @@
-use crate::{http::event, models, utils::format_map_key, Database, RecordsResult};
+use crate::{http::event, models, utils::format_map_key, RecordsResult};
 use deadpool_redis::{redis::AsyncCommands, Connection as RedisConnection};
+use sqlx::{Executor, MySql, MySqlConnection};
 
-async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
+async fn count_records_map<'c, E: Executor<'c, Database = MySql>>(
+    db: E,
+    map_id: u32,
+) -> RecordsResult<i64> {
     sqlx::query_scalar(
         "SELECT COUNT(*)
         FROM (SELECT * FROM records
@@ -9,7 +13,7 @@ async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
         GROUP BY record_player_id) r",
     )
     .bind(map_id)
-    .fetch_one(&db.mysql_pool)
+    .fetch_one(db)
     .await
     .map_err(|e| e.into())
 }
@@ -21,8 +25,7 @@ async fn count_records_map(db: &Database, map_id: u32) -> RecordsResult<i64> {
 ///
 /// It returns the number of records in the map.
 pub async fn update_leaderboard(
-    db: &Database,
-    redis_conn: &mut RedisConnection,
+    (db, redis_conn): (&mut MySqlConnection, &mut RedisConnection),
     models::Map {
         id: map_id,
         reversed,
@@ -33,7 +36,7 @@ pub async fn update_leaderboard(
     let reversed_lb = reversed.unwrap_or(false);
     let key = format_map_key(*map_id, event);
     let redis_count: i64 = redis_conn.zcount(&key, "-inf", "+inf").await?;
-    let mysql_count: i64 = count_records_map(db, *map_id).await?;
+    let mysql_count: i64 = count_records_map(&mut *db, *map_id).await?;
 
     let (join_event, and_event) = event
         .is_some()
@@ -59,7 +62,7 @@ pub async fn update_leaderboard(
             query = query.bind(event.id).bind(edition.id);
         }
 
-        let all_map_records: Vec<(u32, i32)> = query.fetch_all(&db.mysql_pool).await?;
+        let all_map_records: Vec<(u32, i32)> = query.fetch_all(db).await?;
 
         let _removed_count: i64 = redis_conn.del(&key).await?;
 

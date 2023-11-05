@@ -7,6 +7,7 @@ use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use async_graphql::{connection, Enum, ErrorExtensionValues, Value, ID};
 use async_graphql_actix_web::GraphQLRequest;
 use futures::StreamExt;
+use reqwest::Client;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
 use std::env::var;
 use std::vec::Vec;
@@ -19,6 +20,7 @@ use crate::models::{Banishment, Event, Map, Player, RankedRecord, Record};
 use crate::Database;
 
 use self::event::{EventCategoryLoader, EventLoader};
+use self::mappack::PlayerScore;
 use self::utils::{
     connections_append_query_string, connections_bind_query_parameters, connections_pages_info,
     decode_id, RecordAttr,
@@ -27,6 +29,7 @@ use self::utils::{
 mod ban;
 mod event;
 mod map;
+mod mappack;
 mod medal;
 mod player;
 mod rating;
@@ -61,6 +64,16 @@ pub struct QueryRoot;
 
 #[async_graphql::Object]
 impl QueryRoot {
+    async fn mappack(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        mappack_id: u32,
+    ) -> async_graphql::Result<Vec<PlayerScore>> {
+        let res = mappack::calc_scores(ctx, mappack_id).await;
+        println!("{res:#?}");
+        Ok(res?)
+    }
+
     async fn banishments(
         &self,
         ctx: &async_graphql::Context<'_>,
@@ -244,9 +257,11 @@ impl QueryRoot {
         let (record, map) = (Record::from_row(&row)?, Map::from_row(&row)?);
 
         let redis_conn = &mut db.redis_pool.get().await?;
+        let mysql_conn = &mut db.mysql_pool.acquire().await?;
 
         Ok(RankedRecord {
-            rank: get_rank_or_full_update(db, redis_conn, &map, record.time, None).await?,
+            rank: get_rank_or_full_update((mysql_conn, redis_conn), &map, record.time, None)
+                .await?,
             record,
         })
     }
@@ -257,7 +272,7 @@ impl QueryRoot {
         game_id: String,
     ) -> async_graphql::Result<Map> {
         let db = ctx.data_unchecked::<Database>();
-        crate::http::player::get_map_from_game_id(db, &game_id)
+        crate::http::player::get_map_from_game_id(&db.mysql_pool, &game_id)
             .await?
             .ok_or_else(|| async_graphql::Error::new("Map not found."))
     }
@@ -279,7 +294,8 @@ impl QueryRoot {
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
+        let redis_conn = &mut db.redis_pool.get().await?;
+        let mysql_conn = &mut db.mysql_pool.acquire().await?;
 
         let date_sort_by = SortState::sql_order_by(&date_sort_by);
 
@@ -289,16 +305,17 @@ impl QueryRoot {
             ORDER BY record_date {date_sort_by}
             LIMIT 100"
         );
-        let mut records = sqlx::query_as::<_, RecordAttr>(&query).fetch(mysql_pool);
 
+        let mut records = sqlx::query_as::<_, RecordAttr>(&query).fetch(&mut **mysql_conn);
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
-        let redis_conn = &mut db.redis_pool.get().await?;
+        let mysql_conn = &mut db.mysql_pool.acquire().await?;
 
         while let Some(record) = records.next().await {
             let RecordAttr { record, map } = record?;
 
-            let rank = get_rank_or_full_update(db, redis_conn, &map, record.time, None).await?;
+            let rank =
+                get_rank_or_full_update((mysql_conn, redis_conn), &map, record.time, None).await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }
@@ -314,7 +331,7 @@ pub type Schema = async_graphql::Schema<
 >;
 
 #[allow(clippy::let_and_return)]
-fn create_schema(db: Database) -> Schema {
+fn create_schema(db: Database, client: Client) -> Schema {
     let schema = async_graphql::Schema::build(
         QueryRoot,
         async_graphql::EmptyMutation,
@@ -340,6 +357,7 @@ fn create_schema(db: Database) -> Schema {
     .data(db.mysql_pool.clone())
     .data(db.redis_pool.clone())
     .data(db)
+    .data(client)
     .limit_depth(16)
     .finish();
 
@@ -412,9 +430,9 @@ async fn index_playground() -> impl Responder {
         )))
 }
 
-pub fn graphql_route(db: Database) -> Resource {
+pub fn graphql_route(db: Database, client: Client) -> Resource {
     web::resource("/graphql")
-        .app_data(Data::new(create_schema(db)))
+        .app_data(Data::new(create_schema(db, client)))
         .route(web::get().to(index_playground))
         .route(web::post().to(index_graphql))
 }

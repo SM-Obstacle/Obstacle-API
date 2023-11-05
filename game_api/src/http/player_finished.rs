@@ -93,11 +93,13 @@ async fn insert_record(
     body: &InsertRecordParams,
     event: Option<&(models::Event, models::EventEdition)>,
 ) -> RecordsResult<u32> {
+    let mysql_conn = &mut db.mysql_pool.acquire().await?;
     let redis_conn = &mut db.redis_pool.get().await?;
+
     let key = format_map_key(*map_id, event);
     let added: Option<i64> = redis_conn.zadd(key, player_id, body.time).await.ok();
     if added.is_none() {
-        let _count = redis::update_leaderboard(db, redis_conn, map, event).await?;
+        let _count = redis::update_leaderboard((mysql_conn, redis_conn), map, event).await?;
     }
 
     let body = body.clone();
@@ -129,7 +131,7 @@ pub async fn finished(
         cps_number,
         reversed,
         ..
-    } = must::have_map(db, &body.map_uid).await?;
+    } = must::have_map(&db.mysql_pool, &body.map_uid).await?;
     let reversed = reversed.unwrap_or(false);
 
     let params = InsertRecordParams {
@@ -195,7 +197,7 @@ pub async fn finished(
             cps_number: original_cps_number,
             reversed: original_reversed,
             ..
-        } = must::have_map(db, &original_uid).await?;
+        } = must::have_map(&db.mysql_pool, &original_uid).await?;
 
         if cps_number == original_cps_number && reversed == original_reversed.unwrap_or(false) {
             insert_record(db, map, player_id, &params, None).await?;
@@ -205,9 +207,9 @@ pub async fn finished(
     }
 
     let redis_conn = &mut db.redis_pool.get().await?;
+    let mysql_conn = &mut db.mysql_pool.acquire().await?;
     let current_rank = get_rank_or_full_update(
-        db,
-        redis_conn,
+        (mysql_conn, redis_conn),
         map,
         if reversed { old.max(new) } else { old.min(new) },
         event,

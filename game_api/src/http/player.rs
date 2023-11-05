@@ -7,7 +7,7 @@ use actix_web::{
 };
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, MySqlPool};
+use sqlx::{Executor, FromRow, MySql, MySqlPool};
 use tokio::time::timeout;
 use tracing::Level;
 use tracing_actix_web::RequestId;
@@ -21,7 +21,8 @@ use crate::{
     models::{Banishment, Map, Player},
     must, read_env_var_file,
     utils::json,
-    AccessTokenErr, Database, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult,
+    AccessTokenErr, ApiClient, Database, FitRequestId, RecordsErrorKind, RecordsResponse,
+    RecordsResult,
 };
 
 use super::{admin, pb, player_finished as pf};
@@ -45,35 +46,31 @@ pub struct UpdatePlayerBody {
     pub zone_path: Option<String>,
 }
 
-async fn insert_player(db: &Database, login: &str, body: UpdatePlayerBody) -> RecordsResult<u32> {
+async fn insert_player(db: &Database, body: &UpdatePlayerBody) -> RecordsResult<u32> {
     let id = sqlx::query_scalar(
         "INSERT INTO players
         (login, name, join_date, zone_path, admins_note, role)
         VALUES (?, ?, SYSDATE(), ?, NULL, 0) RETURNING id",
     )
-    .bind(login)
-    .bind(body.name)
-    .bind(body.zone_path)
+    .bind(&body.login)
+    .bind(&body.name)
+    .bind(&body.zone_path)
     .fetch_one(&db.mysql_pool)
     .await?;
 
     Ok(id)
 }
 
-pub async fn get_or_insert(
-    db: &Database,
-    login: &str,
-    body: UpdatePlayerBody,
-) -> RecordsResult<u32> {
+pub async fn get_or_insert(db: &Database, body: &UpdatePlayerBody) -> RecordsResult<u32> {
     if let Some(id) = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
-        .bind(login)
+        .bind(&body.login)
         .fetch_optional(&db.mysql_pool)
         .await?
     {
         return Ok(id);
     }
 
-    insert_player(db, login, body).await
+    insert_player(db, body).await
 }
 
 pub async fn update(
@@ -89,7 +86,7 @@ pub async fn update(
         // the player is not yet added to the Obstacle database but effectively
         // has a ManiaPlanet account
         Err(RecordsErrorKind::PlayerNotFound(_)) => {
-            let _ = insert_player(&db, &login, body).await.fit(req_id)?;
+            let _ = insert_player(&db, &body).await.fit(req_id)?;
         }
         Err(e) => return Err(e).fit(req_id),
     }
@@ -134,13 +131,13 @@ pub async fn check_banned(
     Ok(r)
 }
 
-pub async fn get_map_from_game_id(
-    db: &Database,
+pub async fn get_map_from_game_id<'c, E: Executor<'c, Database = MySql>>(
+    db: E,
     map_game_id: &str,
 ) -> Result<Option<Map>, RecordsErrorKind> {
     let r = sqlx::query_as("SELECT * FROM maps WHERE game_id = ?")
         .bind(map_game_id)
-        .fetch_optional(&db.mysql_pool)
+        .fetch_optional(db)
         .await?;
     Ok(r)
 }
@@ -248,7 +245,7 @@ pub async fn get_token(
     _: ApiAvailable,
     req_id: RequestId,
     db: Data<Database>,
-    client: Data<Client>,
+    ApiClient(client): ApiClient,
     state: Data<AuthState>,
     Json(body): Json<GetTokenBody>,
 ) -> RecordsResponse<impl Responder> {
@@ -424,6 +421,7 @@ pub async fn info(
 #[derive(Deserialize)]
 struct ReportErrorBody {
     on_route: String,
+    request_id: String,
     map_uid: String,
     err_type: i32,
     err_msg: String,
@@ -434,7 +432,7 @@ struct ReportErrorBody {
 async fn report_error(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
-    client: Data<Client>,
+    ApiClient(client): ApiClient,
     Json(body): Json<ReportErrorBody>,
 ) -> RecordsResponse<impl Responder> {
     #[derive(Serialize)]
@@ -467,6 +465,10 @@ async fn report_error(
         WebhookBodyEmbedField {
             name: "When called this API route".to_owned(),
             value: format!("`{}`", body.on_route),
+        },
+        WebhookBodyEmbedField {
+            name: "Request ID".to_owned(),
+            value: format!("`{}`", body.request_id),
         },
     ];
 

@@ -11,7 +11,7 @@ use crate::{
     auth::{privilege, MPAuthGuard},
     models, must,
     utils::json,
-    Database, FitRequestId, RecordsResponse, RecordsResult,
+    Database, FitRequestId, RecordsResponse, RecordsResult, ApiClient,
 };
 
 use super::{overview, pb, player::UpdatePlayerBody, player_finished as pf};
@@ -230,7 +230,7 @@ struct MxAuthor {
 async fn edition(
     db: Data<Database>,
     req_id: RequestId,
-    client: Data<Client>,
+    ApiClient(client): ApiClient,
     path: Path<(String, u32)>,
 ) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
@@ -311,8 +311,8 @@ async fn edition_finished(
         .fit(req_id)?;
 
     // Then we insert it for the event edition records.
-    // This is not part of the transaction for now, because it's not so bad
-    // if this query fails.
+    // This is not part of the transaction, because we don't want to rollback
+    // the insertion of the record if this query fails.
     let (event, edition) = event;
     sqlx::query(
         "INSERT INTO event_edition_records (record_id, event_id, edition_id)

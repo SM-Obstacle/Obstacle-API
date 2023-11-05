@@ -52,6 +52,10 @@ pub fn format_mp_token_key(login: &str) -> String {
     inner_format_token_key("mp", login)
 }
 
+pub fn format_mappack_key(mappack_id: u32) -> String {
+    format_key(format!("mappack:{mappack_id}"))
+}
+
 /// Returns a randomly-generated token with the `len` length. It contains alphanumeric characters.
 pub fn generate_token(len: usize) -> String {
     rand::thread_rng()

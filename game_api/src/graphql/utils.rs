@@ -1,12 +1,12 @@
 use async_graphql::ID;
-use deadpool_redis::{redis::AsyncCommands, Connection};
-use sqlx::{mysql, FromRow};
+use deadpool_redis::{redis::AsyncCommands, Connection as RedisConnection};
+use sqlx::{mysql, FromRow, MySqlConnection};
 
 use crate::models::Map;
 use crate::utils::format_map_key;
 use crate::{
     models::{self, Record},
-    redis, Database, RecordsResult,
+    redis, RecordsResult,
 };
 
 #[derive(FromRow)]
@@ -150,8 +150,7 @@ pub fn connections_pages_info(
 /// This may be called when the SQL and Redis databases had the same amount of records on a map,
 /// but the times were not corresponding. It generally happens after a database migration.
 pub async fn get_rank_or_full_update(
-    db: &Database,
-    redis_conn: &mut Connection,
+    (db, redis_conn): (&mut MySqlConnection, &mut RedisConnection),
     map @ models::Map {
         id: map_id,
         reversed,
@@ -161,7 +160,7 @@ pub async fn get_rank_or_full_update(
     event: Option<&(models::Event, models::EventEdition)>,
 ) -> RecordsResult<i32> {
     async fn get_rank(
-        redis_conn: &mut Connection,
+        redis_conn: &mut RedisConnection,
         key: &str,
         time: i32,
         reversed: bool,
@@ -194,7 +193,7 @@ pub async fn get_rank_or_full_update(
         Some(rank) => Ok(rank),
         None => {
             redis_conn.del(key).await?;
-            redis::update_leaderboard(db, redis_conn, map, event).await?;
+            redis::update_leaderboard((db, redis_conn), map, event).await?;
             let rank = get_rank(redis_conn, key, time, reversed)
                 .await?
                 .unwrap_or_else(|| {

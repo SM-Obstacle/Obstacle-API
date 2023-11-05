@@ -4,7 +4,6 @@
 use actix_web::web::JsonConfig;
 use actix_web::{web, Scope};
 
-use reqwest::Client;
 use tracing_actix_web::RequestId;
 
 use crate::{Database, RecordsResponse};
@@ -29,7 +28,6 @@ pub fn api_route() -> Scope {
 
     web::scope("")
         .app_data(json_config)
-        .app_data(Data::new(Client::new()))
         .route("/overview", web::get().to(overview))
         .service(player_scope())
         .service(map_scope())

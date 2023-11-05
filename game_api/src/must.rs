@@ -11,6 +11,7 @@
 //! the client.
 
 use actix_web::{web::Data, HttpMessage, HttpRequest};
+use sqlx::{Executor, MySql};
 use tracing_actix_web::RequestId;
 
 use crate::{
@@ -47,7 +48,10 @@ pub async fn have_player(db: &Database, login: &str) -> RecordsResult<models::Pl
         .ok_or_else(|| RecordsErrorKind::PlayerNotFound(login.to_owned()))
 }
 
-pub async fn have_map(db: &Database, map_uid: &str) -> RecordsResult<models::Map> {
+pub async fn have_map<'c, E: Executor<'c, Database = MySql>>(
+    db: E,
+    map_uid: &str,
+) -> RecordsResult<models::Map> {
     player::get_map_from_game_id(db, map_uid)
         .await?
         .ok_or_else(|| RecordsErrorKind::MapNotFound(map_uid.to_owned()))

@@ -16,6 +16,7 @@ use game_api::{
     Database, FitRequestId, RecordsErrorKind, RecordsResponse,
 };
 use game_api::{get_env_var, get_env_var_as};
+use reqwest::Client;
 use std::env::var;
 use tracing_actix_web::{RequestId, TracingLogger};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -48,6 +49,8 @@ async fn main() -> anyhow::Result<()> {
         mysql_pool,
         redis_pool,
     };
+
+    let client = Client::new();
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -88,8 +91,9 @@ async fn main() -> anyhow::Result<()> {
                     .build(),
             )
             .app_data(auth_state.clone())
+            .app_data(client.clone())
             .app_data(Data::new(db.clone()))
-            .service(graphql_route(db.clone()))
+            .service(graphql_route(db.clone(), client.clone()))
             .service(api_route())
             .default_service(web::to(not_found))
     })

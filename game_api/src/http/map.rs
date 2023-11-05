@@ -42,7 +42,7 @@ async fn insert(
     db: Data<Database>,
     Json(body): Json<UpdateMapBody>,
 ) -> RecordsResponse<impl Responder> {
-    let res = player::get_map_from_game_id(&db, &body.map_uid)
+    let res = player::get_map_from_game_id(&db.mysql_pool, &body.map_uid)
         .await
         .fit(req_id)?;
 
@@ -59,9 +59,7 @@ async fn insert(
         return Ok(HttpResponse::Ok().finish());
     }
 
-    let player_id = player::get_or_insert(&db, &body.author.login.clone(), body.author)
-        .await
-        .fit(req_id)?;
+    let player_id = player::get_or_insert(&db, &body.author).await.fit(req_id)?;
 
     sqlx::query(
         "INSERT INTO maps
@@ -112,14 +110,18 @@ pub async fn player_rating(
     Json(body): Json<PlayerRatingBody>,
 ) -> RecordsResponse<impl Responder> {
     let player_id = must::have_player(&db, &login).await.fit(req_id)?.id;
-    let map_id = must::have_map(&db, &body.map_uid).await.fit(req_id)?.id;
+    let mysql_conn = &mut db.mysql_pool.acquire().await.fit(req_id)?;
+    let map_id = must::have_map(&mut **mysql_conn, &body.map_uid)
+        .await
+        .fit(req_id)?
+        .id;
 
     let rating = match sqlx::query_scalar(
         "SELECT rating_date FROM rating WHERE player_id = ? AND map_id = ?",
     )
     .bind(player_id)
     .bind(map_id)
-    .fetch_optional(&db.mysql_pool)
+    .fetch_optional(&mut **mysql_conn)
     .await
     .fit(req_id)?
     {
@@ -132,7 +134,7 @@ pub async fn player_rating(
             )
             .bind(player_id)
             .bind(map_id)
-            .fetch_all(&db.mysql_pool)
+            .fetch_all(&mut **mysql_conn)
             .await
             .fit(req_id)?;
 
@@ -151,7 +153,7 @@ pub async fn player_rating(
         WHERE m.id = ?",
     )
     .bind(map_id)
-    .fetch_one(&db.mysql_pool)
+    .fetch_one(&mut **mysql_conn)
     .await
     .fit(req_id)?;
 
@@ -189,14 +191,17 @@ pub async fn ratings(
     Json(body): Json<RatingsBody>,
 ) -> RecordsResponse<impl Responder> {
     let player = must::have_player(&db, &login).await.fit(req_id)?;
-    let map = must::have_map(&db, &body.map_id).await.fit(req_id)?;
+    let mysql_conn = &mut db.mysql_pool.acquire().await.fit(req_id)?;
+    let map = must::have_map(&mut **mysql_conn, &body.map_id)
+        .await
+        .fit(req_id)?;
 
     let (role, author_login) = if map.player_id == player.id {
         (privilege::PLAYER, login.clone())
     } else {
         let login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
             .bind(map.player_id)
-            .fetch_one(&db.mysql_pool)
+            .fetch_one(&mut **mysql_conn)
             .await
             .fit(req_id)?;
         (privilege::ADMIN, login)
@@ -331,6 +336,8 @@ pub async fn rate(
     db: Data<Database>,
     Json(body): Json<RateBody>,
 ) -> RecordsResponse<impl Responder> {
+    let mysql_conn = &mut db.mysql_pool.acquire().await.fit(req_id)?;
+
     let Player {
         id: player_id,
         login: player_login,
@@ -342,7 +349,9 @@ pub async fn rate(
         name: map_name,
         player_id: author_id,
         ..
-    } = must::have_map(&db, &body.map_id).await.fit(req_id)?;
+    } = must::have_map(&mut **mysql_conn, &body.map_id)
+        .await
+        .fit(req_id)?;
 
     let author_login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
         .bind(author_id)

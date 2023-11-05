@@ -141,7 +141,8 @@ impl Player {
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
-        let mysql_pool = &db.mysql_pool;
+        let mysql_conn = &mut db.mysql_pool.acquire().await?;
+        let redis_conn = &mut db.redis_pool.get().await?;
 
         let date_sort_by = SortState::sql_order_by(&date_sort_by);
 
@@ -156,16 +157,17 @@ impl Player {
 
         let mut records = sqlx::query_as::<_, RecordAttr>(&query)
             .bind(self.id)
-            .fetch(mysql_pool);
+            .fetch(&mut **mysql_conn);
 
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
-        let redis_conn = &mut db.redis_pool.get().await?;
+        let mysql_conn = &mut db.mysql_pool.acquire().await?;
 
         while let Some(record) = records.next().await {
             let RecordAttr { record, map } = record?;
 
-            let rank = get_rank_or_full_update(db, redis_conn, &map, record.time, None).await?;
+            let rank =
+                get_rank_or_full_update((mysql_conn, redis_conn), &map, record.time, None).await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }

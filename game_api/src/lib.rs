@@ -1,12 +1,18 @@
+use actix_web::dev::Payload;
+use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
 use core::fmt;
 use deadpool::managed::PoolError;
 use deadpool_redis::redis::RedisError;
 pub use deadpool_redis::Pool as RedisPool;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::mysql;
 pub use sqlx::MySqlPool;
+use std::convert::Infallible;
 use std::fmt::Debug;
+use std::future::{ready, Ready};
+use std::ops::{Deref, DerefMut};
 use std::{io, time::Duration};
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
@@ -254,5 +260,35 @@ where
             request_id,
             kind: e.into(),
         })
+    }
+}
+
+pub struct ApiClient(Client);
+
+impl Deref for ApiClient {
+    type Target = Client;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ApiClient {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl FromRequest for ApiClient {
+    type Error = Infallible;
+
+    type Future = Ready<Result<Self, Infallible>>;
+
+    fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
+        let client = req
+            .app_data::<Client>()
+            .expect("Client should be present")
+            .clone();
+        ready(Ok(Self(client)))
     }
 }

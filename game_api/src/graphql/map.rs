@@ -4,7 +4,7 @@ use async_graphql::{
     dataloader::{DataLoader, Loader},
     ID,
 };
-use deadpool_redis::{redis::AsyncCommands, Pool as RedisPool};
+use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use sqlx::{mysql, FromRow, MySqlPool};
 
@@ -13,7 +13,7 @@ use crate::{
     models::{Map, MedalPrice, Player, PlayerRating, RankedRecord, Rating, Record},
     redis,
     utils::format_map_key,
-    Database
+    Database,
 };
 
 use super::{player::PlayerLoader, utils::get_rank_or_full_update, SortState};
@@ -134,15 +134,14 @@ impl Map {
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
-        let db = ctx.data_unchecked();
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let redis_conn = &mut redis_pool.get().await?;
+        let db = ctx.data_unchecked::<Database>();
+        let mysql_conn = &mut db.mysql_pool.acquire().await?;
+        let redis_conn = &mut db.redis_pool.get().await?;
 
         let key = format_map_key(self.id, None);
         let reversed = self.reversed.unwrap_or(false);
 
-        redis::update_leaderboard(db, redis_conn, self, None).await?;
+        redis::update_leaderboard((mysql_conn, redis_conn), self, None).await?;
 
         let to_reverse = reversed
             ^ rank_sort_by
@@ -198,12 +197,16 @@ impl Map {
             }
         }
 
-        let mut records = query.fetch(mysql_pool);
+        let mut records = query.fetch(&mut **mysql_conn);
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
+
+        let mysql_conn = &mut db.mysql_pool.acquire().await?;
 
         while let Some(record) = records.next().await {
             let record = record?;
-            let rank = get_rank_or_full_update(db, redis_conn, self, record.time, None).await?;
+            let rank =
+                get_rank_or_full_update((&mut *mysql_conn, redis_conn), self, record.time, None)
+                    .await?;
 
             ranked_records.push(RankedRecord { rank, record });
         }
