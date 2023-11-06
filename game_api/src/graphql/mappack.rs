@@ -17,7 +17,6 @@ use super::{get_rank_or_full_update, utils::RecordAttr};
 #[derive(SimpleObject, Default, Clone, Debug)]
 pub struct Rank {
     rank: i32,
-    last_rank: i32,
     map_idx: usize,
 }
 
@@ -37,6 +36,7 @@ pub struct PlayerScore {
 pub struct MappackMap {
     map: String,
     map_id: String,
+    last_rank: i32,
 }
 
 #[derive(SimpleObject)]
@@ -116,6 +116,7 @@ pub async fn calc_scores(
             maps.push(MappackMap {
                 map: map.name.clone(),
                 map_id: map.game_id.clone(),
+                last_rank: 0,
             });
         }
         out
@@ -126,6 +127,7 @@ pub async fn calc_scores(
             maps.push(MappackMap {
                 map: map.name.clone(),
                 map_id: map.game_id.clone(),
+                last_rank: 0,
             });
             out.push(map);
         }
@@ -207,9 +209,9 @@ pub async fn calc_scores(
 
             player.ranks.push(Rank {
                 rank: record.rank,
-                last_rank,
                 map_idx,
             });
+            maps[map_idx].last_rank = last_rank;
 
             player.maps_finished += 1;
         }
@@ -218,9 +220,9 @@ pub async fn calc_scores(
             if player.ranks.len() < map_number {
                 player.ranks.push(Rank {
                     rank: last_rank + 1,
-                    last_rank,
                     map_idx,
                 });
+                maps[map_idx].last_rank = last_rank;
             }
         }
 
@@ -229,7 +231,9 @@ pub async fn calc_scores(
 
     for player in &mut scores {
         player.ranks.sort_by(|a, b| {
-            ((a.rank / a.last_rank - b.rank / b.last_rank) + (a.rank - b.rank) / 1000).cmp(&0)
+            ((a.rank / maps[a.map_idx].last_rank - b.rank / maps[b.map_idx].last_rank)
+                + (a.rank - b.rank) / 1000)
+                .cmp(&0)
         });
 
         player.worst = player
