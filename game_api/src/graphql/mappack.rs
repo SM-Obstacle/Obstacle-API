@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use async_graphql::SimpleObject;
 use deadpool_redis::{redis::AsyncCommands, Connection as RedisConnection};
 use futures::StreamExt;
@@ -8,8 +6,9 @@ use serde::Deserialize;
 use sqlx::{FromRow, MySqlConnection};
 
 use crate::{
-    get_env_var_as, models, must, utils::format_mappack_key, Database, RecordsErrorKind,
-    RecordsResult,
+    get_env_var_as, models, must,
+    utils::{format_key, format_mappack_key},
+    Database, RecordsErrorKind, RecordsResult,
 };
 
 use super::{get_rank_or_full_update, utils::RecordAttr};
@@ -37,6 +36,8 @@ pub struct MappackMap {
     map: String,
     map_id: String,
     last_rank: i32,
+    #[graphql(skip)]
+    records: Option<Vec<RankedRecordRow>>,
 }
 
 #[derive(SimpleObject)]
@@ -117,6 +118,7 @@ pub async fn calc_scores(
                 map: map.name.clone(),
                 map_id: map.game_id.clone(),
                 last_rank: 0,
+                records: None,
             });
         }
         out
@@ -128,13 +130,16 @@ pub async fn calc_scores(
                 map: map.name.clone(),
                 map_id: map.game_id.clone(),
                 last_rank: 0,
+                records: None,
             });
             out.push(map);
         }
         out
     };
 
-    let no_ttl: Vec<String> = redis_conn.smembers("v3:no_ttl_mappacks").await?;
+    let no_ttl: Vec<String> = redis_conn
+        .smembers(format_key("no_ttl_mappacks".to_owned()))
+        .await?;
     if !no_ttl.contains(&mappack_id) {
         // Update the expiration time of the redis key
         let mappack_ttl = get_env_var_as("RECORDS_API_MAPPACK_TTL");
@@ -143,9 +148,7 @@ pub async fn calc_scores(
 
     let mut scores = Vec::<PlayerScore>::with_capacity(mappack.len());
 
-    let mut hashmap = HashMap::new();
-
-    for map in &mappack {
+    for (i, map) in mappack.iter().enumerate() {
         let mut res = sqlx::query_as::<_, RecordRow>(
             "SELECT r.*, p.id as player_id2, p.login as player_login, p.name as player_name
             FROM global_records r
@@ -189,15 +192,13 @@ pub async fn calc_scores(
             records.push(record);
         }
 
-        hashmap.insert(map.id, records);
+        maps[i].records = Some(records);
     }
 
     let mut map_number = 1;
 
-    for (map_idx, map) in mappack.iter().enumerate() {
-        let records = hashmap
-            .get(&map.id)
-            .unwrap_or_else(|| panic!("map not in hashmap: {}", map.id));
+    for (map_idx, map) in maps.iter_mut().enumerate() {
+        let records = map.records.take().unwrap();
 
         let last_rank = records.iter().map(|p| p.rank).max().unwrap_or(99);
 
@@ -211,7 +212,7 @@ pub async fn calc_scores(
                 rank: record.rank,
                 map_idx,
             });
-            maps[map_idx].last_rank = last_rank;
+            map.last_rank = last_rank;
 
             player.maps_finished += 1;
         }
@@ -222,7 +223,7 @@ pub async fn calc_scores(
                     rank: last_rank + 1,
                     map_idx,
                 });
-                maps[map_idx].last_rank = last_rank;
+                map.last_rank = last_rank;
             }
         }
 

@@ -22,7 +22,7 @@ pub fn any_repeated<T: PartialEq>(slice: &[T]) -> bool {
 }
 
 /// Returns the formatted string of the provided key
-fn format_key(sub: String) -> String {
+pub fn format_key(sub: String) -> String {
     format!("v3:{sub}")
 }
 
