@@ -7,9 +7,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use tracing_actix_web::RequestId;
 
-use crate::{models, utils::json, Database, FitRequestId, RecordsResponse};
-
-use super::event;
+use crate::{models, utils::json, Database, FitRequestId, GetSqlFragments, RecordsResponse};
 
 #[derive(Deserialize)]
 pub struct PbBody {
@@ -44,10 +42,7 @@ pub async fn pb(
     Query(PbBody { map_uid }): PbReq,
     event: Option<(models::Event, models::EventEdition)>,
 ) -> RecordsResponse<impl Responder> {
-    let (join_event, and_event) = event
-        .is_some()
-        .then(event::get_sql_fragments)
-        .unwrap_or_default();
+    let (join_event, and_event) = event.as_ref().get_sql_fragments();
 
     let query = format!(
         "SELECT r.respawn_count AS rs_count, cps.cp_num AS cp_num, cps.time AS time

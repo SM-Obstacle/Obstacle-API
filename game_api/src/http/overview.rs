@@ -13,10 +13,8 @@ use crate::{
     models::{self, Map},
     must, redis,
     utils::{format_map_key, json},
-    Database, FitRequestId, RecordsResponse, RecordsResult,
+    Database, FitRequestId, GetSqlFragments, RecordsResponse, RecordsResult,
 };
-
-use super::event;
 
 #[derive(Deserialize)]
 pub struct OverviewQuery {
@@ -60,10 +58,7 @@ async fn get_range(
     let reversed = reversed.unwrap_or(false);
     let key = format_map_key(*map_id, event);
 
-    let (join_event, and_event) = event
-        .is_some()
-        .then(event::get_sql_fragments)
-        .unwrap_or_default();
+    let (join_event, and_event) = event.get_sql_fragments();
 
     // transforms exclusive to inclusive range
     let end = end - 1;

@@ -9,10 +9,8 @@ use crate::{
     models::{self, Map, Record},
     must, redis,
     utils::format_map_key,
-    Database, RecordsErrorKind, RecordsResult,
+    Database, GetSqlFragments, RecordsErrorKind, RecordsResult,
 };
-
-use super::event;
 
 #[derive(Deserialize, Debug)]
 pub struct HasFinishedBody {
@@ -43,7 +41,6 @@ struct InsertRecordParams {
     cps: Vec<i32>,
 }
 
-// TODO: use a SQL transaction
 async fn send_query(
     db: &mut sqlx::MySqlConnection,
     map_id: u32,
@@ -141,10 +138,7 @@ pub async fn finished(
         cps: body.cps,
     };
 
-    let (join_event, and_event) = event
-        .is_some()
-        .then(event::get_sql_fragments)
-        .unwrap_or_default();
+    let (join_event, and_event) = event.get_sql_fragments();
 
     // We check that the cps times are coherent to the final time
     if matches!(cps_number, Some(num) if num + 1 != params.cps.len() as u32)

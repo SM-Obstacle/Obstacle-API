@@ -1,4 +1,4 @@
-use crate::{http::event, models, utils::format_map_key, RecordsResult};
+use crate::{models, utils::format_map_key, GetSqlFragments, RecordsResult};
 use deadpool_redis::{redis::AsyncCommands, Connection as RedisConnection};
 use sqlx::{Executor, MySql, MySqlConnection};
 
@@ -38,10 +38,7 @@ pub async fn update_leaderboard(
     let redis_count: i64 = redis_conn.zcount(&key, "-inf", "+inf").await?;
     let mysql_count: i64 = count_records_map(&mut *db, *map_id).await?;
 
-    let (join_event, and_event) = event
-        .is_some()
-        .then(event::get_sql_fragments)
-        .unwrap_or_default();
+    let (join_event, and_event) = event.get_sql_fragments();
 
     if redis_count != mysql_count {
         let query = format!(

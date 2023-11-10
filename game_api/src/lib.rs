@@ -18,6 +18,7 @@ use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 use tracing_actix_web::RequestId;
 
+use self::http::event;
 use self::models::Banishment;
 
 mod auth;
@@ -266,6 +267,10 @@ where
     }
 }
 
+/// Wrapper around [`reqwest::Client`] used to retrieve with the [`FromRequest`] trait.
+///
+/// We don't use [`Data`](actix_web::web::Data) because it wraps the object with an [`Arc`](std::sync::Arc),
+/// and `reqwest::Client` already uses it.
 pub struct ApiClient(Client);
 
 impl Deref for ApiClient {
@@ -293,5 +298,17 @@ impl FromRequest for ApiClient {
             .expect("Client should be present")
             .clone();
         ready(Ok(Self(client)))
+    }
+}
+
+pub trait GetSqlFragments {
+    fn get_sql_fragments(self) -> (&'static str, &'static str);
+}
+
+impl GetSqlFragments for Option<&(models::Event, models::EventEdition)> {
+    fn get_sql_fragments(self) -> (&'static str, &'static str) {
+        self.is_some()
+            .then(event::get_sql_fragments)
+            .unwrap_or_default()
     }
 }
