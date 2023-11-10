@@ -98,7 +98,7 @@ pub fn read_env_var_file(v: &str) -> String {
     read_to_string(get_env_var(v)).unwrap_or_else(|e| panic!("unable to read from {v} path: {e:?}"))
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(Serialize, sqlx::FromRow)]
 pub struct ApiStatus {
     pub at: chrono::NaiveDateTime,
     #[sqlx(flatten)]

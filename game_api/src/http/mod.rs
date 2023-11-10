@@ -4,9 +4,11 @@
 use actix_web::web::JsonConfig;
 use actix_web::{web, Scope};
 
+use serde::Serialize;
 use tracing_actix_web::RequestId;
 
-use crate::{Database, RecordsResponse};
+use crate::utils::{get_api_status, json, ApiStatus};
+use crate::{Database, FitRequestId, RecordsResponse};
 use actix_web::{web::Data, Responder};
 
 use self::admin::admin_scope;
@@ -28,11 +30,32 @@ pub fn api_route() -> Scope {
 
     web::scope("")
         .app_data(json_config)
+        .route("/info", web::get().to(info))
         .route("/overview", web::get().to(overview))
         .service(player_scope())
         .service(map_scope())
         .service(admin_scope())
         .service(event_scope())
+}
+
+#[derive(Serialize)]
+struct InfoResponse {
+    service_name: &'static str,
+    contacts: &'static str,
+    api_version: &'static str,
+    status: ApiStatus,
+}
+
+async fn info(req_id: RequestId, db: Data<Database>) -> RecordsResponse<impl Responder> {
+    let api_version = env!("CARGO_PKG_VERSION");
+    let status = get_api_status(&db).await.fit(req_id)?;
+
+    json(InfoResponse {
+        service_name: "Obstacle Records API",
+        contacts: "Discord: @ahmadbky, @miltant",
+        api_version,
+        status,
+    })
 }
 
 async fn overview(
