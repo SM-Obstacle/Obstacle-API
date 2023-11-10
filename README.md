@@ -5,15 +5,15 @@ records saving, authentication, players and maps registering and all the stuff i
 
 For now, it is splitted into different workspace members, but the main source code is located at the `game_api/` folder.
 
-## Setup
+The API handles a REST and GraphQL API. The REST API is mainly used by the Obstacle mode, and the GraphQL API
+is used by the website.
 
-The deployment of this project is made through Docker Compose.
+This project is not stable at all, and is subject to many changes, especially concerning its structure.
+For now, the `game_api/` folder contains mainly 2 subdirectories:
+- `graphql/`: for the definitions of the GraphQL objects
+- `http/`: for the definitions of the REST API routes
 
-Before starting the services, you must take a look at the `.docker/docker-compose.yml` file, especially the required secret files hidden by the `.gitignore` file. You must create them and store in them the required content (Database URL, Database root password, etc).
+## Services
 
-Then, go to the `.docker/` folder and run:
-```sh
-$ docker compose up -d
-```
-
-This will start all the services, with an Adminer at http://localhost:8080/ and the Obstacle API at http://localhost/
+The Obstacle Records API uses 2 databases to manage the records.
+MySQL (more specifically MariaDB) contains all the persistent data transmitted by the API (information about a player, a record, etc), while Redis stores all the volatile data, that have to be accessed quickly, especially the leaderboards of the maps.
