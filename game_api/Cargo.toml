@@ -28,6 +28,7 @@ sha256 = "1.1.3"
 actix-session = { version = "0.8.0", features = ["cookie-session"] }
 anyhow = "1.0.75"
 dotenvy = "0.15.7"
+itertools = "0.11.0"
 
 [features]
 default = []

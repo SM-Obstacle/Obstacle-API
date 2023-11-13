@@ -225,7 +225,7 @@ pub struct EventCategories {
     pub category_id: u32,
 }
 
-#[derive(Serialize, FromRow, Clone, Debug, SimpleObject)]
+#[derive(Serialize, FromRow, Clone, Debug, SimpleObject, Default)]
 pub struct EventCategory {
     #[graphql(skip)]
     pub id: u32,
