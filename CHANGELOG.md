@@ -2,7 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## [0.2.5] - 2023-11-10
+
+### Bug fixes
+
+- Overview query
+- Including storm map pack
+- Avoiding cloning maps name and uids
+- Moved `last_rank` field to `MappackMap` struct
+- Avoiding hashmap usage for map pack scores calculations
+
+### Features
+
+- Using sql transaction for `/player/finished` route
+- Returning request id for graphql errors
+- Mappack branch for graphql
+- Added `/info` route
+
+## [0.2.4] - 2023-11-04
+
+### Bug fixes
+
+- Fix wrong version for ladder_score package
+
+- Wrong latest records shown for a player on the website
+- Logging wrong message in console
+- Not using transaction for `/player/finished` route
+- Avoiding retrieving object from redis pool in loop
+
+### Features
+
+- Added `/player/report_error` route
+- Returning request id on error
+
+### Refactor
+
+- Grouped arguments of some util functions
+- Using sql transaction for a record insert
+
+## [0.2.3] - 2023-10-25
 
 ### Bug fixes
 
