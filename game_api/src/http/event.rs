@@ -247,8 +247,8 @@ async fn edition(
                     and bronze.edition_id = silver.edition_id and silver.edition_id = gold.edition_id and gold.edition_id = champion.edition_id
                     and bronze.map_id = silver.map_id and silver.map_id = gold.map_id and gold.map_id = champion.map_id
                     and bronze.medal_id = 1 and silver.medal_id = 2 and gold.medal_id = 3 and champion.medal_id = 4
-                    and bronze.map_id = ? and bronze.event_id = ? and bronze.edition_id = ?
-            ").bind(map.id).bind(event_id).bind(edition_id).fetch_one(&db.mysql_pool).await.fit(req_id)?;
+                    and bronze.map_id = ? and bronze.event_id = ? and bronze.edition_id = ?")
+            .bind(map.id).bind(event_id).bind(edition_id).fetch_one(&db.mysql_pool).await.fit(req_id)?;
 
             maps.push(Map {
                 main_author,
@@ -266,6 +266,15 @@ async fn edition(
             name: m.name,
             banner_img_url: m.banner_img_url.unwrap_or_default(),
             maps,
+        });
+    }
+
+    for m in cat {
+        categories.push(Category {
+            handle: m.handle,
+            name: m.name,
+            banner_img_url: m.banner_img_url.unwrap_or_default(),
+            maps: Vec::new(),
         });
     }
 
