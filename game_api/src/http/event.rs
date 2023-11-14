@@ -75,7 +75,7 @@ pub async fn get_categories_by_edition_id(
         "SELECT DISTINCT ec.* FROM event_edition ee
         LEFT JOIN event_edition_categories eec ON eec.edition_id = ee.id
         LEFT JOIN event_categories ecs ON ecs.event_id = ee.event_id
-        LEFT JOIN event_category ec ON ec.id IN (eec.category_id, ecs.category_id)
+        INNER JOIN event_category ec ON ec.id IN (eec.category_id, ecs.category_id)
         WHERE ee.event_id = ? AND ee.id = ?
         ORDER BY ecs.category_id DESC",
     )
