@@ -6,7 +6,7 @@ use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use crate::{
     models::{Banishment, Map, Player, RankedRecord, Role},
-    Database, RecordsErrorKind,
+    Database, RecordsErrorKind, utils::Escaped,
 };
 
 use super::{
@@ -50,8 +50,8 @@ impl Player {
         &self.login
     }
 
-    async fn name(&self) -> &str {
-        &self.name
+    async fn name(&self) -> Escaped {
+        self.name.clone().into()
     }
 
     async fn zone_path(&self) -> Option<&str> {

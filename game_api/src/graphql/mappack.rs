@@ -7,7 +7,7 @@ use sqlx::{FromRow, MySqlConnection};
 
 use crate::{
     get_env_var_as, models, must,
-    utils::{format_key, format_mappack_key},
+    utils::{format_key, format_mappack_key, Escaped},
     Database, RecordsErrorKind, RecordsResult,
 };
 
@@ -23,7 +23,7 @@ pub struct Rank {
 pub struct PlayerScore {
     player_id: u32,
     login: String,
-    name: String,
+    name: Escaped,
     ranks: Vec<Rank>,
     score: f64,
     maps_finished: usize,
@@ -33,7 +33,7 @@ pub struct PlayerScore {
 
 #[derive(SimpleObject)]
 pub struct MappackMap {
-    map: String,
+    map: Escaped,
     map_id: String,
     last_rank: i32,
     #[graphql(skip)]
@@ -86,7 +86,8 @@ struct RecordRow {
     record: RecordAttr,
     player_id2: u32,
     player_login: String,
-    player_name: String,
+    #[sqlx(try_from = "String")]
+    player_name: Escaped,
 }
 
 struct RankedRecordRow {
@@ -115,7 +116,7 @@ pub async fn calc_scores(
         let out = load_campaign(client, mysql_conn, redis_conn, &mappack_key, mappack_id).await?;
         for map in &out {
             maps.push(MappackMap {
-                map: map.name.clone(),
+                map: map.name.clone().into(),
                 map_id: map.game_id.clone(),
                 last_rank: 0,
                 records: None,
@@ -127,7 +128,7 @@ pub async fn calc_scores(
         for map_uid in &mappack_uids {
             let map = must::have_map(&mut **mysql_conn, map_uid).await?;
             maps.push(MappackMap {
-                map: map.name.clone(),
+                map: map.name.clone().into(),
                 map_id: map.game_id.clone(),
                 last_rank: 0,
                 records: None,

@@ -12,7 +12,7 @@ use crate::{
     auth::{self, privilege, WebToken},
     models::{Map, MedalPrice, Player, PlayerRating, RankedRecord, Rating, Record},
     redis,
-    utils::format_map_key,
+    utils::{format_map_key, Escaped},
     Database,
 };
 
@@ -43,8 +43,8 @@ impl Map {
             .ok_or_else(|| async_graphql::Error::new("Player not found."))
     }
 
-    async fn name(&self) -> &str {
-        &self.name
+    async fn name(&self) -> Escaped {
+        self.name.clone().into()
     }
 
     async fn reversed(&self) -> bool {

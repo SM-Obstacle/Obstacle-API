@@ -1,3 +1,5 @@
+mod escaped;
+
 use std::{env, fmt::Debug, fs::read_to_string, str::FromStr};
 
 use actix_web::{HttpResponse, Responder};
@@ -5,6 +7,8 @@ use rand::Rng;
 use serde::Serialize;
 
 use crate::{models, Database, RecordsResult};
+
+pub use escaped::Escaped;
 
 /// Converts the provided body to a `200 OK` JSON responses.
 pub fn json<T: Serialize, E>(obj: T) -> Result<impl Responder, E> {
