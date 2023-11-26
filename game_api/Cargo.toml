@@ -29,6 +29,7 @@ actix-session = { version = "0.8.0", features = ["cookie-session"] }
 anyhow = "1.0.75"
 dotenvy = "0.15.7"
 itertools = "0.11.0"
+once_cell = "1.18.0"
 
 [features]
 default = []

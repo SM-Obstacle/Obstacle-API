@@ -1,25 +1,31 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+};
 
 use async_graphql::{Scalar, ScalarType};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sqlx::{Database, Decode};
+
+static ESCAPE_CHARS: Lazy<HashMap<u8, &'static str>> = Lazy::new(|| {
+    HashMap::from([
+        (b'<', "&lt;"),
+        (b'>', "&gt;"),
+        (b'&', "&amp;"),
+        (b'\'', "&#39;"),
+        (b'"', "&quot;"),
+    ])
+});
 
 fn escape(s: String) -> String {
     let mut out = String::new();
     let pile_o_bits = &s;
     let mut last = 0;
     for (i, ch) in s.bytes().enumerate() {
-        if let '<' | '>' | '&' | '\'' | '"' = ch as char {
+        if ESCAPE_CHARS.contains_key(&ch) {
             out.push_str(&pile_o_bits[last..i]);
-            let s = match ch as char {
-                '>' => "&gt;",
-                '<' => "&lt;",
-                '&' => "&amp;",
-                '\'' => "&#39;",
-                '"' => "&quot;",
-                _ => unreachable!(),
-            };
-            out.push_str(s);
+            out.push_str(ESCAPE_CHARS[&ch]);
             last = i + 1;
         }
     }
