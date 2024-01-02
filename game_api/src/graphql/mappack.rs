@@ -63,7 +63,7 @@ async fn load_campaign(
         .get(format!(
             "https://sm.mania.exchange/api/mappack/get_mappack_tracks/{mappack_id}"
         ))
-        .header("User-Agent", "obstacle (ahmadbky@5382)")
+        .header("User-Agent", "obstacle (discord @ahmadbky)")
         .send()
         .await?
         .json()
