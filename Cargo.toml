@@ -5,4 +5,5 @@ members = [
     "ladder_score",
     "records_lib",
     "socc",
+    "admin",
 ]
