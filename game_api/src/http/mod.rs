@@ -9,7 +9,7 @@ use serde::Serialize;
 use tracing_actix_web::RequestId;
 
 use crate::utils::{get_api_status, json, ApiStatus};
-use crate::{FitRequestId, RecordsResponse};
+use crate::{FitRequestId, RecordsResponse, RecordsResultExt};
 use actix_web::{web::Data, Responder};
 
 use self::admin::admin_scope;
@@ -31,12 +31,31 @@ pub fn api_route() -> Scope {
 
     web::scope("")
         .app_data(json_config)
+        .route("/latestnews_image", web::get().to(latestnews_image))
         .route("/info", web::get().to(info))
         .route("/overview", web::get().to(overview))
         .service(player_scope())
         .service(map_scope())
         .service(admin_scope())
         .service(event_scope())
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct LatestnewsImageResponse {
+    img_url: String,
+    link: String,
+}
+
+async fn latestnews_image(
+    req_id: RequestId,
+    db: Data<Database>,
+) -> RecordsResponse<impl Responder> {
+    let res: LatestnewsImageResponse = sqlx::query_as("select * from latestnews_image")
+        .fetch_one(&db.mysql_pool)
+        .await
+        .with_api_err()
+        .fit(req_id)?;
+    json(res)
 }
 
 #[derive(Serialize)]
