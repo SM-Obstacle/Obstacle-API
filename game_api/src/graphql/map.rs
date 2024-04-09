@@ -8,6 +8,7 @@ use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
     escaped::Escaped,
+    map,
     models::{self, Record},
     redis_key::alone_map_key,
     update_ranks::{get_rank_or_full_update, update_leaderboard},
@@ -177,6 +178,24 @@ impl Map {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<EventEdition>> {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
+
+        if map::get_map_from_game_id(mysql_pool, &format!("{}_benchmark", self.inner.game_id))
+            .await?
+            .is_some()
+        {
+            let benchmark_edition2 = sqlx::query_as(
+                "select * from event_edition
+            where event_id = ? and id = ?",
+            )
+            .bind(9)
+            .bind(2)
+            .fetch_one(mysql_pool)
+            .await?;
+
+            return Ok(vec![
+                EventEdition::from_inner(benchmark_edition2, mysql_pool).await?,
+            ]);
+        }
 
         let mut raw_editions = sqlx::query_as::<_, models::EventEdition>("select ee.* from event_edition ee
             inner join event_edition_maps eem on ee.id = eem.edition_id and ee.event_id = eem.event_id
