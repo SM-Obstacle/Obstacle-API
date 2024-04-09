@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashMap, iter::repeat, sync::Arc};
 
-use async_graphql::{dataloader::Loader, Context, InputObject, MergedObject};
+use async_graphql::{dataloader::Loader, Context};
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt as _;
 use sqlx::{mysql, FromRow, MySqlPool, Row};
@@ -153,42 +153,6 @@ impl Loader<u32> for EventLoader {
         .await?
         .into_iter()
         .collect())
-    }
-}
-
-struct MutableEventInner {
-    _event_id: u32,
-}
-
-#[derive(InputObject)]
-struct CreateEditionParams {
-    edition_id: u32,
-    banner_img_url: Option<String>,
-    mx_id: i64,
-}
-
-#[async_graphql::Object]
-impl MutableEventInner {
-    async fn create_edition(
-        &self,
-        _ctx: &Context<'_>,
-        _params: CreateEditionParams,
-    ) -> async_graphql::Result<EventEdition> {
-        todo!()
-    }
-}
-
-#[derive(MergedObject)]
-pub struct MutableEvent(MutableEventInner, Event);
-
-impl From<models::Event> for MutableEvent {
-    fn from(event: models::Event) -> Self {
-        Self(
-            MutableEventInner {
-                _event_id: event.id,
-            },
-            event.into(),
-        )
     }
 }
 

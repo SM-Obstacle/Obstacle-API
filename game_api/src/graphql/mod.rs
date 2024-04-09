@@ -21,7 +21,7 @@ use crate::graphql::map::MapLoader;
 use crate::graphql::player::PlayerLoader;
 
 use self::ban::Banishment;
-use self::event::{Event, EventCategoryLoader, EventEdition, EventLoader, MutableEvent};
+use self::event::{Event, EventCategoryLoader, EventEdition, EventLoader};
 use self::map::Map;
 use self::mappack::Mappack;
 use self::player::Player;
@@ -381,28 +381,27 @@ struct MutationRoot;
 
 #[Object]
 impl MutationRoot {
-    async fn event(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-        handle: String,
-    ) -> async_graphql::Result<MutableEvent> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let event = must::have_event_handle(&mut *db.acquire().await?, &handle).await?;
-        Ok(event.into())
-    }
-
     async fn update_resources_content(
         &self,
         ctx: &async_graphql::Context<'_>,
         text: String,
     ) -> async_graphql::Result<models::ResourcesContent> {
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
+        let db = ctx.data_unchecked::<Database>();
+
+        let web_token = ctx
+            .data_opt::<WebToken>()
+            .ok_or_else(|| async_graphql::Error::new("Unauthorized"))?;
+        auth::website_check_auth_for(db, &web_token.login, &web_token.token, privilege::ADMIN)
+            .await?;
+
+        let mysql_conn = &mut db.mysql_pool.acquire().await?;
+
         sqlx::query("INSERT INTO resources_content (content, created_at) VALUES (?, SYSDATE())")
             .bind(text)
-            .execute(mysql_pool)
+            .execute(&mut **mysql_conn)
             .await?;
         let res = sqlx::query_as("SELECT * FROM resources_content")
-            .fetch_one(mysql_pool)
+            .fetch_one(&mut **mysql_conn)
             .await?;
         Ok(res)
     }
@@ -463,13 +462,6 @@ fn create_schema(db: Database, client: Client) -> Schema {
             .unwrap()
             .write_all(schema.sdl().as_bytes())
             .unwrap();
-    }
-
-    #[cfg(feature = "localhost_test")]
-    {
-        println!("----------- Schema:");
-        println!("{}", &schema.sdl());
-        println!("----------- End schema");
     }
 
     schema
