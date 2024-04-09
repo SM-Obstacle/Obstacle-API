@@ -13,7 +13,7 @@ use crate::{
     redis_key::{
         mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_nb_map_key,
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
-        mappack_player_worst_rank_key, mappacks_key, NoTtlMappacks,
+        mappack_player_worst_rank_key, mappacks_key, no_ttl_mappacks, NoTtlMappacks,
     },
     update_ranks::get_rank_or_full_update,
     RedisConnection,
@@ -37,7 +37,7 @@ pub struct PlayerScore {
     pub worst: Rank,
 }
 
-#[derive(SimpleObject)]
+#[derive(SimpleObject, Debug)]
 pub struct MappackMap {
     pub map: Escaped,
     pub map_id: Escaped,
@@ -51,12 +51,13 @@ struct PlayerScoresDetails {
     pub a: i32,
 }
 
+#[derive(Debug)]
 pub struct MappackScores {
     pub maps: Vec<MappackMap>,
     pub scores: Vec<PlayerScore>,
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(sqlx::FromRow, Debug)]
 struct RecordRow {
     #[sqlx(flatten)]
     pub record: RecordAttr,
@@ -66,9 +67,20 @@ struct RecordRow {
     pub player_name: Escaped,
 }
 
+#[derive(Debug)]
 pub struct RankedRecordRow {
     rank: i32,
     record: RecordRow,
+}
+
+pub async fn persist_mappack(
+    redis_conn: &mut RedisConnection,
+    mappack_id: &str,
+) -> RecordsResult<()> {
+    redis_conn.sadd(mappacks_key(), mappack_id).await?;
+    redis_conn.sadd(no_ttl_mappacks(), mappack_id).await?;
+    redis_conn.persist(mappack_key(mappack_id)).await?;
+    Ok(())
 }
 
 pub async fn update_mappack(
@@ -168,9 +180,6 @@ async fn save(
     if mappack_ttl.is_none() {
         redis_conn.persist(&key).await?;
     }
-
-    #[cfg(feature = "tracing")]
-    tracing::info!("Saved key: `{key}`");
 
     for map in &scores.maps {
         // --- Save the last rank on each map

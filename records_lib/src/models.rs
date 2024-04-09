@@ -52,7 +52,7 @@ pub struct RankedRecord {
 }
 
 /// This is the type returned from the `global_records` SQL view.
-#[derive(FromRow)]
+#[derive(FromRow, Debug)]
 pub struct RecordAttr {
     #[sqlx(flatten)]
     pub record: Record,

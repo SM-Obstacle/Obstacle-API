@@ -1,12 +1,15 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::Context as _;
+use deadpool_redis::redis::AsyncCommands as _;
 use futures::{stream, StreamExt as _, TryStreamExt};
 use itertools::Itertools as _;
 use records_lib::{
     event, map,
     models::{self, Medal},
-    must, MySqlPool,
+    must,
+    redis_key::mappack_key,
+    update_mappacks, Database, MySqlPool,
 };
 
 use crate::clear;
@@ -119,7 +122,7 @@ async fn populate_mx_maps(
                 .await?
                 .json::<Vec<MxMapItem>>()
                 .await?;
-            insert_mx_maps(&pool, &mx_maps).await
+            insert_mx_maps(pool, &mx_maps).await
         })
         .buffer_unordered(rows.len())
         .try_collect()
@@ -130,20 +133,23 @@ async fn populate_mx_maps(
 
 pub async fn populate(
     client: reqwest::Client,
-    db: MySqlPool,
+    Database {
+        mysql_pool,
+        redis_pool,
+    }: Database,
     PopulateCommand {
         event_handle,
         event_edition,
         csv_file,
     }: PopulateCommand,
 ) -> anyhow::Result<()> {
-    let mysql_conn = &mut db.acquire().await?;
+    let redis_conn = &mut redis_pool.get().await?;
+    let mysql_conn = &mut mysql_pool.acquire().await?;
 
     let (event, edition) =
         must::have_event_edition(mysql_conn, &event_handle, event_edition).await?;
 
-    let categories =
-        event::get_categories_by_edition_id(&mut **mysql_conn, event.id, edition.id).await?;
+    let categories = event::get_categories_by_edition_id(mysql_conn, event.id, edition.id).await?;
 
     tracing::info!(
         "Found categories for this event edition: {}",
@@ -172,11 +178,17 @@ pub async fn populate(
         }
     }
 
-    let mut mx_maps = populate_mx_maps(&client, &db, &rows).await?;
+    let mut mx_maps = populate_mx_maps(&client, &mysql_pool, &rows).await?;
 
     tracing::info!("Retrieved these MX maps: {mx_maps:#?}");
 
     tracing::info!("Inserting new content...");
+
+    let mappack_id = edition
+        .mx_id
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| event::event_edition_key(event.id, edition.id));
 
     for (
         Row {
@@ -241,7 +253,17 @@ pub async fn populate(
                 .bind(medal_id)
                 .bind(time).execute(&mut **mysql_conn).await?;
         }
+
+        redis_conn
+            .sadd(mappack_key(&mappack_id), map.game_id)
+            .await?;
     }
+
+    update_mappacks::persist_mappack(redis_conn, &mappack_id).await?;
+
+    tracing::info!("Filling mappack in the Redis database...");
+
+    update_mappacks::update_mappack(&mappack_id, mysql_conn, redis_conn).await?;
 
     tracing::info!("Done");
 

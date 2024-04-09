@@ -3,8 +3,8 @@ use std::time::Duration;
 use deadpool_redis::{redis::AsyncCommands, Connection};
 use records_lib::{
     event,
-    redis_key::{mappack_key, mappacks_key, no_ttl_mappacks},
-    update_mappacks::update_mappack,
+    redis_key::{mappack_key, mappacks_key},
+    update_mappacks::{persist_mappack, update_mappack},
 };
 use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
 
@@ -17,10 +17,11 @@ async fn update_event_mappacks(
 ) -> anyhow::Result<()> {
     for event in event::event_list(mysql_conn).await? {
         for edition in event::event_editions_list(mysql_conn, &event.handle).await? {
-            let mappack_id = match edition.mx_id {
-                Some(mx_id) => mx_id.to_string(),
-                None => event::event_edition_key(edition.event_id, edition.id),
-            };
+            let mappack_id = edition
+                .mx_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| event::event_edition_key(edition.event_id, edition.id));
 
             for map in event::event_edition_maps(mysql_conn, edition.event_id, edition.id).await? {
                 redis_conn
@@ -28,9 +29,7 @@ async fn update_event_mappacks(
                     .await?;
             }
 
-            redis_conn.sadd(mappacks_key(), &mappack_id).await?;
-            redis_conn.sadd(no_ttl_mappacks(), &mappack_id).await?;
-            redis_conn.persist(mappack_key(&mappack_id)).await?;
+            persist_mappack(redis_conn, &mappack_id).await?;
         }
     }
 
