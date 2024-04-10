@@ -10,6 +10,7 @@ use records_lib::{
     escaped::Escaped,
     map,
     models::{self, Record},
+    must,
     redis_key::alone_map_key,
     update_ranks::{get_rank_or_full_update, update_leaderboard},
     Database, GetSqlFragments as _,
@@ -179,18 +180,14 @@ impl Map {
     ) -> async_graphql::Result<Vec<EventEdition>> {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
 
+        let mysql_conn = &mut mysql_pool.acquire().await?;
+
         if map::get_map_from_game_id(mysql_pool, &format!("{}_benchmark", self.inner.game_id))
             .await?
             .is_some()
         {
-            let benchmark_edition2 = sqlx::query_as(
-                "select * from event_edition
-            where event_id = ? and id = ?",
-            )
-            .bind(9)
-            .bind(2)
-            .fetch_one(mysql_pool)
-            .await?;
+            let (_benchmark_event, benchmark_edition2) =
+                must::have_event_edition(mysql_conn, "benchmark", 2).await?;
 
             return Ok(vec![
                 EventEdition::from_inner(benchmark_edition2, mysql_pool).await?,
@@ -202,7 +199,7 @@ impl Map {
             where eem.map_id = ?
             order by ee.start_date desc")
         .bind(self.inner.id)
-        .fetch(mysql_pool);
+        .fetch(&mut **mysql_conn);
 
         let mut out = Vec::with_capacity(raw_editions.size_hint().0);
 
