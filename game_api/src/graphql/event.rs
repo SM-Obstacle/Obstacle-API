@@ -7,7 +7,7 @@ use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use records_lib::{
     escaped::Escaped,
-    event::{self, event_edition_key, MedalTimes},
+    event::{self, MedalTimes},
     models::{self, EventCategory},
     must,
     redis_key::{mappack_map_last_rank, mappack_player_ranks_key},
@@ -250,14 +250,9 @@ impl EventEditionMapExt<'_> {
     async fn last_rank(&self, ctx: &Context<'_>) -> async_graphql::Result<i32> {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
-        let edition = &self.edition_player.edition.inner;
-        let mappack_id = edition
-            .mx_id
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| event::event_edition_key(edition.event_id, edition.id));
         let last_rank = redis_conn
             .get(mappack_map_last_rank(
-                &mappack_id,
+                &event::event_edition_mappack_id(&self.edition_player.edition.inner),
                 &self.inner.inner.game_id,
             ))
             .await?;
@@ -282,14 +277,12 @@ impl EventEditionPlayerRank<'_> {
     async fn rank(&self, ctx: &Context<'_>) -> async_graphql::Result<usize> {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
-        let edition = &self.edition_player.edition.inner;
-        let mappack_id = edition
-            .mx_id
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| event::event_edition_key(edition.event_id, edition.id));
         let rank = redis_conn
             .zscore(
-                mappack_player_ranks_key(&mappack_id, self.edition_player.player.id),
+                mappack_player_ranks_key(
+                    &event::event_edition_mappack_id(&self.edition_player.edition.inner),
+                    self.edition_player.player.id,
+                ),
                 &self.map_game_id,
             )
             .await?;
@@ -409,7 +402,7 @@ impl EventEditionPlayer<'_> {
     async fn rank(&self, ctx: &Context<'_>) -> async_graphql::Result<usize> {
         mappack::player_rank(
             ctx,
-            &event_edition_key(self.edition.event.inner.id, self.edition.inner.id),
+            &event::event_edition_mappack_id(&self.edition.inner),
             self.player.id,
         )
         .await
@@ -418,7 +411,7 @@ impl EventEditionPlayer<'_> {
     async fn rank_avg(&self, ctx: &Context<'_>) -> async_graphql::Result<f64> {
         mappack::player_rank_avg(
             ctx,
-            &event_edition_key(self.edition.event.inner.id, self.edition.inner.id),
+            &event::event_edition_mappack_id(&self.edition.inner),
             self.player.id,
         )
         .await
@@ -427,7 +420,7 @@ impl EventEditionPlayer<'_> {
     async fn map_finished(&self, ctx: &Context<'_>) -> async_graphql::Result<usize> {
         mappack::player_map_finished(
             ctx,
-            &event_edition_key(self.edition.event.inner.id, self.edition.inner.id),
+            &event::event_edition_mappack_id(&self.edition.inner),
             self.player.id,
         )
         .await
@@ -436,7 +429,7 @@ impl EventEditionPlayer<'_> {
     async fn worst_rank(&self, ctx: &Context<'_>) -> async_graphql::Result<i32> {
         mappack::player_worst_rank(
             ctx,
-            &event_edition_key(self.edition.event.inner.id, self.edition.inner.id),
+            &event::event_edition_mappack_id(&self.edition.inner),
             self.player.id,
         )
         .await
@@ -533,12 +526,9 @@ impl EventEdition<'_> {
     }
 
     async fn mappack(&self) -> Option<Mappack> {
-        let mappack_id = self
-            .inner
-            .mx_id
-            .map(|id| id.to_string())
-            .unwrap_or(event::event_edition_key(self.inner.event_id, self.inner.id));
-        Some(Mappack { mappack_id })
+        Some(Mappack {
+            mappack_id: event::event_edition_mappack_id(&self.inner),
+        })
     }
 
     async fn admins(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Player>> {

@@ -69,6 +69,14 @@ pub async fn event_edition_maps(
     .map_err(From::from)
 }
 
+pub fn event_edition_mappack_id(edition: &models::EventEdition) -> String {
+    edition
+        .mx_id
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| event_edition_key(edition.event_id, edition.id))
+}
+
 #[inline(always)]
 pub fn event_edition_key(event_id: u32, edition_id: u32) -> String {
     format!("__{event_id}__{edition_id}__")

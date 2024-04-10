@@ -184,11 +184,7 @@ pub async fn populate(
 
     tracing::info!("Inserting new content...");
 
-    let mappack_id = edition
-        .mx_id
-        .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| event::event_edition_key(event.id, edition.id));
+    let mappack_id = event::event_edition_mappack_id(&edition);
 
     for (
         Row {
