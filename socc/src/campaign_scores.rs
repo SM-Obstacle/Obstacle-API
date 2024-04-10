@@ -17,11 +17,7 @@ async fn update_event_mappacks(
 ) -> anyhow::Result<()> {
     for event in event::event_list(mysql_conn).await? {
         for edition in event::event_editions_list(mysql_conn, &event.handle).await? {
-            let mappack_id = edition
-                .mx_id
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| event::event_edition_key(edition.event_id, edition.id));
+            let mappack_id = event::event_edition_mappack_id(&edition);
 
             for map in event::event_edition_maps(mysql_conn, edition.event_id, edition.id).await? {
                 redis_conn
