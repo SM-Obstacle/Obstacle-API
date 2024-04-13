@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use tracing_actix_web::RequestId;
 
-use super::player::{self, UpdatePlayerBody};
+use super::player::{self, PlayerInfoNetBody};
 
 pub fn map_scope() -> Scope {
     web::scope("/map")
@@ -33,7 +33,7 @@ struct UpdateMapBody {
     name: String,
     map_uid: String,
     cps_number: u32,
-    author: UpdatePlayerBody,
+    author: PlayerInfoNetBody,
     // Keep it optional for backward compatibility
     reversed: Option<bool>,
 }

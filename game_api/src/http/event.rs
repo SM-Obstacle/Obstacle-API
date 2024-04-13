@@ -14,7 +14,7 @@ use crate::{
     FitRequestId, RecordsResponse, RecordsResult, RecordsResultExt,
 };
 
-use super::{overview, pb, player::UpdatePlayerBody, player_finished as pf};
+use super::{overview, pb, player::PlayerInfoNetBody, player_finished as pf};
 
 pub fn event_scope() -> Scope {
     web::scope("/event")
@@ -83,7 +83,7 @@ struct EventHandleResponse {
 #[derive(Serialize)]
 struct Map {
     mx_id: i64,
-    main_author: UpdatePlayerBody,
+    main_author: PlayerInfoNetBody,
     name: String,
     map_uid: String,
     bronze_time: i32,
@@ -91,6 +91,7 @@ struct Map {
     gold_time: i32,
     champion_time: i32,
     personal_best: i32,
+    next_opponent: NextOpponent,
 }
 
 #[derive(Serialize, Default)]
@@ -160,19 +161,40 @@ async fn event_editions(
     .with_api_err()
     .fit(req_id)?;
 
-    json(res.into_iter().map(|raw| EventHandleResponse {
-        subtitle: raw.subtitle.clone().unwrap_or_default(),
-        raw,
-    }).collect_vec())
+    json(
+        res.into_iter()
+            .map(|raw| EventHandleResponse {
+                subtitle: raw.subtitle.clone().unwrap_or_default(),
+                raw,
+            })
+            .collect_vec(),
+    )
 }
 
-#[derive(FromRow)]
+#[derive(FromRow, Serialize)]
+struct NextOpponent {
+    login: String,
+    name: String,
+    time: i32,
+}
+
+impl Default for NextOpponent {
+    fn default() -> Self {
+        Self {
+            login: Default::default(),
+            name: Default::default(),
+            time: -1,
+        }
+    }
+}
+
 struct AuthorWithPlayerTime {
     /// The author of the map
-    #[sqlx(flatten)]
-    main_author: UpdatePlayerBody,
-    // The time of the player (not the same player as the author)
+    main_author: PlayerInfoNetBody,
+    /// The time of the player (not the same player as the author)
     personal_best: i32,
+    /// The next opponent of the player
+    next_opponent: Option<NextOpponent>,
 }
 
 async fn edition(
@@ -217,6 +239,7 @@ async fn edition(
             let AuthorWithPlayerTime {
                 main_author,
                 personal_best,
+                next_opponent,
             } = if let Some(MPAuthGuard { login }) = &auth {
                 let main_author = sqlx::query_as("select * from players where id = ?")
                     .bind(map.player_id)
@@ -242,18 +265,44 @@ async fn edition(
                 .fit(req_id)?;
                 let personal_best = personal_best.unwrap_or(-1);
 
-                Ok(AuthorWithPlayerTime {
+                let next_opponent = sqlx::query_as(
+                    "select p.login, p.name, gr2.time from global_records gr
+                    inner join players player_from on player_from.id = gr.record_player_id
+                    inner join event_edition_records eer on gr.record_id = eer.record_id
+                    inner join event_edition_records eer2 on eer.event_id = eer2.event_id and eer.edition_id = eer2.edition_id
+                    inner join global_records gr2 on gr.map_id = gr2.map_id and gr2.record_id = eer2.record_id
+                        and gr2.time < gr.time
+                    inner join players p on p.id = gr2.record_player_id
+                    where player_from.login = ? and gr.map_id = ?
+                        and eer.event_id = ? and eer.edition_id = ?
+                    order by gr2.time desc
+                    limit 1")
+                .bind(login)
+                .bind(map.id)
+                .bind(event_id)
+                .bind(edition_id)
+                .fetch_optional(&db.mysql_pool)
+                .await
+                .with_api_err()
+                .fit(req_id)?;
+
+                AuthorWithPlayerTime {
                     main_author,
                     personal_best,
-                })
+                    next_opponent,
+                }
             } else {
-                sqlx::query_as("select a.*, -1 as personal_best from players a where a.id = ?")
-                    .bind(map.player_id)
-                    .fetch_one(&db.mysql_pool)
-                    .await
-            }
-            .with_api_err()
-            .fit(req_id)?;
+                AuthorWithPlayerTime {
+                    main_author: sqlx::query_as("select * from players where id = ?")
+                        .bind(map.player_id)
+                        .fetch_one(&db.mysql_pool)
+                        .await
+                        .with_api_err()
+                        .fit(req_id)?,
+                    personal_best: -1,
+                    next_opponent: None,
+                }
+            };
 
             let medal_times =
                 event::get_medal_times_of(&db.mysql_pool, event_id, edition_id, map.id)
@@ -271,6 +320,7 @@ async fn edition(
                 gold_time: medal_times.gold_time,
                 champion_time: medal_times.champion_time,
                 personal_best,
+                next_opponent: next_opponent.unwrap_or_default(),
             });
         }
 

@@ -41,13 +41,13 @@ pub fn player_scope() -> Scope {
 }
 
 #[derive(Serialize, Deserialize, Clone, FromRow, Debug)]
-pub struct UpdatePlayerBody {
+pub struct PlayerInfoNetBody {
     pub login: String,
     pub name: String,
     pub zone_path: Option<String>,
 }
 
-async fn insert_player(db: &Database, body: &UpdatePlayerBody) -> RecordsResult<u32> {
+async fn insert_player(db: &Database, body: &PlayerInfoNetBody) -> RecordsResult<u32> {
     let id = sqlx::query_scalar(
         "INSERT INTO players
         (login, name, join_date, zone_path, admins_note, role)
@@ -63,7 +63,7 @@ async fn insert_player(db: &Database, body: &UpdatePlayerBody) -> RecordsResult<
     Ok(id)
 }
 
-pub async fn get_or_insert(db: &Database, body: &UpdatePlayerBody) -> RecordsResult<u32> {
+pub async fn get_or_insert(db: &Database, body: &PlayerInfoNetBody) -> RecordsResult<u32> {
     if let Some(id) = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
         .bind(&body.login)
         .fetch_optional(&db.mysql_pool)
@@ -81,7 +81,7 @@ pub async fn update(
     req_id: RequestId,
     db: Data<Database>,
     AuthHeader { login, token }: AuthHeader,
-    Json(body): Json<UpdatePlayerBody>,
+    Json(body): Json<PlayerInfoNetBody>,
 ) -> RecordsResponse<impl Responder> {
     match auth::check_auth_for(&db, &login, &token, privilege::PLAYER).await {
         Ok(id) => update_player(&db, id, body).await.fit(req_id)?,
@@ -100,7 +100,7 @@ pub async fn update(
 pub async fn update_player(
     db: &Database,
     player_id: u32,
-    body: UpdatePlayerBody,
+    body: PlayerInfoNetBody,
 ) -> RecordsResult<()> {
     sqlx::query("UPDATE players SET name = ?, zone_path = ? WHERE id = ?")
         .bind(body.name)
