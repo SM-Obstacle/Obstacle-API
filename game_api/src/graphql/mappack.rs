@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use async_graphql::SimpleObject;
 use deadpool_redis::{redis::AsyncCommands, Connection as RedisConnection};
 use records_lib::{
@@ -7,7 +9,7 @@ use records_lib::{
         mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_mx_created_key,
         mappack_mx_name_key, mappack_mx_username_key, mappack_nb_map_key,
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
-        mappack_player_worst_rank_key, MappackKey,
+        mappack_player_worst_rank_key, mappack_time_key, MappackKey,
     },
     update_mappacks::update_mappack,
     Database, MySqlPool, RedisPool,
@@ -327,6 +329,21 @@ impl Mappack {
             inner: player.into(),
             mappack: self,
         })
+    }
+
+    async fn next_update_in(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<u64>> {
+        let db = ctx.data_unchecked::<Database>();
+        let redis_conn = &mut db.redis_pool.get().await?;
+        let last_upd_time: Option<u64> = redis_conn.get(mappack_time_key(&self.mappack_id)).await?;
+        Ok(last_upd_time.map(|last| last + 24 * 3600).and_then(|last| {
+            SystemTime::UNIX_EPOCH
+                .elapsed()
+                .ok()
+                .map(|d| last - d.as_secs())
+        }))
     }
 }
 

@@ -17,6 +17,7 @@ const V3_TOKEN_KEY_PREFIX: &str = "token";
 const V3_TOKEN_WEB_KEY_PREFIX: &str = "web";
 const V3_TOKEN_MP_KEY_PREFIX: &str = "mp";
 
+const V3_MAPPACK_TIME: &str = "time";
 const V3_MAPPACK_NB_MAP: &str = "nb_map";
 const V3_MAPPACK_MX_USERNAME: &str = "mx_username";
 const V3_MAPPACK_MX_NAME: &str = "mx_name";
@@ -210,6 +211,13 @@ impl fmt::Display for TokenKey<'_, MP> {
             self.login
         )
     }
+}
+
+create_key! {
+    struct MappackTimeKey<'a => '_> = mappack_time_key {
+        mappack_id: &'a str,
+    }
+    |self, f| write!(f, "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_TIME}", self.mappack_id)
 }
 
 create_key! {

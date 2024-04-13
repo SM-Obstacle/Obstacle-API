@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use async_graphql::SimpleObject;
 use deadpool_redis::redis::{AsyncCommands, Cmd, SetExpiry, SetOptions};
 use sqlx::{pool::PoolConnection, MySql};
@@ -13,7 +15,8 @@ use crate::{
     redis_key::{
         mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_nb_map_key,
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
-        mappack_player_worst_rank_key, mappacks_key, no_ttl_mappacks, NoTtlMappacks,
+        mappack_player_worst_rank_key, mappack_time_key, mappacks_key, no_ttl_mappacks,
+        NoTtlMappacks,
     },
     update_ranks::get_rank_or_full_update,
     RedisConnection,
@@ -269,6 +272,17 @@ async fn save(
                     rank,
                 )
                 .await?;
+        }
+    }
+
+    if let Ok(time) = SystemTime::UNIX_EPOCH.elapsed() {
+        redis_conn
+            .set(mappack_time_key(mappack_id), time.as_secs())
+            .await?;
+        if let Some(ttl) = mappack_ttl {
+            redis_conn.expire(mappack_time_key(mappack_id), ttl).await?;
+        } else {
+            redis_conn.persist(mappack_time_key(mappack_id)).await?;
         }
     }
 
