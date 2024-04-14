@@ -342,7 +342,7 @@ impl Mappack {
             SystemTime::UNIX_EPOCH
                 .elapsed()
                 .ok()
-                .map(|d| last - d.as_secs())
+                .and_then(|d| last.checked_sub(d.as_secs()))
         }))
     }
 }
