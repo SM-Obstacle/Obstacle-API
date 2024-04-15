@@ -301,7 +301,6 @@ impl Map {
 
 pub struct MapLoader(pub MySqlPool);
 
-#[async_graphql::async_trait::async_trait]
 impl Loader<u32> for MapLoader {
     type Value = Map;
     type Error = Arc<sqlx::Error>;

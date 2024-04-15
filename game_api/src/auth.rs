@@ -263,7 +263,7 @@ pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String,
     let mp_key = mp_token_key(login);
     let web_key = web_token_key(login);
 
-    let ex = get_tokens_ttl() as usize;
+    let ex = get_tokens_ttl() as _;
 
     let mp_token_hash = digest(&*mp_token);
     let web_token_hash = digest(&*web_token);

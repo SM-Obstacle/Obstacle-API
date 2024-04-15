@@ -1,36 +1,44 @@
 [package]
 name = "game-api"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-thiserror = "1.0.40"
-tokio = { version = "1", features = ["full"] }
-async-graphql = { version = "6.0.7", features = ["dataloader", "apollo_tracing"] }
-sqlx = { version = "0.7.2", features = [ "runtime-tokio-native-tls", "mysql", "macros", "chrono" ] }
-chrono = { version = "0.4", features = ["serde"] }
-deadpool = { version = "0.10.0", features = ["managed", "rt_tokio_1"] }
-deadpool-redis = { version = "0.13.0", features = ["rt_tokio_1"] }
-serde = "1.0.126"
-serde_json = "1.0.96"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-actix-web = "4.3.0"
-actix-cors = "0.6.4"
-async-graphql-actix-web = "6.0.7"
-tracing-actix-web = "0.7.2"
-reqwest = { version = "0.11.14", features = ["json"] }
-rand = "0.8.5"
-futures = "0.3.27"
-sha256 = "1.1.3"
-actix-session = { version = "0.8.0", features = ["cookie-session"] }
-anyhow = "1.0.75"
-dotenvy = "0.15.7"
-itertools = "0.11.0"
-once_cell = "1.18.0"
-records-lib = { path = "../records_lib", version = "0.1.0" }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+async-graphql = { workspace = true, features = [
+  "dataloader",
+  "apollo_tracing",
+] }
+sqlx = { workspace = true, features = [
+  "runtime-tokio-native-tls",
+  "mysql",
+  "macros",
+  "chrono",
+] }
+chrono = { workspace = true }
+deadpool = { workspace = true }
+deadpool-redis = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+actix-web = { workspace = true }
+actix-cors = { workspace = true }
+async-graphql-actix-web = { workspace = true }
+tracing-actix-web = { workspace = true }
+reqwest = { workspace = true }
+rand = { workspace = true }
+futures = { workspace = true }
+sha256 = { workspace = true }
+actix-session = { workspace = true }
+anyhow = { workspace = true }
+dotenvy = { workspace = true }
+itertools = { workspace = true }
+once_cell = { workspace = true }
+records-lib = { workspace = true }
 
 [features]
 default = []

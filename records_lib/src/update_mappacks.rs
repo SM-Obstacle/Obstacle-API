@@ -147,7 +147,7 @@ pub async fn update_mappack(
 async fn save(
     mappack_id: &str,
     scores: MappackScores,
-    mappack_ttl: Option<usize>,
+    mappack_ttl: Option<i64>,
     redis_conn: &mut RedisConnection,
 ) -> RecordsResult<()> {
     #[cfg(feature = "tracing")]
@@ -161,7 +161,7 @@ async fn save(
             redis_conn.expire(mappack_key(mappack_id), ex).await?;
             redis_conn.expire(mappack_lb_key(mappack_id), ex).await?;
 
-            set_options.with_expiration(SetExpiry::EX(ex))
+            set_options.with_expiration(SetExpiry::EX(ex as _))
         }
         None => {
             // Persist some keys btw

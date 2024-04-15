@@ -125,7 +125,6 @@ impl Event {
 
 pub struct EventLoader(pub MySqlPool);
 
-#[async_graphql::async_trait::async_trait]
 impl Loader<u32> for EventLoader {
     type Value = Event;
     type Error = Arc<sqlx::Error>;
@@ -158,7 +157,6 @@ impl Loader<u32> for EventLoader {
 
 pub struct EventCategoryLoader(pub MySqlPool);
 
-#[async_graphql::async_trait::async_trait]
 impl Loader<u32> for EventCategoryLoader {
     type Value = EventCategory;
     type Error = Arc<sqlx::Error>;

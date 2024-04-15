@@ -193,7 +193,6 @@ impl Player {
 
 pub struct PlayerLoader(pub MySqlPool);
 
-#[async_graphql::async_trait::async_trait]
 impl Loader<u32> for PlayerLoader {
     type Value = Player;
     type Error = Arc<sqlx::Error>;
