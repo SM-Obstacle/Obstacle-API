@@ -6,3 +6,6 @@ cert
 .idea
 Cargo.lock
 .docker
+*.http
+*.csv
+run_local.sh
