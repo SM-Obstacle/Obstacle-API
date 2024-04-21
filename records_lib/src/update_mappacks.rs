@@ -1,7 +1,7 @@
 use std::time::SystemTime;
 
 use async_graphql::SimpleObject;
-use deadpool_redis::redis::{AsyncCommands, Cmd, SetExpiry, SetOptions};
+use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions};
 use sqlx::{pool::PoolConnection, MySql};
 #[cfg(feature = "tracing")]
 use tracing::Instrument;

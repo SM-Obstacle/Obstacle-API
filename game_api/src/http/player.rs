@@ -38,6 +38,7 @@ pub fn player_scope() -> Scope {
         .route("/times", web::post().to(times))
         .route("/info", web::get().to(info))
         .route("/report_error", web::post().to(report_error))
+        .route("/ac", web::post().to(ac))
 }
 
 #[derive(Serialize, Deserialize, Clone, FromRow, Debug)]
@@ -458,46 +459,53 @@ struct ReportErrorBody {
     respawn_count: i32,
 }
 
+#[derive(Serialize)]
+struct WebhookBodyEmbedField {
+    name: String,
+    value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inline: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct WebhookBodyEmbed {
+    title: String,
+    description: Option<String>,
+    color: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    fields: Option<Vec<WebhookBodyEmbedField>>,
+}
+
+#[derive(Serialize)]
+struct WebhookBody {
+    content: String,
+    embeds: Vec<WebhookBodyEmbed>,
+}
+
 async fn report_error(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     ApiClient(client): ApiClient,
     Json(body): Json<ReportErrorBody>,
 ) -> RecordsResponse<impl Responder> {
-    #[derive(Serialize)]
-    struct WebhookBodyEmbedField {
-        name: String,
-        value: String,
-    }
-
-    #[derive(Serialize)]
-    struct WebhookBodyEmbed {
-        title: String,
-        description: Option<String>,
-        color: u32,
-        fields: Option<Vec<WebhookBodyEmbedField>>,
-    }
-
-    #[derive(Serialize)]
-    struct WebhookBody {
-        content: String,
-        embeds: Vec<WebhookBodyEmbed>,
-    }
-
     let url = get_env_var("WEBHOOK_REPORT_URL");
 
     let mut fields = vec![
         WebhookBodyEmbedField {
             name: "Map UID".to_owned(),
             value: format!("`{}`", body.map_uid),
+            inline: None,
         },
         WebhookBodyEmbedField {
             name: "When called this API route".to_owned(),
             value: format!("`{}`", body.on_route),
+            inline: None,
         },
         WebhookBodyEmbedField {
             name: "Request ID".to_owned(),
             value: format!("`{}`", body.request_id),
+            inline: None,
         },
     ];
 
@@ -507,10 +515,12 @@ async fn report_error(
                 WebhookBodyEmbedField {
                     name: "Run time".to_owned(),
                     value: format!("`{}`", body.time),
+                    inline: None,
                 },
                 WebhookBodyEmbedField {
                     name: "Respawn count".to_owned(),
                     value: format!("`{}`", body.respawn_count),
+                    inline: None,
                 },
             ]
             .into_iter(),
@@ -537,14 +547,89 @@ async fn report_error(
                     description: Some(format!("`{}`", body.err_msg)),
                     color,
                     fields: None,
+                    url: None,
                 },
                 WebhookBodyEmbed {
                     title: "Context".to_owned(),
                     description: None,
                     color,
                     fields: Some(fields),
+                    url: None,
                 },
             ],
+        })
+        .send()
+        .await
+        .fit(req_id)?;
+
+    Ok(HttpResponse::Ok().finish())
+}
+
+#[derive(Deserialize)]
+struct ACBody {
+    run_time: String,
+    map_name: String,
+    map_uid: String,
+    cp_times: String,
+    player_field: String,
+    server_text: String,
+    irl_time_passed: String,
+    discrepancy: String,
+    discrepancy_ratio: String,
+    ac_version: String,
+}
+
+async fn ac(
+    req_id: RequestId,
+    ApiClient(client): ApiClient,
+    Json(body): Json<ACBody>,
+) -> RecordsResponse<impl Responder> {
+    let url = get_env_var("WEBHOOK_AC_URL");
+    client
+        .post(url)
+        .json(&WebhookBody {
+            content: format!("Map has been finished in {}", body.run_time),
+            embeds: vec![WebhookBodyEmbed {
+                title: body.map_name,
+                description: Some(body.cp_times),
+                color: 5814783,
+                url: Some(format!(
+                    "https://obstacle.titlepack.io/map/{}",
+                    body.map_uid
+                )),
+                fields: Some(vec![
+                    WebhookBodyEmbedField {
+                        name: "Player".to_owned(),
+                        value: body.player_field,
+                        inline: None,
+                    },
+                    WebhookBodyEmbedField {
+                        name: "Server".to_owned(),
+                        value: body.server_text,
+                        inline: None,
+                    },
+                    WebhookBodyEmbedField {
+                        name: "IRL time elapsed".to_owned(),
+                        value: body.irl_time_passed,
+                        inline: Some(true),
+                    },
+                    WebhookBodyEmbedField {
+                        name: "Discrepancy".to_owned(),
+                        value: body.discrepancy,
+                        inline: Some(true),
+                    },
+                    WebhookBodyEmbedField {
+                        name: "Discrepancy ratio".to_owned(),
+                        value: body.discrepancy_ratio,
+                        inline: None,
+                    },
+                    WebhookBodyEmbedField {
+                        name: "Anticheat version".to_owned(),
+                        value: body.ac_version,
+                        inline: None,
+                    },
+                ]),
+            }],
         })
         .send()
         .await
