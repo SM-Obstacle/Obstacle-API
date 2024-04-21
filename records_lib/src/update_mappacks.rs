@@ -175,9 +175,8 @@ async fn save(
     // --- Save the number of maps of the campaign
 
     let key = mappack_nb_map_key(mappack_id);
-    Cmd::set(&key, scores.maps.len())
-        .arg(&set_options)
-        .query_async(redis_conn)
+    redis_conn
+        .set_options(&key, scores.maps.len(), set_options)
         .await?;
 
     if mappack_ttl.is_none() {
@@ -187,13 +186,13 @@ async fn save(
     for map in &scores.maps {
         // --- Save the last rank on each map
 
-        Cmd::set(
-            mappack_map_last_rank(mappack_id, &map.map_id),
-            map.last_rank,
-        )
-        .arg(&set_options)
-        .query_async(redis_conn)
-        .await?;
+        redis_conn
+            .set_options(
+                mappack_map_last_rank(mappack_id, &map.map_id),
+                map.last_rank,
+                set_options,
+            )
+            .await?;
 
         if mappack_ttl.is_none() {
             redis_conn
@@ -211,33 +210,33 @@ async fn save(
 
         let rank_avg = ((score.score + f64::EPSILON) * 100.).round() / 100.;
 
-        Cmd::set(
-            mappack_player_rank_avg_key(mappack_id, score.player_id),
-            rank_avg,
-        )
-        .arg(&set_options)
-        .query_async(redis_conn)
-        .await?;
+        redis_conn
+            .set_options(
+                mappack_player_rank_avg_key(mappack_id, score.player_id),
+                rank_avg,
+                set_options,
+            )
+            .await?;
 
         // --- Save the amount of finished map
 
-        Cmd::set(
-            mappack_player_map_finished_key(mappack_id, score.player_id),
-            score.maps_finished,
-        )
-        .arg(&set_options)
-        .query_async(redis_conn)
-        .await?;
+        redis_conn
+            .set_options(
+                mappack_player_map_finished_key(mappack_id, score.player_id),
+                score.maps_finished,
+                set_options,
+            )
+            .await?;
 
         // --- Save their worst rank
 
-        Cmd::set(
-            mappack_player_worst_rank_key(mappack_id, score.player_id),
-            score.worst.rank,
-        )
-        .arg(&set_options)
-        .query_async(redis_conn)
-        .await?;
+        redis_conn
+            .set_options(
+                mappack_player_worst_rank_key(mappack_id, score.player_id),
+                score.worst.rank,
+                set_options,
+            )
+            .await?;
 
         if let Some(ttl) = mappack_ttl {
             redis_conn
