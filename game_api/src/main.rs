@@ -10,15 +10,11 @@ use actix_web::{
     App, HttpServer, Responder,
 };
 use anyhow::Context;
-#[cfg(not(feature = "localhost_test"))]
-use records_lib::get_env_var;
 use game_api::{
-    api_route, get_tokens_ttl, graphql_route, AuthState, FitRequestId, RecordsErrorKind,
-    RecordsResponse,
+    api_route, graphql_route, AuthState, FitRequestId, RecordsErrorKind, RecordsResponse,
 };
-use records_lib::{get_env_var_as, get_mysql_pool, get_redis_pool, read_env_var_file, Database};
+use records_lib::{get_mysql_pool, get_redis_pool, Database};
 use reqwest::Client;
-use std::env::var;
 use tracing_actix_web::{RequestId, TracingLogger};
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -29,14 +25,13 @@ async fn not_found(req_id: RequestId) -> RecordsResponse<impl Responder> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
+    let env = game_api::init_env()?;
 
-    let filter = var("RECORDS_API_LOG")
-        .unwrap_or_else(|_| "tracing=info,warp=info,game_api=info".to_owned());
-
-    let port = get_env_var_as("RECORDS_API_PORT");
-
-    let mysql_pool = get_mysql_pool().await.context("Cannot create MySQL pool")?;
-    let redis_pool = get_redis_pool().context("Cannot create Redis pool")?;
+    let mysql_pool = get_mysql_pool(env.db_env.db_url.db_url)
+        .await
+        .context("Cannot create MySQL pool")?;
+    let redis_pool =
+        get_redis_pool(env.db_env.redis_url.redis_url).context("Cannot create Redis pool")?;
 
     let db = Database {
         mysql_pool,
@@ -46,16 +41,13 @@ async fn main() -> anyhow::Result<()> {
     let client = Client::new();
 
     tracing_subscriber::fmt()
-        .with_env_filter(filter)
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
     let auth_state = Data::new(AuthState::default());
 
-    #[cfg(not(feature = "localhost_test"))]
-    let localhost_origin = get_env_var("RECORDS_API_HOST");
-
-    let sess_key = Key::from(read_env_var_file("RECORDS_API_SESSION_KEY_FILE").as_bytes());
+    let sess_key = Key::from(env.used_once.sess_key.as_bytes());
+    drop(env.used_once.sess_key);
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -63,22 +55,21 @@ async fn main() -> anyhow::Result<()> {
             .allowed_methods(vec!["GET", "POST"])
             .allowed_headers(vec!["accept", "content-type"])
             .max_age(3600);
-        #[cfg(feature = "localhost_test")]
+        #[cfg(debug_assertions)]
         let cors = cors.allow_any_origin();
-        #[cfg(not(feature = "localhost_test"))]
-        let cors = cors.allowed_origin(&localhost_origin);
+        #[cfg(not(debug_assertions))]
+        let cors = cors.allowed_origin(&game_api::env().host);
 
         App::new()
             .wrap(cors)
             .wrap(TracingLogger::default())
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), sess_key.clone())
-                    .cookie_secure(!cfg!(feature = "localhost_test"))
+                    .cookie_secure(cfg!(not(debug_assertions)))
                     .cookie_content_security(CookieContentSecurity::Private)
-                    .session_lifecycle(
-                        PersistentSession::default()
-                            .session_ttl(CookieDuration::seconds(get_tokens_ttl() as i64)),
-                    )
+                    .session_lifecycle(PersistentSession::default().session_ttl(
+                        CookieDuration::seconds(game_api::env().auth_token_ttl as i64),
+                    ))
                     .build(),
             )
             .app_data(auth_state.clone())
@@ -88,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
             .service(api_route())
             .default_service(web::to(not_found))
     })
-    .bind(("0.0.0.0", port))
+    .bind(("0.0.0.0", game_api::env().port))
     .context("Cannot bind 0.0.0.0 address")?
     .run()
     .await

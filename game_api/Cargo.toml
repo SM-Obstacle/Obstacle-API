@@ -39,8 +39,8 @@ dotenvy = { workspace = true }
 itertools = { workspace = true }
 once_cell = { workspace = true }
 records-lib = { workspace = true }
+mkenv = { workspace = true }
 
 [features]
 default = []
-output_gql_schema = ["localhost_test"]
-localhost_test = ["records-lib/localhost_test"]
+output_gql_schema = []

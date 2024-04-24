@@ -1,14 +1,10 @@
-use std::sync::OnceLock;
-
 use actix_session::Session;
 use actix_web::{
     web::{self, Data, Json, Query},
     HttpResponse, Responder, Scope,
 };
 use deadpool_redis::redis::AsyncCommands;
-use records_lib::{
-    get_env_var, models::Banishment, must, read_env_var_file, redis_key::mappack_key, Database,
-};
+use records_lib::{models::Banishment, must, redis_key::mappack_key, Database};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
@@ -22,8 +18,8 @@ use crate::{
         TIMEOUT, WEB_TOKEN_SESS_KEY,
     },
     utils::json,
-    AccessTokenErr, ApiClient, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult,
-    RecordsResultExt,
+    AccessTokenErr, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult,
+    RecordsResultExt, Res,
 };
 
 use super::{admin, pb, player_finished as pf};
@@ -148,17 +144,6 @@ struct MPServerRes {
     res_login: String,
 }
 
-static MP_APP_CLIENT_ID: OnceLock<String> = OnceLock::new();
-static MP_APP_CLIENT_SECRET: OnceLock<String> = OnceLock::new();
-
-fn get_mp_app_client_id() -> &'static str {
-    MP_APP_CLIENT_ID.get_or_init(|| read_env_var_file("RECORDS_MP_APP_CLIENT_ID_FILE"))
-}
-
-fn get_mp_app_client_secret() -> &'static str {
-    MP_APP_CLIENT_SECRET.get_or_init(|| read_env_var_file("RECORDS_MP_APP_CLIENT_SECRET_FILE"))
-}
-
 async fn test_access_token(
     client: &Client,
     login: &str,
@@ -169,8 +154,8 @@ async fn test_access_token(
         .post("https://prod.live.maniaplanet.com/login/oauth2/access_token")
         .form(&MPAccessTokenBody {
             grant_type: "authorization_code",
-            client_id: get_mp_app_client_id(),
-            client_secret: get_mp_app_client_secret(),
+            client_id: &crate::env().mp_client_id,
+            client_secret: &crate::env().mp_client_secret,
             code,
             redirect_uri,
         })
@@ -265,7 +250,7 @@ pub async fn get_token(
     _: ApiAvailable,
     req_id: RequestId,
     db: Data<Database>,
-    ApiClient(client): ApiClient,
+    Res(client): Res<Client>,
     state: Data<AuthState>,
     Json(body): Json<GetTokenBody>,
 ) -> RecordsResponse<impl Responder> {
@@ -486,11 +471,9 @@ struct WebhookBody {
 async fn report_error(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
-    ApiClient(client): ApiClient,
+    Res(client): Res<Client>,
     Json(body): Json<ReportErrorBody>,
 ) -> RecordsResponse<impl Responder> {
-    let url = get_env_var("WEBHOOK_REPORT_URL");
-
     let mut fields = vec![
         WebhookBodyEmbedField {
             name: "Map UID".to_owned(),
@@ -538,7 +521,7 @@ async fn report_error(
     };
 
     client
-        .post(url)
+        .post(&crate::env().wh_report_url)
         .json(&WebhookBody {
             content,
             embeds: vec![
@@ -581,12 +564,11 @@ struct ACBody {
 
 async fn ac(
     req_id: RequestId,
-    ApiClient(client): ApiClient,
+    Res(client): Res<Client>,
     Json(body): Json<ACBody>,
 ) -> RecordsResponse<impl Responder> {
-    let url = get_env_var("WEBHOOK_AC_URL");
     client
-        .post(url)
+        .post(&crate::env().wh_ac_url)
         .json(&WebhookBody {
             content: format!("Map has been finished in {}", body.run_time),
             embeds: vec![WebhookBodyEmbed {

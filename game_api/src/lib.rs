@@ -4,15 +4,15 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use deadpool::managed::PoolError;
 pub use deadpool_redis::Pool as RedisPool;
-use records_lib::models;
-use reqwest::Client;
+use mkenv::{Env, EnvSplitIncluded};
+use once_cell::sync::OnceCell;
+use records_lib::{models, DbEnv, LibEnv};
 use serde::{Deserialize, Serialize};
 pub use sqlx::MySqlPool;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::{ready, Ready};
 use std::io;
-use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 use tracing_actix_web::RequestId;
@@ -23,7 +23,7 @@ mod http;
 pub(crate) mod must;
 mod utils;
 
-pub use auth::{get_tokens_ttl, AuthState};
+pub use auth::AuthState;
 pub use graphql::graphql_route;
 pub use http::api_route;
 
@@ -35,7 +35,6 @@ pub struct AccessTokenErr {
     hint: String,
 }
 
-// TODO: make a field `Lib(records_lib::error::RecordsError)`
 #[derive(Error, Debug)]
 #[repr(i32)] // i32 to be used with clients that don't support unsigned integers
 pub enum RecordsErrorKind {
@@ -47,7 +46,6 @@ pub enum RecordsErrorKind {
     IOError(#[from] io::Error) = 101,
 
     // ...Errors from records_lib
-
     #[error(transparent)]
     ExternalRequest(#[from] reqwest::Error) = 104,
     #[error("unknown error: {0}")]
@@ -80,12 +78,10 @@ pub enum RecordsErrorKind {
     EndpointNotFound = 301,
 
     // ...Error from records_lib
-
     #[error("player not banned: `{0}`")]
     PlayerNotBanned(String) = 303,
 
     // ...Error from records_lib
-
     #[error("unknown role with id `{0}` and name `{1}`")]
     UnknownRole(u8, String) = 305,
     #[error("unknown medal with id `{0}` and name `{1}`")]
@@ -98,7 +94,6 @@ pub enum RecordsErrorKind {
     InvalidRates = 309,
 
     // ...Errors from records_lib
-
     #[error("invalid times")]
     InvalidTimes = 313,
     #[error("map pack id should be an integer, got `{0}`")]
@@ -262,36 +257,127 @@ where
     }
 }
 
-/// Wrapper around [`reqwest::Client`] used to retrieve with the [`FromRequest`] trait.
+/// A resource handler, like [`Data`][d].
 ///
-/// We don't use [`Data`](actix_web::web::Data) because it wraps the object with an [`Arc`](std::sync::Arc),
-/// and `reqwest::Client` already uses it.
-pub struct ApiClient(Client);
+/// The difference with [`Data`][d] is that it doesn't use an [`Arc`](std::sync::Arc)
+/// internally, but the [`Clone`] implementation of the inner type to implement [`FromRequest`].
+///
+/// [d]: actix_web::web::Data
+pub struct Res<T>(pub T);
 
-impl Deref for ApiClient {
-    type Target = Client;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for ApiClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl FromRequest for ApiClient {
+impl<T: Clone + 'static> FromRequest for Res<T> {
     type Error = Infallible;
 
     type Future = Ready<Result<Self, Infallible>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
         let client = req
-            .app_data::<Client>()
-            .expect("Client should be present")
+            .app_data::<T>()
+            .unwrap_or_else(|| panic!("{} should be present", std::any::type_name::<T>()))
             .clone();
         ready(Ok(Self(client)))
     }
+
+    fn extract(req: &HttpRequest) -> Self::Future {
+        Self::from_request(req, &mut Payload::None)
+    }
+}
+
+mkenv::make_env! {pub ApiEnvUsedOnce:
+    sess_key: {
+        id: SessKey(String),
+        kind: file,
+        var: "RECORDS_API_SESSION_KEY_FILE",
+        desc: "The path to the file containing the session key used by the API",
+    }
+}
+
+const DEFAULT_GQL_ENDPOINT: &str = "/graphql";
+
+mkenv::make_env! {pub ApiEnv includes [
+    DbEnv as db_env,
+    LibEnv as lib_env,
+    ApiEnvUsedOnce as used_once
+]:
+    port: {
+        id: Port(u16),
+        kind: parse,
+        var: "RECORDS_API_PORT",
+        desc: "The port used to expose the API",
+    },
+
+    #[cfg(not(debug_assertions))]
+    host: {
+        id: Host(String),
+        kind: normal,
+        var: "RECORDS_API_HOST",
+        desc: "The hostname of the server where the API is running (e.g. https://obstacle.titlepack.io)",
+    },
+
+    auth_token_ttl: {
+        id: AuthTokenTtl(u32),
+        kind: parse,
+        var: "RECORDS_API_TOKEN_TTL",
+        desc: "The TTL (time-to-live) of an authentication token or anything related to it (in seconds)",
+    },
+
+    mp_client_id: {
+        id: MpClientId(String),
+        kind: file,
+        var: "RECORDS_MP_APP_CLIENT_ID_FILE",
+        desc: "The path to the file containing the Obstacle ManiaPlanet client ID",
+    },
+
+    mp_client_secret: {
+        id: MpClientSecret(String),
+        kind: file,
+        var: "RECORDS_MP_APP_CLIENT_SECRET_FILE",
+        desc: "The path to the file containing the Obstacle ManiaPlanet client secret",
+    },
+
+    wh_report_url: {
+        id: WebhookReportUrl(String),
+        kind: normal,
+        var: "WEBHOOK_REPORT_URL",
+        desc: "The URL to the Discord webhook used to report errors",
+    },
+
+    wh_ac_url: {
+        id: WebhookAcUrl(String),
+        kind: normal,
+        var: "WEBHOOK_AC_URL",
+        desc: "The URL to the Discord webhook used to share in-game statistics",
+    },
+
+    gql_endpoint: {
+        id: GqlEndpoint(String),
+        kind: normal,
+        var: "GQL_ENDPOINT",
+        desc: "The route to the GraphQL endpoint (e.g. /graphql)",
+        default: DEFAULT_GQL_ENDPOINT,
+    }
+}
+
+pub struct InitEnvOut {
+    pub db_env: DbEnv,
+    pub used_once: ApiEnvUsedOnce,
+}
+
+static ENV: OnceCell<mkenv::init_env!(ApiEnv)> = OnceCell::new();
+
+pub fn env() -> &'static mkenv::init_env!(ApiEnv) {
+    unsafe { ENV.get_unchecked() }
+}
+
+pub fn init_env() -> anyhow::Result<InitEnvOut> {
+    let env = ApiEnv::try_get()?;
+    let (included, rest) = env.split();
+    records_lib::init_env(included.lib_env);
+    ENV.set(rest)
+        .unwrap_or_else(|_| panic!("api env already set"));
+
+    Ok(InitEnvOut {
+        db_env: included.db_env,
+        used_once: included.used_once,
+    })
 }

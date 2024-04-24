@@ -1,7 +1,7 @@
-use core::fmt;
-use std::{env, fs::read_to_string, str::FromStr, time::Duration};
+use std::time::Duration;
 
 use deadpool_redis::Runtime;
+use once_cell::sync::OnceCell;
 use sqlx::{MySql, Pool};
 
 pub mod error;
@@ -43,56 +43,68 @@ pub struct Database {
     pub redis_pool: RedisPool,
 }
 
-pub async fn get_mysql_pool() -> anyhow::Result<MySqlPool> {
-    let mysql_pool = sqlx::mysql::MySqlPoolOptions::new().acquire_timeout(Duration::from_secs(10));
+mkenv::make_env! {pub DbUrlEnv:
+    #[cfg(debug_assertions)]
+    db_url: {
+        id: DbUrl(String),
+        kind: normal,
+        var: "DATABASE_URL",
+        desc: "The URL to the MySQL/MariaDB database",
+    },
+    #[cfg(not(debug_assertions))]
+    db_url: {
+        id: DbUrl(String),
+        kind: file,
+        var: "DATABASE_URL",
+        desc: "The URL to the MySQL/MariaDB database",
+    },
+}
 
-    #[cfg(feature = "localhost_test")]
-    let url = &get_env_var("DATABASE_URL");
-    #[cfg(not(feature = "localhost_test"))]
-    let url = &read_env_var_file("DATABASE_URL");
+mkenv::make_env! {pub RedisUrlEnv:
+    redis_url: {
+        id: RedisUrl(String),
+        kind: normal,
+        var: "REDIS_URL",
+        desc: "The URL to the Redis database",
+    }
+}
 
-    let mysql_pool = mysql_pool.connect(url).await?;
+mkenv::make_env!(pub DbEnv includes [DbUrlEnv as db_url, RedisUrlEnv as redis_url]:);
+
+mkenv::make_env! {pub LibEnv:
+    mappack_ttl: {
+        id: MappackTtl(i64),
+        kind: parse,
+        var: "RECORDS_API_MAPPACK_TTL",
+        desc: "The TTL (time-to-live) of the mappacks stored in Redis",
+    }
+}
+
+
+static ENV: OnceCell<LibEnv> = OnceCell::new();
+
+pub fn init_env(env: LibEnv) {
+    ENV.set(env)
+        .unwrap_or_else(|_| panic!("lib env already set"));
+}
+
+pub fn env() -> &'static LibEnv {
+    unsafe { ENV.get_unchecked() }
+}
+
+pub async fn get_mysql_pool(url: String) -> anyhow::Result<MySqlPool> {
+    let mysql_pool = sqlx::mysql::MySqlPoolOptions::new()
+        .acquire_timeout(Duration::from_secs(10))
+        .connect(&url)
+        .await?;
     Ok(mysql_pool)
 }
 
-pub fn get_redis_pool() -> anyhow::Result<RedisPool> {
+pub fn get_redis_pool(url: String) -> anyhow::Result<RedisPool> {
     let cfg = deadpool_redis::Config {
-        url: Some(get_env_var("REDIS_URL")),
+        url: Some(url),
         connection: None,
         pool: None,
     };
     Ok(cfg.create_pool(Some(Runtime::Tokio1))?)
-}
-
-/// Retrieves the string value of the given environment variable.
-///
-/// # Panic
-///
-/// This function panics at runtime if it fails to read the environment variable. It has this
-/// behavior because all the environment variable of the Records API are read as configuration.
-pub fn get_env_var(v: &str) -> String {
-    env::var(v).unwrap_or_else(|e| panic!("unable to retrieve env var {v}: {e:?}"))
-}
-
-pub fn get_env_var_as<T>(v: &str) -> T
-where
-    T: FromStr,
-    <T as FromStr>::Err: fmt::Debug,
-{
-    get_env_var(v).parse().unwrap_or_else(|e| {
-        panic!(
-            "unable to parse {v} env var to {}: {e:?}",
-            std::any::type_name::<T>()
-        )
-    })
-}
-
-/// Reads the content of the path specified in the given environment variable, and returns it.
-///
-/// # Panic
-///
-/// This function panics at runtime if it fails to read the environment variable. It has this
-/// behavior because all the environment variable of the Records API are read as configuration.
-pub fn read_env_var_file(v: &str) -> String {
-    read_to_string(get_env_var(v)).unwrap_or_else(|e| panic!("unable to read from {v} path: {e:?}"))
 }

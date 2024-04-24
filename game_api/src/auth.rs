@@ -58,10 +58,9 @@ use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
 use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
 use futures::Future;
-use once_cell::sync::Lazy;
 use records_lib::models::ApiStatusKind;
 use records_lib::redis_key::{mp_token_key, web_token_key};
-use records_lib::{get_env_var_as, Database};
+use records_lib::Database;
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use tokio::sync::oneshot::{self, Receiver, Sender};
@@ -81,13 +80,6 @@ pub mod privilege {
     pub const PLAYER: Flags = 0b0001;
     pub const MOD: Flags = 0b0011;
     pub const ADMIN: Flags = 0b1111;
-}
-
-static EXPIRES_IN: Lazy<u32> = Lazy::new(|| get_env_var_as("RECORDS_API_TOKEN_TTL"));
-
-/// Returns the time-to-live of all the generated Obstacle tokens.
-pub fn get_tokens_ttl() -> u32 {
-    *EXPIRES_IN
 }
 
 pub const WEB_TOKEN_SESS_KEY: &str = "__obs_web_token";
@@ -263,7 +255,7 @@ pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String,
     let mp_key = mp_token_key(login);
     let web_key = web_token_key(login);
 
-    let ex = get_tokens_ttl() as _;
+    let ex = crate::env().auth_token_ttl as _;
 
     let mp_token_hash = digest(&*mp_token);
     let web_token_hash = digest(&*web_token);

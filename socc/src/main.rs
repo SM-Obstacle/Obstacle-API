@@ -2,7 +2,8 @@ use std::{future::Future, time::Duration};
 
 use anyhow::Context;
 use deadpool_redis::Connection;
-use records_lib::{MySqlPool, RedisPool};
+use mkenv::Env as _;
+use records_lib::{DbEnv, LibEnv, MySqlPool, RedisPool};
 use sqlx::{pool::PoolConnection, MySql};
 use tokio::{task::JoinHandle, time};
 use tracing::info;
@@ -45,15 +46,19 @@ fn setup_tracing() -> anyhow::Result<()> {
         .map_err(|e| anyhow::format_err!("{e}"))
 }
 
+mkenv::make_env! {Env includes [DbEnv as db_env, LibEnv as lib_env]:}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
     setup_tracing()?;
+    let env = Env::try_get()?;
+    records_lib::init_env(env.lib_env);
 
-    let mysql_pool = records_lib::get_mysql_pool()
+    let mysql_pool = records_lib::get_mysql_pool(env.db_env.db_url.db_url)
         .await
         .context("When creating MySQL pool")?;
-    let redis_pool = records_lib::get_redis_pool().context("When creating Redis pool")?;
+    let redis_pool = records_lib::get_redis_pool(env.db_env.redis_url.redis_url).context("When creating Redis pool")?;
 
     let res = tokio::spawn(handle(
         mysql_pool.clone(),

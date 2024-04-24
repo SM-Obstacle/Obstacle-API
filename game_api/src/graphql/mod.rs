@@ -12,7 +12,6 @@ use records_lib::update_ranks::get_rank_or_full_update;
 use records_lib::{must, Database};
 use reqwest::Client;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
-use std::env::var;
 use std::vec::Vec;
 use tracing_actix_web::RequestId;
 
@@ -498,14 +497,10 @@ async fn index_graphql(
 }
 
 async fn index_playground() -> impl Responder {
-    let gql_endpoint = var("GQL_ENDPOINT").unwrap_or_else(|_| {
-        println!("GQL_ENDPOINT env var not set, using /graphql as default");
-        "/graphql".to_owned()
-    });
     HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")
         .body(playground_source(GraphQLPlaygroundConfig::new(
-            &gql_endpoint,
+            &crate::env().gql_endpoint,
         )))
 }
 

@@ -1,5 +1,6 @@
 use clap::Parser;
-use records_lib::{get_mysql_pool, get_redis_pool, Database};
+use mkenv::Env as _;
+use records_lib::{get_mysql_pool, get_redis_pool, Database, DbEnv, LibEnv};
 
 use self::{clear::ClearCommand, populate::PopulateCommand};
 
@@ -18,6 +19,8 @@ enum EventCommand {
     Clear(ClearCommand),
 }
 
+mkenv::make_env!(Env includes [DbEnv as db_env, LibEnv as lib_env]:);
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
@@ -25,10 +28,12 @@ async fn main() -> anyhow::Result<()> {
         .compact()
         .try_init()
         .map_err(|e| anyhow::anyhow!("unable to init tracing_subscriber: {e}"))?;
+    let env = Env::try_get()?;
+    records_lib::init_env(env.lib_env);
 
     let db = Database {
-        mysql_pool: get_mysql_pool().await?,
-        redis_pool: get_redis_pool()?,
+        mysql_pool: get_mysql_pool(env.db_env.db_url.db_url).await?,
+        redis_pool: get_redis_pool(env.db_env.redis_url.redis_url)?,
     };
 
     let cmd = Command::parse();

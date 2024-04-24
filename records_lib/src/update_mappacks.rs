@@ -9,7 +9,6 @@ use tracing::Instrument;
 use crate::{
     error::RecordsResult,
     escaped::Escaped,
-    get_env_var_as,
     models::RecordAttr,
     must,
     redis_key::{
@@ -121,7 +120,7 @@ pub async fn update_mappack(
     let mappack_ttl = no_ttl
         .iter()
         .all(|x| x != mappack_id)
-        .then(|| get_env_var_as("RECORDS_API_MAPPACK_TTL"));
+        .then_some(crate::env().mappack_ttl);
 
     #[cfg(feature = "tracing")]
     {

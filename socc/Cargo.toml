@@ -16,6 +16,4 @@ sqlx = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-
-[features]
-localhost_test = ["records-lib/localhost_test"]
+mkenv = { workspace = true }

@@ -20,6 +20,4 @@ sqlx = { workspace = true, features = ["mysql"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-
-[features]
-localhost_test = ["records-lib/localhost_test"]
+mkenv = { workspace = true }
