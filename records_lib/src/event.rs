@@ -102,7 +102,7 @@ pub async fn get_edition_by_id(
 ) -> RecordsResult<Option<models::EventEdition>> {
     let r = sqlx::query_as(
         "SELECT * FROM event_edition
-        WHERE event_id = ? AND id = ? AND start_date < SYSDATE()"
+        WHERE event_id = ? AND id = ?"
     )
         .bind(event_id)
         .bind(edition_id)
