@@ -189,7 +189,7 @@ pub async fn populate(
 
                 sqlx::query(
                     "replace into event_edition_maps (event_id, edition_id, map_id, mx_id, 0) \
-                    values (?, ?, ?, ?, ?, ?)",
+                    values (?, ?, ?, ?)",
                 )
                 .bind(event.id)
                 .bind(edition.id)
