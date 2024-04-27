@@ -18,7 +18,14 @@ use crate::clear;
 pub struct PopulateCommand {
     event_handle: String,
     event_edition: u32,
-    csv_file: PathBuf,
+    #[clap(subcommand)]
+    kind: PopulateKind,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum PopulateKind {
+    CsvFile { csv_file: PathBuf },
+    MxId { mx_id: i64 },
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -140,7 +147,7 @@ pub async fn populate(
     PopulateCommand {
         event_handle,
         event_edition,
-        csv_file,
+        kind,
     }: PopulateCommand,
 ) -> anyhow::Result<()> {
     let redis_conn = &mut redis_pool.get().await?;
@@ -159,6 +166,42 @@ pub async fn populate(
     tracing::info!("Clearing old content...");
 
     clear::clear_content(mysql_conn, event.id, edition.id).await?;
+
+    let csv_file = match kind {
+        PopulateKind::CsvFile { csv_file } => csv_file,
+        PopulateKind::MxId { mx_id } => {
+            let maps = map::fetch_mx_mappack_maps(&client, mx_id as _).await?;
+            for map in maps {
+                let player = must::have_player(&mut **mysql_conn, &map.AuthorLogin).await?;
+                let map_id = match map::get_map_from_game_id(&mut **mysql_conn, &map.TrackUID)
+                    .await?
+                {
+                    Some(map) => map.id,
+                    None => sqlx::query_scalar(
+                        "insert into maps (game_id, player_id, name) values (?, ?, ?) returning id",
+                    )
+                    .bind(&map.TrackUID)
+                    .bind(player.id)
+                    .bind(&map.GbxMapName)
+                    .fetch_one(&mut **mysql_conn)
+                    .await?,
+                };
+
+                sqlx::query(
+                    "replace into event_edition_maps (event_id, edition_id, map_id, mx_id, 0) \
+                    values (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(event.id)
+                .bind(edition.id)
+                .bind(map_id)
+                .bind(map.MapID)
+                .execute(&mut **mysql_conn)
+                .await?;
+            }
+
+            return Ok(());
+        }
+    };
 
     tracing::info!("Collecting CSV rows...");
 

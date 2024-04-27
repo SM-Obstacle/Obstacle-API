@@ -9,6 +9,8 @@ pub enum RecordsError {
     MySql(#[from] sqlx::Error) = 102,
     #[error(transparent)]
     Redis(#[from] deadpool_redis::redis::RedisError) = 103,
+    #[error(transparent)]
+    ExternalRequest(#[from] reqwest::Error) = 104,
 
     // --- Logical errors
     #[error("player not found in database: `{0}`")]

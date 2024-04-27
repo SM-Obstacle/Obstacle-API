@@ -160,9 +160,11 @@ async fn test_access_token(
             redirect_uri,
         })
         .send()
-        .await?
+        .await
+        .with_api_err()?
         .json()
-        .await?;
+        .await
+        .with_api_err()?;
 
     let access_token = match res {
         MPAccessTokenResponse::AccessToken { access_token } => access_token,
@@ -178,9 +180,10 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
         .header("Accept", "application/json")
         .bearer_auth(token)
         .send()
-        .await?;
+        .await
+        .with_api_err()?;
     let MPServerRes { res_login } = match res.status() {
-        StatusCode::OK => res.json().await?,
+        StatusCode::OK => res.json().await.with_api_err()?,
         _ => return Ok(false),
     };
 
@@ -543,6 +546,7 @@ async fn report_error(
         })
         .send()
         .await
+        .with_api_err()
         .fit(req_id)?;
 
     Ok(HttpResponse::Ok().finish())
@@ -615,6 +619,7 @@ async fn ac(
         })
         .send()
         .await
+        .with_api_err()
         .fit(req_id)?;
 
     Ok(HttpResponse::Ok().finish())

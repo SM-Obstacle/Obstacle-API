@@ -3,6 +3,7 @@ use std::time::SystemTime;
 use async_graphql::SimpleObject;
 use deadpool_redis::{redis::AsyncCommands, Connection as RedisConnection};
 use records_lib::{
+    map,
     models::Medal,
     must, player,
     redis_key::{
@@ -24,12 +25,6 @@ use super::{map::Map, player::Player};
 
 #[derive(Deserialize)]
 #[allow(non_snake_case)]
-struct MXMappackResponseItem {
-    TrackUID: String,
-}
-
-#[derive(Deserialize)]
-#[allow(non_snake_case)]
 struct MXMappackInfoResponse {
     Username: String,
     Name: String,
@@ -43,18 +38,7 @@ async fn fill_mappack(
     mappack_key: &MappackKey<'_>,
     mappack_id: u32,
 ) -> RecordsResult<()> {
-    let maps = async {
-        let res: Vec<MXMappackResponseItem> = client
-            .get(format!(
-                "https://sm.mania.exchange/api/mappack/get_mappack_tracks/{mappack_id}"
-            ))
-            .header("User-Agent", "obstacle (discord @ahmadbky)")
-            .send()
-            .await?
-            .json()
-            .await?;
-        RecordsResult::Ok(res)
-    };
+    let maps = map::fetch_mx_mappack_maps(client, mappack_id);
 
     let info = async {
         let res: MXMappackInfoResponse = client
@@ -63,20 +47,22 @@ async fn fill_mappack(
             ))
             .header("User-Agent", "obstacle (discord @ahmadbky)")
             .send()
-            .await?
+            .await
+            .with_api_err()?
             .json()
-            .await?;
+            .await
+            .with_api_err()?;
         RecordsResult::Ok(res)
     };
 
     let (maps, info) = tokio::join!(maps, info);
     let (maps, info) = (maps?, info?);
 
-    for MXMappackResponseItem { TrackUID } in maps {
+    for mx_map in maps {
         // We check that the map exists in our database
-        let _ = must::have_map(&mut *db, &TrackUID).await?;
+        let _ = must::have_map(&mut *db, &mx_map.TrackUID).await?;
         redis_conn
-            .sadd(mappack_key, TrackUID)
+            .sadd(mappack_key, mx_map.TrackUID)
             .await
             .with_api_err()?;
     }

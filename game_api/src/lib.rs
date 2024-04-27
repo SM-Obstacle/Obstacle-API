@@ -46,8 +46,6 @@ pub enum RecordsErrorKind {
     IOError(#[from] io::Error) = 101,
 
     // ...Errors from records_lib
-    #[error(transparent)]
-    ExternalRequest(#[from] reqwest::Error) = 104,
     #[error("unknown error: {0}")]
     Unknown(String) = 105,
     #[error("server is in maintenance since {0}")]
@@ -187,7 +185,6 @@ impl actix_web::ResponseError for RecordsError {
         match &self.kind {
             // Internal server errors
             R::IOError(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
-            R::ExternalRequest(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
             R::Unknown(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
             R::Maintenance(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
             R::UnknownStatus(..) => HttpResponse::InternalServerError().json(self.to_err_res()),
@@ -228,6 +225,9 @@ impl actix_web::ResponseError for RecordsError {
                 // Internal server errors
                 LR::MySql(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
                 LR::Redis(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
+                LR::ExternalRequest(_) => {
+                    HttpResponse::InternalServerError().json(self.to_err_res())
+                }
 
                 // Logical errors
                 LR::PlayerNotFound(_) => HttpResponse::BadRequest().json(self.to_err_res()),
