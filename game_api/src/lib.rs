@@ -98,6 +98,8 @@ pub enum RecordsErrorKind {
     InvalidTimes = 313,
     #[error("map pack id should be an integer, got `{0}`")]
     InvalidMappackId(String),
+    #[error("event `{0}` {1} has expired")]
+    EventHasExpired(String, u32),
 
     #[error(transparent)]
     Lib(#[from] records_lib::error::RecordsError),
@@ -220,6 +222,7 @@ impl actix_web::ResponseError for RecordsError {
             R::InvalidRates => HttpResponse::BadRequest().json(self.to_err_res()),
             R::InvalidTimes => HttpResponse::BadRequest().json(self.to_err_res()),
             R::InvalidMappackId(_) => HttpResponse::BadRequest().json(self.to_err_res()),
+            R::EventHasExpired(..) => HttpResponse::BadRequest().json(self.to_err_res()),
 
             R::Lib(e) => match e {
                 // Internal server errors

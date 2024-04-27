@@ -253,6 +253,19 @@ pub struct EventEdition {
     pub banner_img_url: Option<String>,
     pub banner2_img_url: Option<String>,
     pub mx_id: Option<i32>,
+    pub ttl: Option<u64>,
+}
+
+impl EventEdition {
+    pub fn has_expired(&self) -> bool {
+        self.ttl
+            .and_then(|ttl| {
+                self.start_date
+                    .checked_add_signed(chrono::Duration::seconds(ttl as _))
+            })
+            .filter(|d| chrono::Utc::now().naive_local() >= *d)
+            .is_some()
+    }
 }
 
 #[derive(Serialize, FromRow, Clone, Debug)]

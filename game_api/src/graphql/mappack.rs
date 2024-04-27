@@ -106,7 +106,17 @@ async fn fill_mappack(
 }
 
 pub struct Mappack {
+    pub(crate) event_has_expired: bool,
     pub(crate) mappack_id: String,
+}
+
+impl From<String> for Mappack {
+    fn from(mappack_id: String) -> Self {
+        Self {
+            mappack_id,
+            event_has_expired: false,
+        }
+    }
 }
 
 #[derive(SimpleObject)]
@@ -335,6 +345,10 @@ impl Mappack {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Option<u64>> {
+        if self.event_has_expired {
+            return Ok(None);
+        }
+
         let db = ctx.data_unchecked::<Database>();
         let redis_conn = &mut db.redis_pool.get().await?;
         let last_upd_time: Option<u64> = redis_conn.get(mappack_time_key(&self.mappack_id)).await?;
@@ -375,5 +389,5 @@ pub async fn get_mappack(
             .with_api_err()?;
     }
 
-    Ok(Mappack { mappack_id })
+    Ok(From::from(mappack_id))
 }

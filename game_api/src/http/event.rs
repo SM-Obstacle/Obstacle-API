@@ -11,7 +11,7 @@ use tracing_actix_web::RequestId;
 use crate::{
     auth::{privilege, MPAuthGuard},
     utils::json,
-    FitRequestId, RecordsResponse, RecordsResult, RecordsResultExt,
+    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt,
 };
 
 use super::{overview, pb, player::PlayerInfoNetBody, player_finished as pf};
@@ -120,6 +120,7 @@ struct EventHandleEditionResponse {
     banner_img_url: String,
     banner2_img_url: String,
     mx_id: i32,
+    expired: bool,
     categories: Vec<Category>,
 }
 
@@ -343,6 +344,7 @@ async fn edition(
     }
 
     json(EventHandleEditionResponse {
+        expired: edition.has_expired(),
         id: edition.id,
         name: edition.name,
         subtitle: edition.subtitle.unwrap_or_default(),
@@ -360,7 +362,24 @@ async fn edition_overview(
     path: Path<(String, u32)>,
     query: overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    overview::overview(req_id, db, query, Some(path.into_inner())).await
+    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let (event, edition) = path.into_inner();
+    let (event, edition) = records_lib::must::have_event_edition_with_map(
+        &mut mysql_conn,
+        &query.map_uid,
+        event,
+        edition,
+    )
+    .await
+    .with_api_err()
+    .fit(req_id)?;
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
+
+    if edition.has_expired() {
+        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
+    }
+
+    overview::overview(req_id, db, query, Some((&event, &edition))).await
 }
 
 async fn edition_finished(
@@ -372,18 +391,24 @@ async fn edition_finished(
 ) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
 
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
     // We first check that the event and its edition exist
     // and that the map is registered on it.
     let (event, edition) = records_lib::must::have_event_edition_with_map(
-        mysql_conn,
+        &mut mysql_conn,
         &body.map_uid,
         event_handle,
         edition_id,
     )
     .await
     .fit(req_id)?;
+
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
+
+    if edition.has_expired() {
+        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
+    }
 
     // Then we insert the record for the global records
     let res = pf::finished(login, &db, body, Some((&event, &edition)))
@@ -417,16 +442,22 @@ async fn edition_pb(
 ) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
 
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
     let (event, edition) = records_lib::must::have_event_edition_with_map(
-        mysql_conn,
+        &mut mysql_conn,
         &body.map_uid,
         event_handle,
         edition_id,
     )
     .await
     .fit(req_id)?;
+
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
+
+    if edition.has_expired() {
+        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
+    }
 
     pb::pb(login, req_id, db, body, Some((&event, &edition))).await
 }

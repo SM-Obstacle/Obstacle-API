@@ -19,9 +19,9 @@ use crate::{utils::json, FitRequestId, RecordsResponse, RecordsResult, RecordsRe
 #[derive(Deserialize)]
 pub struct OverviewQuery {
     #[serde(alias = "playerId")]
-    login: String,
+    pub(crate) login: String,
     #[serde(alias = "mapId")]
-    map_uid: String,
+    pub(crate) map_uid: String,
 }
 
 pub type OverviewReq = Query<OverviewQuery>;
@@ -139,7 +139,7 @@ pub async fn overview(
     req_id: RequestId,
     db: Data<Database>,
     Query(body): Query<OverviewQuery>,
-    event: Option<(String, u32)>,
+    event: Option<(&models::Event, &models::EventEdition)>,
 ) -> RecordsResponse<impl Responder> {
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
     let redis_conn = &mut db.redis_pool.get().await.fit(req_id)?;
@@ -158,25 +158,6 @@ pub async fn overview(
         .id;
     let map_id = linked_map.unwrap_or(id);
     let reversed = reversed.unwrap_or(false);
-
-    let event = match event {
-        Some((event_handle, edition_id)) => Some(
-            records_lib::must::have_event_edition_with_map(
-                mysql_conn,
-                &body.map_uid,
-                event_handle,
-                edition_id,
-            )
-            .await
-            .fit(req_id)?,
-        ),
-        None => None,
-    };
-
-    let event = match event {
-        Some((ref event, ref edition)) => Some((event, edition)),
-        None => None,
-    };
 
     // Update redis if needed
     let key = map_key(map_id, event);

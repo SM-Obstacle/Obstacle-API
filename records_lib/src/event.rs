@@ -28,6 +28,7 @@ pub async fn event_list(db: &mut MySqlConnection) -> RecordsResult<Vec<EventList
         "select ev.handle as handle, max(ee.id) as last_edition_id from event ev
         inner join event_edition ee on ev.id = ee.event_id
         inner join event_edition_maps eem on ee.id = eem.edition_id and ee.event_id = eem.event_id
+        where ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate()
         group by ev.id, ev.handle
         order by ev.id",
     )
@@ -44,7 +45,8 @@ pub async fn event_editions_list(
     let res = sqlx::query_as(
         "select ee.* from event_edition ee
         inner join event e on ee.event_id = e.id
-        where e.handle = ?",
+        where e.handle = ?
+            and ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate()",
     )
     .bind(event_handle)
     .fetch_all(db)
@@ -98,7 +100,10 @@ pub async fn get_edition_by_id(
     event_id: u32,
     edition_id: u32,
 ) -> RecordsResult<Option<models::EventEdition>> {
-    let r = sqlx::query_as("SELECT * FROM event_edition WHERE event_id = ? AND id = ?")
+    let r = sqlx::query_as(
+        "SELECT * FROM event_edition
+        WHERE event_id = ? AND id = ? AND start_date < SYSDATE()"
+    )
         .bind(event_id)
         .bind(edition_id)
         .fetch_optional(db)

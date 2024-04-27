@@ -526,6 +526,7 @@ impl EventEdition<'_> {
     async fn mappack(&self) -> Option<Mappack> {
         Some(Mappack {
             mappack_id: event::event_edition_mappack_id(&self.inner),
+            event_has_expired: self.inner.has_expired(),
         })
     }
 
