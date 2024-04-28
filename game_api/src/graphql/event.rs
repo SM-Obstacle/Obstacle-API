@@ -343,7 +343,8 @@ impl EventEditionPlayerCategorizedRank<'_> {
                 inner join records r on event_edition_records.record_id = r.record_id
                 inner join event_edition_maps eem on r.map_id = eem.map_id
                 inner join maps m on eem.map_id = m.id
-                where eem.event_id = ? and eem.edition_id = ? and r.record_player_id = ?",
+                where eem.event_id = ? and eem.edition_id = ? and r.record_player_id = ?
+                order by eem.`order` asc",
             )
             .bind(self.player.edition.inner.event_id)
             .bind(self.player.edition.inner.id)
@@ -369,7 +370,8 @@ impl EventEditionPlayerCategorizedRank<'_> {
             inner join event_edition_maps eem on r.map_id = eem.map_id
             inner join maps m on eem.map_id = m.id
             inner join event_category ec on eem.category_id = ec.id
-            where eem.event_id = ? and eem.edition_id = ? and r.record_player_id = ? and ec.id = ?",
+            where eem.event_id = ? and eem.edition_id = ? and r.record_player_id = ? and ec.id = ?
+            order by eem.`order` asc",
         )
         .bind(self.player.edition.inner.event_id)
         .bind(self.player.edition.inner.id)
