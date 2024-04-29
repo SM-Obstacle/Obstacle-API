@@ -1,14 +1,11 @@
-use actix_web::{
-    web::{Data, Query},
-    Responder,
-};
+use actix_web::{web::Query, Responder};
 use futures::StreamExt;
 use records_lib::{models, Database, GetSqlFragments};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use tracing_actix_web::RequestId;
 
-use crate::{utils::json, FitRequestId, RecordsResponse, RecordsResultExt};
+use crate::{utils::json, FitRequestId, RecordsResponse, RecordsResultExt, Res};
 
 #[derive(Deserialize)]
 pub struct PbBody {
@@ -39,7 +36,7 @@ struct PbCpTimesResponseItem {
 pub async fn pb(
     login: String,
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Query(PbBody { map_uid }): PbReq,
     event: Option<(&models::Event, &models::EventEdition)>,
 ) -> RecordsResponse<impl Responder> {

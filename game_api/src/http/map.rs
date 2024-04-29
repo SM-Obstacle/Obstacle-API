@@ -1,10 +1,10 @@
 use crate::{
     auth::{self, privilege, ApiAvailable, AuthHeader, MPAuthGuard},
     utils::{any_repeated, json},
-    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt,
+    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
 };
 use actix_web::{
-    web::{self, Data, Json, Query},
+    web::{self, Json, Query},
     HttpResponse, Responder, Scope,
 };
 use futures::{future::try_join_all, StreamExt};
@@ -41,7 +41,7 @@ struct UpdateMapBody {
 async fn insert(
     _: ApiAvailable,
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Json(body): Json<UpdateMapBody>,
 ) -> RecordsResponse<impl Responder> {
     let res = records_lib::map::get_map_from_game_id(&db.mysql_pool, &body.map_uid)
@@ -110,7 +110,7 @@ struct PlayerRatingResponse {
 pub async fn player_rating(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
-    db: Data<Database>,
+    db: Res<Database>,
     Json(body): Json<PlayerRatingBody>,
 ) -> RecordsResponse<impl Responder> {
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
@@ -196,7 +196,7 @@ struct RatingsResponse {
 
 pub async fn ratings(
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<RatingsBody>,
 ) -> RecordsResponse<impl Responder> {
@@ -281,7 +281,7 @@ struct RatingResponse {
 
 pub async fn rating(
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Query(body): Query<RatingBody>,
 ) -> RecordsResponse<impl Responder> {
     let Some((map_name, author_login)) = sqlx::query_as(
@@ -353,7 +353,7 @@ struct RateResponse {
 pub async fn rate(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
-    db: Data<Database>,
+    db: Res<Database>,
     Json(body): Json<RateBody>,
 ) -> RecordsResponse<impl Responder> {
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
@@ -542,7 +542,7 @@ struct ResetRatingsResponse {
 pub async fn reset_ratings(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::ADMIN }>,
-    db: Data<Database>,
+    db: Res<Database>,
     Json(body): Json<ResetRatingsBody>,
 ) -> RecordsResponse<impl Responder> {
     let Some((map_id, map_name, author_login)) = sqlx::query_as(

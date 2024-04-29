@@ -1,7 +1,4 @@
-use actix_web::{
-    web::{Data, Query},
-    Responder,
-};
+use actix_web::{web::Query, Responder};
 use deadpool_redis::{redis::AsyncCommands, Connection as RedisConnection};
 use futures::StreamExt;
 use records_lib::{
@@ -14,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::MySqlConnection;
 use tracing_actix_web::RequestId;
 
-use crate::{utils::json, FitRequestId, RecordsResponse, RecordsResult, RecordsResultExt};
+use crate::{utils::json, FitRequestId, RecordsResponse, RecordsResult, RecordsResultExt, Res};
 
 #[derive(Deserialize)]
 pub struct OverviewQuery {
@@ -137,7 +134,7 @@ async fn get_range(
 
 pub async fn overview(
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Query(body): Query<OverviewQuery>,
     event: Option<(&models::Event, &models::EventEdition)>,
 ) -> RecordsResponse<impl Responder> {

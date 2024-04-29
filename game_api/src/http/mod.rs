@@ -9,8 +9,8 @@ use serde::Serialize;
 use tracing_actix_web::RequestId;
 
 use crate::utils::{get_api_status, json, ApiStatus};
-use crate::{FitRequestId, RecordsResponse, RecordsResultExt};
-use actix_web::{web::Data, Responder};
+use crate::{FitRequestId, RecordsResponse, RecordsResultExt, Res};
+use actix_web::Responder;
 
 use self::admin::admin_scope;
 use self::event::event_scope;
@@ -46,10 +46,7 @@ struct LatestnewsImageResponse {
     link: String,
 }
 
-async fn latestnews_image(
-    req_id: RequestId,
-    db: Data<Database>,
-) -> RecordsResponse<impl Responder> {
+async fn latestnews_image(req_id: RequestId, db: Res<Database>) -> RecordsResponse<impl Responder> {
     let res: LatestnewsImageResponse = sqlx::query_as("select * from latestnews_image")
         .fetch_one(&db.mysql_pool)
         .await
@@ -66,7 +63,7 @@ struct InfoResponse {
     status: ApiStatus,
 }
 
-async fn info(req_id: RequestId, db: Data<Database>) -> RecordsResponse<impl Responder> {
+async fn info(req_id: RequestId, db: Res<Database>) -> RecordsResponse<impl Responder> {
     let api_version = env!("CARGO_PKG_VERSION");
     let status = get_api_status(&db).await.fit(req_id)?;
 
@@ -80,7 +77,7 @@ async fn info(req_id: RequestId, db: Data<Database>) -> RecordsResponse<impl Res
 
 async fn overview(
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     query: overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
     overview::overview(req_id, db, query, None).await

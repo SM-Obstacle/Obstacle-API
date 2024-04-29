@@ -1,5 +1,5 @@
 use actix_web::{
-    web::{self, Data, Path},
+    web::{self, Path},
     Responder, Scope,
 };
 use itertools::Itertools;
@@ -11,7 +11,7 @@ use tracing_actix_web::RequestId;
 use crate::{
     auth::{privilege, MPAuthGuard},
     utils::json,
-    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt,
+    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
 };
 
 use super::{overview, pb, player::PlayerInfoNetBody, player_finished as pf};
@@ -124,7 +124,7 @@ struct EventHandleEditionResponse {
     categories: Vec<Category>,
 }
 
-async fn event_list(req_id: RequestId, db: Data<Database>) -> RecordsResponse<impl Responder> {
+async fn event_list(req_id: RequestId, db: Res<Database>) -> RecordsResponse<impl Responder> {
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
     let out = event::event_list(mysql_conn)
@@ -136,7 +136,7 @@ async fn event_list(req_id: RequestId, db: Data<Database>) -> RecordsResponse<im
 }
 
 async fn event_editions(
-    db: Data<Database>,
+    db: Res<Database>,
     req_id: RequestId,
     event_handle: Path<String>,
 ) -> RecordsResponse<impl Responder> {
@@ -200,7 +200,7 @@ struct AuthorWithPlayerTime {
 
 async fn edition(
     auth: Option<MPAuthGuard<{ privilege::PLAYER }>>,
-    db: Data<Database>,
+    db: Res<Database>,
     req_id: RequestId,
     path: Path<(String, u32)>,
 ) -> RecordsResponse<impl Responder> {
@@ -358,7 +358,7 @@ async fn edition(
 
 async fn edition_overview(
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     path: Path<(String, u32)>,
     query: overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
@@ -385,7 +385,7 @@ async fn edition_overview(
 async fn edition_finished(
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     path: Path<(String, u32)>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
@@ -437,7 +437,7 @@ async fn edition_pb(
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     req_id: RequestId,
     path: Path<(String, u32)>,
-    db: Data<Database>,
+    db: Res<Database>,
     body: pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();

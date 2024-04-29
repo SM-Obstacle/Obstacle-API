@@ -1,5 +1,5 @@
 use actix_web::{
-    web::{self, Data, Json, Query},
+    web::{self, Json, Query},
     HttpResponse, Responder, Scope,
 };
 use records_lib::Database;
@@ -10,7 +10,7 @@ use tracing_actix_web::RequestId;
 use crate::{
     auth::{privilege, MPAuthGuard},
     utils::json,
-    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt,
+    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
 };
 
 pub fn admin_scope() -> Scope {
@@ -31,7 +31,7 @@ pub struct DelNoteBody {
 pub async fn del_note(
     _: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Json(body): Json<DelNoteBody>,
 ) -> RecordsResponse<impl Responder> {
     sqlx::query("UPDATE players SET admins_note = NULL WHERE login = ?")
@@ -59,7 +59,7 @@ struct SetRoleResponse {
 pub async fn set_role(
     _: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Json(body): Json<SetRoleBody>,
 ) -> RecordsResponse<impl Responder> {
     sqlx::query("UPDATE players SET role = ? WHERE login = ?")
@@ -130,7 +130,7 @@ struct BanishmentsResponse {
 pub async fn banishments(
     _: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Query(body): Query<BanishmentsBody>,
 ) -> RecordsResponse<impl Responder> {
     let player_id = records_lib::must::have_player(&db.mysql_pool, &body.player_login)
@@ -176,7 +176,7 @@ struct BanResponse {
 pub async fn ban(
     MPAuthGuard { login }: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Json(body): Json<BanBody>,
 ) -> RecordsResponse<impl Responder> {
     let player_id = records_lib::must::have_player(&db.mysql_pool, &body.player_login)
@@ -256,7 +256,7 @@ struct UnbanResponse {
 pub async fn unban(
     _: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Json(body): Json<UnbanBody>,
 ) -> RecordsResponse<impl Responder> {
     let player_id = records_lib::must::have_player(&db.mysql_pool, &body.player_login)
@@ -306,7 +306,7 @@ struct PlayerNoteResponse {
 pub async fn player_note(
     _: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Json(body): Json<PlayerNoteBody>,
 ) -> RecordsResponse<impl Responder> {
     let admins_note = records_lib::must::have_player(&db.mysql_pool, &body.player_login)

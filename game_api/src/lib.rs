@@ -13,6 +13,7 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::{ready, Ready};
 use std::io;
+use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 use tracing_actix_web::RequestId;
@@ -266,7 +267,40 @@ where
 /// internally, but the [`Clone`] implementation of the inner type to implement [`FromRequest`].
 ///
 /// [d]: actix_web::web::Data
+#[derive(Clone)]
 pub struct Res<T>(pub T);
+
+impl<T> From<T> for Res<T> {
+    fn from(value: T) -> Self {
+        Self(value)
+    }
+}
+
+impl<T> AsRef<T> for Res<T> {
+    fn as_ref(&self) -> &T {
+        &*self
+    }
+}
+
+impl<T> AsMut<T> for Res<T> {
+    fn as_mut(&mut self) -> &mut T {
+        &mut *self
+    }
+}
+
+impl<T> Deref for Res<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for Res<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 impl<T: Clone + 'static> FromRequest for Res<T> {
     type Error = Infallible;

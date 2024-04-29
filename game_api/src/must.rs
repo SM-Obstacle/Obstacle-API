@@ -1,8 +1,10 @@
 //! See [`records_lib::must`] module documentation.
 
-use actix_web::{web::Data, HttpMessage, HttpRequest};
+use actix_web::{HttpMessage, HttpRequest};
 use records_lib::Database;
 use tracing_actix_web::RequestId;
+
+use crate::Res;
 
 pub fn have_request_id(req: &HttpRequest) -> RequestId {
     *req.extensions()
@@ -10,8 +12,9 @@ pub fn have_request_id(req: &HttpRequest) -> RequestId {
         .expect("RequestId should be present")
 }
 
-pub fn have_db(req: &HttpRequest) -> Data<Database> {
-    req.app_data::<Data<Database>>()
-        .expect("Data<Database> app data should be present")
+pub fn have_db(req: &HttpRequest) -> Res<Database> {
+    req.app_data::<Database>()
+        .expect("Database app data should be present")
         .clone()
+        .into()
 }

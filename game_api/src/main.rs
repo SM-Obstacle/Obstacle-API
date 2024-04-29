@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
             )
             .app_data(auth_state.clone())
             .app_data(client.clone())
-            .app_data(Data::new(db.clone()))
+            .app_data(db.clone())
             .service(graphql_route(db.clone(), client.clone()))
             .service(api_route())
             .default_service(web::to(not_found))

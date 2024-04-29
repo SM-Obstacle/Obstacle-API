@@ -76,7 +76,7 @@ pub async fn get_or_insert(db: &Database, body: &PlayerInfoNetBody) -> RecordsRe
 pub async fn update(
     _: ApiAvailable,
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<PlayerInfoNetBody>,
 ) -> RecordsResponse<impl Responder> {
@@ -194,7 +194,7 @@ async fn finished(
     _: ApiAvailable,
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
-    db: Data<Database>,
+    db: Res<Database>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
     // FIXME: this is used as a transition statement for the incoming Winter season.
@@ -252,7 +252,7 @@ struct GetTokenResponse {
 pub async fn get_token(
     _: ApiAvailable,
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Res(client): Res<Client>,
     state: Data<AuthState>,
     Json(body): Json<GetTokenBody>,
@@ -343,7 +343,7 @@ async fn pb(
     _: ApiAvailable,
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
-    db: Data<Database>,
+    db: Res<Database>,
     body: pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
     pb::pb(login, req_id, db, body, None).await
@@ -363,7 +363,7 @@ struct TimesResponseItem {
 async fn times(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
-    db: Data<Database>,
+    db: Res<Database>,
     Json(body): Json<TimesBody>,
 ) -> RecordsResponse<impl Responder> {
     let player = records_lib::must::have_player(&db.mysql_pool, &login)
@@ -414,7 +414,7 @@ struct InfoResponse {
 
 pub async fn info(
     req_id: RequestId,
-    db: Data<Database>,
+    db: Res<Database>,
     Query(body): Query<InfoBody>,
 ) -> RecordsResponse<impl Responder> {
     let Some(info) = sqlx::query_as::<_, InfoResponse>(

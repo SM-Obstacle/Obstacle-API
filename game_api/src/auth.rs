@@ -53,7 +53,6 @@ use std::pin::Pin;
 use std::{collections::HashMap, time::Duration};
 
 use actix_web::dev::Payload;
-use actix_web::web::Data;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
 use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
@@ -71,7 +70,9 @@ use tracing_actix_web::RequestId;
 
 use crate::utils::{generate_token, get_api_status, ApiStatus};
 use crate::{http::player, RecordsErrorKind, RecordsResult};
-use crate::{must, AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, RecordsResultExt};
+use crate::{
+    must, AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, RecordsResultExt, Res,
+};
 
 #[allow(unused)]
 pub mod privilege {
@@ -375,7 +376,7 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
         async fn check<const ROLE: privilege::Flags>(
             request_id: RequestId,
-            db: Data<Database>,
+            db: Res<Database>,
             login: Option<String>,
             token: Option<String>,
         ) -> RecordsResponse<MPAuthGuard<ROLE>> {
@@ -445,7 +446,7 @@ impl FromRequest for ApiAvailable {
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
         async fn check_status(
-            db: Data<Database>,
+            db: Res<Database>,
             req_id: RequestId,
         ) -> RecordsResponse<ApiAvailable> {
             match get_api_status(&db).await.fit(req_id)? {
