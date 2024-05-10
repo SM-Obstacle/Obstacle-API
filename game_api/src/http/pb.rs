@@ -43,34 +43,24 @@ pub async fn pb(
     let (join_event, and_event) = event.get_sql_fragments();
 
     let query = format!(
-        "SELECT r.respawn_count AS rs_count, cps.cp_num AS cp_num, cps.time AS time
-        FROM checkpoint_times cps
-        INNER JOIN maps m ON m.id = cps.map_id
-        INNER JOIN records r ON r.record_id = cps.record_id
+        "select r.respawn_count as rs_count, ct.cp_num as cp_num, ct.time as time
+        from global_records r
         {join_event}
-        INNER JOIN players p on r.record_player_id = p.id
-        WHERE m.game_id = ? AND p.login = ?
-            {and_event}
-            AND r.time = (
-                SELECT IF(m.reversed, MAX(time), MIN(time))
-                FROM records r
-                {join_event}
-                WHERE r.map_id = m.id AND p.id = r.record_player_id
-                    {and_event}
-            )"
+        inner join players p on r.record_player_id = p.id
+        inner join checkpoint_times ct on r.record_id = ct.record_id
+        where r.game_id = ? and p.login = ?
+        {and_event}"
     );
 
-    let mut query = sqlx::query_as::<_, PbResponseItem>(&query)
+    let query = sqlx::query_as::<_, PbResponseItem>(&query)
         .bind(map_uid)
         .bind(login);
 
-    if let Some((event, edition)) = event {
-        query = query
-            .bind(event.id)
-            .bind(edition.id)
-            .bind(event.id)
-            .bind(edition.id);
-    }
+    let query = if let Some((event, edition)) = event {
+        query.bind(event.id).bind(edition.id)
+    } else {
+        query
+    };
 
     let mut times = query.fetch(&db.mysql_pool);
 

@@ -1,5 +1,4 @@
 use actix_web::web::Json;
-use chrono::Utc;
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
     models::{self, Map, Record},
@@ -46,9 +45,8 @@ async fn send_query(
     map_id: u32,
     player_id: u32,
     body: InsertRecordParams,
+    at: chrono::NaiveDateTime,
 ) -> records_lib::error::RecordsResult<u32> {
-    let now = Utc::now().naive_utc();
-
     let record_id: u32 = sqlx::query_scalar(
         "INSERT INTO records (record_player_id, map_id, time, respawn_count, record_date, flags)
                     VALUES (?, ?, ?, ?, ?, ?) RETURNING record_id",
@@ -57,7 +55,7 @@ async fn send_query(
     .bind(map_id)
     .bind(body.time)
     .bind(body.respawn_count)
-    .bind(now)
+    .bind(at)
     .bind(body.flags)
     .fetch_one(&mut *db)
     .await?;
@@ -89,6 +87,7 @@ async fn insert_record(
     player_id: u32,
     body: &InsertRecordParams,
     event: Option<(&models::Event, &models::EventEdition)>,
+    at: chrono::NaiveDateTime,
 ) -> RecordsResult<u32> {
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err()?;
     let redis_conn = &mut db.redis_pool.get().await?;
@@ -104,7 +103,7 @@ async fn insert_record(
     let map_id = *map_id;
 
     let record_id = mysql_conn
-        .transaction(|txn| Box::pin(send_query(txn, map_id, player_id, body)))
+        .transaction(|txn| Box::pin(send_query(txn, map_id, player_id, body, at)))
         .await?;
 
     Ok(record_id)
@@ -118,8 +117,9 @@ pub struct FinishedOutput {
 pub async fn finished(
     login: String,
     db: &Database,
-    Json(body): Json<HasFinishedBody>,
+    body: HasFinishedBody,
     event: Option<(&models::Event, &models::EventEdition)>,
+    at: chrono::NaiveDateTime,
 ) -> RecordsResult<FinishedOutput> {
     // First, we retrieve all what we need to save the record
     let player_id = records_lib::must::have_player(&db.mysql_pool, &login)
@@ -184,7 +184,7 @@ pub async fn finished(
     };
 
     // We insert the record (whether it is the new personal best or not)
-    let record_id = insert_record(db, map, player_id, &params, event).await?;
+    let record_id = insert_record(db, map, player_id, &params, event, at).await?;
 
     // TODO: Remove this after having added event mode into the TP
     let original_uid = body.map_uid.replace("_benchmark", "");
@@ -196,7 +196,7 @@ pub async fn finished(
         } = records_lib::must::have_map(&db.mysql_pool, &original_uid).await?;
 
         if cps_number == original_cps_number && reversed == original_reversed.unwrap_or(false) {
-            insert_record(db, map, player_id, &params, None).await?;
+            insert_record(db, map, player_id, &params, None, at).await?;
         } else {
             return Err(RecordsErrorKind::from(
                 records_lib::error::RecordsError::MapNotFound(original_uid),

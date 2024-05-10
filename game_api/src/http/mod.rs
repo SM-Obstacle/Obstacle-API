@@ -16,6 +16,7 @@ use self::admin::admin_scope;
 use self::event::event_scope;
 use self::map::map_scope;
 use self::player::player_scope;
+use self::staggered::staggered_scope;
 
 pub mod admin;
 pub mod event;
@@ -25,6 +26,7 @@ pub mod player;
 mod overview;
 mod pb;
 mod player_finished;
+mod staggered;
 
 pub fn api_route() -> Scope {
     let json_config = JsonConfig::default().limit(1024 * 16);
@@ -34,6 +36,7 @@ pub fn api_route() -> Scope {
         .route("/latestnews_image", web::get().to(latestnews_image))
         .route("/info", web::get().to(info))
         .route("/overview", web::get().to(overview))
+        .service(staggered_scope())
         .service(player_scope())
         .service(map_scope())
         .service(admin_scope())

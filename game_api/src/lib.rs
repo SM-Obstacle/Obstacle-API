@@ -278,7 +278,7 @@ impl<T> From<T> for Res<T> {
 
 impl<T> AsRef<T> for Res<T> {
     fn as_ref(&self) -> &T {
-        &*self
+        self
     }
 }
 

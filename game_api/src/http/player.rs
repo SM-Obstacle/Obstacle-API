@@ -3,8 +3,7 @@ use actix_web::{
     web::{self, Data, Json, Query},
     HttpResponse, Responder, Scope,
 };
-use deadpool_redis::redis::AsyncCommands;
-use records_lib::{models::Banishment, must, redis_key::mappack_key, Database};
+use records_lib::{models::Banishment, Database};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
@@ -190,6 +189,21 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
     Ok(res_login.to_lowercase() == login.to_lowercase())
 }
 
+pub async fn finished_at(
+    req_id: RequestId,
+    login: String,
+    db: Res<Database>,
+    body: pf::HasFinishedBody,
+    at: chrono::NaiveDateTime,
+) -> RecordsResponse<impl Responder> {
+    let res = pf::finished(login, &db, body, None, at)
+        .await
+        .fit(req_id)?
+        .res;
+    json(res)
+}
+
+#[inline(always)]
 async fn finished(
     _: ApiAvailable,
     req_id: RequestId,
@@ -197,44 +211,7 @@ async fn finished(
     db: Res<Database>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
-    // FIXME: this is used as a transition statement for the incoming Winter season.
-    // It should be removed after the update.
-    let event = {
-        let redis_conn = &mut db.redis_pool.get().await.fit(req_id)?;
-        let summer_campaign_uids: Vec<String> = redis_conn
-            .smembers(mappack_key("29"))
-            .await
-            .with_api_err()
-            .fit(req_id)?;
-        if summer_campaign_uids.contains(&body.map_uid) {
-            Some(
-                must::have_event_edition(
-                    &mut *db.mysql_pool.acquire().await.with_api_err().fit(req_id)?,
-                    "campaign",
-                    1,
-                )
-                .await
-                .with_api_err()
-                .fit(req_id)?,
-            )
-        } else {
-            None
-        }
-    };
-
-    let res = pf::finished(
-        login,
-        &db,
-        body,
-        match event {
-            Some((ref event, ref edition)) => Some((event, edition)),
-            None => None,
-        },
-    )
-    .await
-    .fit(req_id)?
-    .res;
-    json(res)
+    finished_at(req_id, login, db, body.0, chrono::Utc::now().naive_utc()).await
 }
 
 #[derive(Deserialize)]

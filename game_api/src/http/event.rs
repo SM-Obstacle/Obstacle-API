@@ -382,12 +382,32 @@ async fn edition_overview(
     overview::overview(req_id, db, query, Some((&event, &edition))).await
 }
 
+#[inline(always)]
 async fn edition_finished(
     MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
     req_id: RequestId,
     db: Res<Database>,
     path: Path<(String, u32)>,
     body: pf::PlayerFinishedBody,
+) -> RecordsResponse<impl Responder> {
+    edition_finished_at(
+        login,
+        req_id,
+        db,
+        path,
+        body.0,
+        chrono::Utc::now().naive_utc(),
+    )
+    .await
+}
+
+pub async fn edition_finished_at(
+    login: String,
+    req_id: RequestId,
+    db: Res<Database>,
+    path: Path<(String, u32)>,
+    body: pf::HasFinishedBody,
+    at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
 
@@ -411,7 +431,7 @@ async fn edition_finished(
     }
 
     // Then we insert the record for the global records
-    let res = pf::finished(login, &db, body, Some((&event, &edition)))
+    let res = pf::finished(login, &db, body, Some((&event, &edition)), at)
         .await
         .fit(req_id)?;
 
