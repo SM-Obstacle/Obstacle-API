@@ -21,7 +21,7 @@ use crate::{
     RecordsResultExt, Res,
 };
 
-use super::{admin, pb, player_finished as pf};
+use super::{pb, player_finished as pf};
 
 pub fn player_scope() -> Scope {
     web::scope("/player")
@@ -307,13 +307,6 @@ pub async fn post_give_token(
         .insert(WEB_TOKEN_SESS_KEY, web_token)
         .expect("unable to insert session web token");
     Ok(HttpResponse::Ok().finish())
-}
-
-#[derive(Serialize)]
-struct IsBannedResponse {
-    login: String,
-    banned: bool,
-    current_ban: Option<admin::Banishment>,
 }
 
 async fn pb(
