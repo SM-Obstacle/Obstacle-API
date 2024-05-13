@@ -44,28 +44,20 @@ pub struct RankedRecord {
 async fn get_range(
     db: &Database,
     (mysql_conn, redis_conn): (&mut MySqlConnection, &mut RedisConnection),
-    Map {
-        id: map_id,
-        reversed,
-        ..
-    }: &Map,
+    Map { id: map_id, .. }: &Map,
     (start, end): (u32, u32),
     event: Option<(&models::Event, &models::EventEdition)>,
 ) -> RecordsResult<Vec<RankedRecord>> {
-    let reversed = reversed.unwrap_or(false);
     let key = map_key(*map_id, event);
 
     let (join_event, and_event) = event.get_sql_fragments();
 
     // transforms exclusive to inclusive range
     let end = end - 1;
-    let ids: Vec<i32> = if reversed {
-        redis_conn.zrevrange(key, start as isize, end as isize)
-    } else {
-        redis_conn.zrange(key, start as isize, end as isize)
-    }
-    .await
-    .with_api_err()?;
+    let ids: Vec<i32> = redis_conn
+        .zrange(key, start as isize, end as isize)
+        .await
+        .with_api_err()?;
 
     if ids.is_empty() {
         // Avoids the query building to have a `AND record_player_id IN ()` fragment
@@ -82,7 +74,7 @@ async fn get_range(
         "SELECT CAST(0 AS UNSIGNED) AS rank,
             p.login AS login,
             p.name AS nickname,
-            {func}(time) as time,
+            min(time) as time,
             m.*
         FROM records r
         {join_event}
@@ -91,10 +83,8 @@ async fn get_range(
         WHERE map_id = ? AND record_player_id IN ({params})
             {and_event}
         GROUP BY record_player_id
-        ORDER BY time {order}, record_date ASC",
+        ORDER BY time, record_date ASC",
         params = params,
-        func = if reversed { "MAX" } else { "MIN" },
-        order = if reversed { "DESC" } else { "ASC" },
         join_event = join_event,
         and_event = and_event,
     );
@@ -122,7 +112,8 @@ async fn get_range(
         } = record.with_api_err()?;
 
         out.push(RankedRecord {
-            rank: get_rank_or_full_update((mysql_conn, redis_conn), &map, time, event).await? as _,
+            rank: get_rank_or_full_update((mysql_conn, redis_conn), map.id, time, event).await?
+                as _,
             login,
             nickname,
             time,
@@ -141,24 +132,19 @@ pub async fn overview(
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
     let redis_conn = &mut db.redis_pool.get().await.fit(req_id)?;
 
-    let ref map @ Map {
-        id,
-        linked_map,
-        reversed,
-        ..
-    } = records_lib::must::have_map(&mut **mysql_conn, &body.map_uid)
-        .await
-        .fit(req_id)?;
+    let ref map @ Map { id, linked_map, .. } =
+        records_lib::must::have_map(&mut **mysql_conn, &body.map_uid)
+            .await
+            .fit(req_id)?;
     let player_id = records_lib::must::have_player(&mut **mysql_conn, &body.login)
         .await
         .fit(req_id)?
         .id;
     let map_id = linked_map.unwrap_or(id);
-    let reversed = reversed.unwrap_or(false);
 
     // Update redis if needed
     let key = map_key(map_id, event);
-    let count = update_leaderboard((mysql_conn, redis_conn), map, event)
+    let count = update_leaderboard((mysql_conn, redis_conn), map.id, event)
         .await
         .fit(req_id)? as u32;
 
@@ -168,14 +154,11 @@ pub async fn overview(
     const TOTAL_ROWS: u32 = 15;
     const NO_RECORD_ROWS: u32 = TOTAL_ROWS - 1;
 
-    let player_rank: Option<i64> = if reversed {
-        redis_conn.zrevrank(&key, player_id)
-    } else {
-        redis_conn.zrank(&key, player_id)
-    }
-    .await
-    .with_api_err()
-    .fit(req_id)?;
+    let player_rank: Option<i64> = redis_conn
+        .zrank(&key, player_id)
+        .await
+        .with_api_err()
+        .fit(req_id)?;
     let player_rank = player_rank.map(|r| r as u64 as u32);
 
     if let Some(player_rank) = player_rank {

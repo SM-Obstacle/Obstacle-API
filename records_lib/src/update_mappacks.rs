@@ -9,8 +9,7 @@ use tracing::Instrument;
 use crate::{
     error::RecordsResult,
     escaped::Escaped,
-    models::RecordAttr,
-    must,
+    models, must,
     redis_key::{
         mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_nb_map_key,
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
@@ -62,7 +61,7 @@ pub struct MappackScores {
 #[derive(sqlx::FromRow, Debug)]
 struct RecordRow {
     #[sqlx(flatten)]
-    pub record: RecordAttr,
+    pub record: models::Record,
     pub player_id2: u32,
     pub player_login: String,
     #[sqlx(try_from = "String")]
@@ -358,8 +357,8 @@ async fn calc_scores(
             let record = RankedRecordRow {
                 rank: get_rank_or_full_update(
                     (mysql_conn, redis_conn),
-                    map,
-                    record.record.record.time,
+                    map.id,
+                    record.record.time,
                     None,
                 )
                 .await?,

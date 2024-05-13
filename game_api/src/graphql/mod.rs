@@ -6,8 +6,8 @@ use async_graphql::extensions::ApolloTracing;
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use async_graphql::{connection, Enum, ErrorExtensionValues, Object, Value, ID};
 use async_graphql_actix_web::GraphQLRequest;
-use futures::StreamExt;
-use records_lib::models::{self, RecordAttr};
+use futures::StreamExt as _;
+use records_lib::models;
 use records_lib::update_ranks::get_rank_or_full_update;
 use records_lib::{must, Database};
 use reqwest::Client;
@@ -289,29 +289,26 @@ impl QueryRoot {
     ) -> async_graphql::Result<RankedRecord> {
         let db = ctx.data_unchecked::<Database>();
 
-        let Some(row) = sqlx::query(
-            "SELECT r.*, m.* FROM records r
-            INNER JOIN maps m ON m.id = r.map_id
-            WHERE r.record_id = ?",
-        )
-        .bind(record_id)
-        .fetch_optional(&db.mysql_pool)
-        .await?
+        let Some(record) =
+            sqlx::query_as::<_, models::Record>("select * from records where record_id = ?")
+                .bind(record_id)
+                .fetch_optional(&db.mysql_pool)
+                .await?
         else {
             return Err(async_graphql::Error::new("Record not found."));
         };
-
-        let (record, map) = (
-            models::Record::from_row(&row)?,
-            models::Map::from_row(&row)?,
-        );
 
         let redis_conn = &mut db.redis_pool.get().await?;
         let mysql_conn = &mut db.mysql_pool.acquire().await?;
 
         Ok(models::RankedRecord {
-            rank: get_rank_or_full_update((mysql_conn, redis_conn), &map, record.time, None)
-                .await?,
+            rank: get_rank_or_full_update(
+                (mysql_conn, redis_conn),
+                record.map_id,
+                record.time,
+                None,
+            )
+            .await?,
             record,
         }
         .into())
@@ -352,22 +349,24 @@ impl QueryRoot {
         let date_sort_by = SortState::sql_order_by(&date_sort_by);
 
         let query = format!(
-            "SELECT * FROM global_records
-            WHERE game_id NOT LIKE '%_benchmark'
+            "SELECT * FROM global_records r
+            INNER JOIN maps m ON m.id = r.map_id
+            WHERE m.game_id NOT LIKE '%_benchmark'
             ORDER BY record_date {date_sort_by}
             LIMIT 100"
         );
 
-        let mut records = sqlx::query_as::<_, RecordAttr>(&query).fetch(&mut **mysql_conn);
+        let mut records = sqlx::query_as::<_, models::Record>(&query).fetch(&mut **mysql_conn);
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
         let mysql_conn = &mut db.mysql_pool.acquire().await?;
 
         while let Some(record) = records.next().await {
-            let RecordAttr { record, map } = record?;
+            let record = record?;
 
             let rank =
-                get_rank_or_full_update((mysql_conn, redis_conn), &map, record.time, None).await?;
+                get_rank_or_full_update((mysql_conn, redis_conn), record.map_id, record.time, None)
+                    .await?;
 
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }

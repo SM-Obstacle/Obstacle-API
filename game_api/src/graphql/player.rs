@@ -3,7 +3,9 @@ use std::{collections::HashMap, sync::Arc};
 use async_graphql::{connection, dataloader::Loader, Context, Enum, ID};
 use futures::StreamExt;
 use records_lib::{
-    escaped::Escaped, models::{self, RecordAttr, Role}, Database
+    escaped::Escaped,
+    models::{self, Role},
+    Database,
 };
 use sqlx::{mysql, FromRow, MySqlPool, Row};
 
@@ -164,13 +166,14 @@ impl Player {
         // Query the records with these ids
 
         let query = format!(
-            "SELECT * FROM global_records
-            WHERE record_player_id = ? AND game_id NOT LIKE '%_benchmark'
+            "SELECT * FROM global_records r
+            INNER JOIN maps m ON m.id = r.map_id
+            WHERE record_player_id = ? AND m.game_id NOT LIKE '%_benchmark'
             ORDER BY record_date {date_sort_by}
             LIMIT 100",
         );
 
-        let mut records = sqlx::query_as::<_, RecordAttr>(&query)
+        let mut records = sqlx::query_as::<_, models::Record>(&query)
             .bind(self.inner.id)
             .fetch(&mut **mysql_conn);
 
@@ -179,10 +182,11 @@ impl Player {
         let mysql_conn = &mut db.mysql_pool.acquire().await?;
 
         while let Some(record) = records.next().await {
-            let RecordAttr { record, map } = record?;
+            let record = record?;
 
             let rank =
-                get_rank_or_full_update((mysql_conn, redis_conn), &map, record.time, None).await?;
+                get_rank_or_full_update((mysql_conn, redis_conn), record.map_id, record.time, None)
+                    .await?;
 
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }

@@ -46,9 +46,10 @@ pub async fn pb(
         "select r.respawn_count as rs_count, ct.cp_num as cp_num, ct.time as time
         from global_records r
         {join_event}
+        inner join maps m on m.id = r.map_id
         inner join players p on r.record_player_id = p.id
         inner join checkpoint_times ct on r.record_id = ct.record_id
-        where r.game_id = ? and p.login = ?
+        where m.game_id = ? and p.login = ?
         {and_event}"
     );
 

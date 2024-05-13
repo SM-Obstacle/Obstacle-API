@@ -29,7 +29,6 @@ pub struct HasFinishedResponse {
     old: i32,
     new: i32,
     current_rank: i32,
-    reversed: bool,
 }
 
 #[derive(Clone)]
@@ -95,7 +94,7 @@ async fn insert_record(
     let key = map_key(*map_id, event);
     let added: Option<i64> = redis_conn.zadd(key, player_id, body.time).await.ok();
     if added.is_none() {
-        let _count = update_leaderboard((mysql_conn, redis_conn), map, event).await?;
+        let _count = update_leaderboard((mysql_conn, redis_conn), map.id, event).await?;
     }
 
     let body = body.clone();
@@ -128,10 +127,8 @@ pub async fn finished(
     let ref map @ Map {
         id: map_id,
         cps_number,
-        reversed,
         ..
     } = records_lib::must::have_map(&db.mysql_pool, &body.map_uid).await?;
-    let reversed = reversed.unwrap_or(false);
 
     let params = InsertRecordParams {
         time: body.time,
@@ -154,10 +151,9 @@ pub async fn finished(
         {join_event}
         WHERE map_id = ? AND record_player_id = ?
         {and_event}
-        ORDER BY time {order} LIMIT 1",
+        ORDER BY time LIMIT 1",
         join_event = join_event,
         and_event = and_event,
-        order = if reversed { "DESC" } else { "ASC" },
     );
 
     // We retrieve the optional old record to compare with the new one
@@ -172,11 +168,7 @@ pub async fn finished(
     let old_record = query.fetch_optional(&db.mysql_pool).await.with_api_err()?;
 
     let (old, new, has_improved) = if let Some(Record { time: old, .. }) = old_record {
-        let improved = if reversed {
-            params.time > old
-        } else {
-            params.time < old
-        };
+        let improved = params.time < old;
 
         (old, params.time, improved)
     } else {
@@ -191,11 +183,10 @@ pub async fn finished(
     if original_uid != body.map_uid {
         let ref map @ Map {
             cps_number: original_cps_number,
-            reversed: original_reversed,
             ..
         } = records_lib::must::have_map(&db.mysql_pool, &original_uid).await?;
 
-        if cps_number == original_cps_number && reversed == original_reversed.unwrap_or(false) {
+        if cps_number == original_cps_number {
             insert_record(db, map, player_id, &params, None, at).await?;
         } else {
             return Err(RecordsErrorKind::from(
@@ -206,13 +197,8 @@ pub async fn finished(
 
     let redis_conn = &mut db.redis_pool.get().await?;
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err()?;
-    let current_rank = get_rank_or_full_update(
-        (mysql_conn, redis_conn),
-        map,
-        if reversed { old.max(new) } else { old.min(new) },
-        event,
-    )
-    .await?;
+    let current_rank =
+        get_rank_or_full_update((mysql_conn, redis_conn), map.id, old.min(new), event).await?;
 
     Ok(FinishedOutput {
         record_id,
@@ -222,7 +208,6 @@ pub async fn finished(
             old,
             new,
             current_rank,
-            reversed,
         },
     })
 }

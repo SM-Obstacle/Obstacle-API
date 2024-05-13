@@ -30,7 +30,6 @@ pub struct Map {
     pub name: String,
     pub cps_number: Option<u32>,
     pub linked_map: Option<u32>,
-    pub reversed: Option<bool>,
 }
 
 #[derive(Serialize, FromRow, Clone, Debug)]
@@ -49,15 +48,6 @@ pub struct Record {
 pub struct RankedRecord {
     pub rank: i32,
     pub record: Record,
-}
-
-/// This is the type returned from the `global_records` SQL view.
-#[derive(FromRow, Debug)]
-pub struct RecordAttr {
-    #[sqlx(flatten)]
-    pub record: Record,
-    #[sqlx(flatten)]
-    pub map: Map,
 }
 
 #[derive(Serialize, FromRow, Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]

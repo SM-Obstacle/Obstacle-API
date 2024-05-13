@@ -53,15 +53,10 @@ impl Map {
         let redis_conn = &mut db.redis_pool.get().await?;
 
         let key = alone_map_key(self.inner.id);
-        let reversed = self.inner.reversed.unwrap_or(false);
 
-        update_leaderboard((mysql_conn, redis_conn), &self.inner, None).await?;
+        update_leaderboard((mysql_conn, redis_conn), self.inner.id, None).await?;
 
-        let to_reverse = reversed
-            ^ rank_sort_by
-                .as_ref()
-                .filter(|s| **s == SortState::Reverse)
-                .is_some();
+        let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
         let record_ids: Vec<i32> = if to_reverse {
             redis_conn.zrevrange(&key, 0, 99)
         } else {
@@ -128,7 +123,7 @@ impl Map {
             let record = record?;
             let rank = get_rank_or_full_update(
                 (&mut *mysql_conn, redis_conn),
-                &self.inner,
+                self.inner.id,
                 record.time,
                 None,
             )
@@ -168,10 +163,6 @@ impl Map {
 
     async fn name(&self) -> Escaped {
         self.inner.name.clone().into()
-    }
-
-    async fn reversed(&self) -> bool {
-        self.inner.reversed.unwrap_or(false)
     }
 
     async fn related_event_editions(

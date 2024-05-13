@@ -34,8 +34,6 @@ struct UpdateMapBody {
     map_uid: String,
     cps_number: u32,
     author: PlayerInfoNetBody,
-    // Keep it optional for backward compatibility
-    reversed: Option<bool>,
 }
 
 async fn insert(
@@ -66,14 +64,13 @@ async fn insert(
 
     sqlx::query(
         "INSERT INTO maps
-        (game_id, player_id, name, cps_number, reversed)
-        VALUES (?, ?, ?, ?, ?) RETURNING id",
+        (game_id, player_id, name, cps_number)
+        VALUES (?, ?, ?, ?) RETURNING id",
     )
     .bind(&body.map_uid)
     .bind(player_id)
     .bind(&body.name)
     .bind(body.cps_number)
-    .bind(body.reversed)
     .execute(&db.mysql_pool)
     .await
     .with_api_err()
