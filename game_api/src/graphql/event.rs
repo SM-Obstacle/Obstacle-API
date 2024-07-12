@@ -11,6 +11,7 @@ use records_lib::{
     models::{self, EventCategory},
     must,
     redis_key::{mappack_map_last_rank, mappack_player_ranks_key},
+    update_mappacks::MappackKind,
     RedisPool,
 };
 
@@ -95,7 +96,8 @@ impl Event {
             "select ee.* from event_edition ee
             inner join event_edition_maps eem on ee.id = eem.edition_id
                 and ee.event_id = eem.event_id
-            where ee.event_id = ?
+            where ee.event_id = ? and ee.start_date < sysdate() and
+                (ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate())
             order by ee.id desc
             limit 1",
         )
@@ -250,7 +252,10 @@ impl EventEditionMapExt<'_> {
         let redis_conn = &mut redis_pool.get().await?;
         let last_rank = redis_conn
             .get(mappack_map_last_rank(
-                &event::event_edition_mappack_id(&self.edition_player.edition.inner),
+                MappackKind::Event(
+                    &self.edition_player.edition.event.inner,
+                    &self.edition_player.edition.inner,
+                ),
                 &self.inner.inner.game_id,
             ))
             .await?;
@@ -278,7 +283,10 @@ impl EventEditionPlayerRank<'_> {
         let rank = redis_conn
             .zscore(
                 mappack_player_ranks_key(
-                    &event::event_edition_mappack_id(&self.edition_player.edition.inner),
+                    MappackKind::Event(
+                        &self.edition_player.edition.event.inner,
+                        &self.edition_player.edition.inner,
+                    ),
                     self.edition_player.player.id,
                 ),
                 &self.map_game_id,
@@ -340,7 +348,7 @@ impl EventEditionPlayerCategorizedRank<'_> {
         if self.category.id == 0 {
             let res = sqlx::query(
                 "select m.game_id, r.time from event_edition_records
-                inner join records r on event_edition_records.record_id = r.record_id
+                inner join global_records r on event_edition_records.record_id = r.record_id
                 inner join event_edition_maps eem on r.map_id = eem.map_id
                 inner join maps m on eem.map_id = m.id
                 where eem.event_id = ? and eem.edition_id = ? and r.record_player_id = ?
@@ -402,7 +410,7 @@ impl EventEditionPlayer<'_> {
     async fn rank(&self, ctx: &Context<'_>) -> async_graphql::Result<usize> {
         mappack::player_rank(
             ctx,
-            &event::event_edition_mappack_id(&self.edition.inner),
+            MappackKind::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,
         )
         .await
@@ -411,7 +419,7 @@ impl EventEditionPlayer<'_> {
     async fn rank_avg(&self, ctx: &Context<'_>) -> async_graphql::Result<f64> {
         mappack::player_rank_avg(
             ctx,
-            &event::event_edition_mappack_id(&self.edition.inner),
+            MappackKind::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,
         )
         .await
@@ -420,7 +428,7 @@ impl EventEditionPlayer<'_> {
     async fn map_finished(&self, ctx: &Context<'_>) -> async_graphql::Result<usize> {
         mappack::player_map_finished(
             ctx,
-            &event::event_edition_mappack_id(&self.edition.inner),
+            MappackKind::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,
         )
         .await
@@ -429,7 +437,7 @@ impl EventEditionPlayer<'_> {
     async fn worst_rank(&self, ctx: &Context<'_>) -> async_graphql::Result<i32> {
         mappack::player_worst_rank(
             ctx,
-            &event::event_edition_mappack_id(&self.edition.inner),
+            MappackKind::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,
         )
         .await
@@ -527,7 +535,9 @@ impl EventEdition<'_> {
 
     async fn mappack(&self) -> Option<Mappack> {
         Some(Mappack {
-            mappack_id: event::event_edition_mappack_id(&self.inner),
+            mappack_id: MappackKind::Event(&self.event.inner, &self.inner)
+                .mappack_id()
+                .to_string(),
             event_has_expired: self.inner.has_expired(),
         })
     }
@@ -567,6 +577,10 @@ impl EventEdition<'_> {
 
     async fn banner_img_url(&self) -> Option<&str> {
         self.inner.banner_img_url.as_deref()
+    }
+
+    async fn expires_in(&self) -> Option<i64> {
+        self.inner.expires_in()
     }
 
     async fn player(

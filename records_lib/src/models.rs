@@ -242,19 +242,26 @@ pub struct EventEdition {
     pub start_date: chrono::NaiveDateTime,
     pub banner_img_url: Option<String>,
     pub banner2_img_url: Option<String>,
-    pub mx_id: Option<i32>,
+    pub mx_id: Option<i64>,
+    pub mx_secret: Option<String>,
     pub ttl: Option<u64>,
 }
 
 impl EventEdition {
+    fn expire_date(&self) -> Option<chrono::NaiveDateTime> {
+        self.ttl.and_then(|ttl| {
+            self.start_date
+                .checked_add_signed(chrono::Duration::seconds(ttl as _))
+        })
+    }
+
+    pub fn expires_in(&self) -> Option<i64> {
+        self.expire_date()
+            .map(|d| (d - chrono::Utc::now().naive_utc()).num_seconds())
+    }
+
     pub fn has_expired(&self) -> bool {
-        self.ttl
-            .and_then(|ttl| {
-                self.start_date
-                    .checked_add_signed(chrono::Duration::seconds(ttl as _))
-            })
-            .filter(|d| chrono::Utc::now().naive_local() >= *d)
-            .is_some()
+        self.expires_in().filter(|n| *n < 0).is_some()
     }
 }
 

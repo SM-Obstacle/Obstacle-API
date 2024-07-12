@@ -4,7 +4,7 @@ use deadpool_redis::{redis::AsyncCommands, Connection};
 use records_lib::{
     event,
     redis_key::{mappack_key, mappacks_key},
-    update_mappacks::{persist_mappack, update_mappack},
+    update_mappacks::{update_mappack, MappackKind},
 };
 use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
 
@@ -17,15 +17,22 @@ async fn update_event_mappacks(
 ) -> anyhow::Result<()> {
     for event in event::event_list(mysql_conn).await? {
         for edition in event::event_editions_list(mysql_conn, &event.handle).await? {
-            let mappack_id = event::event_edition_mappack_id(&edition);
+            tracing::info!(
+                "Got event edition ({}:{}) {:?}",
+                edition.event_id,
+                edition.id,
+                edition.name
+            );
+
+            let mappack = MappackKind::Event(&event.event, &edition);
+
+            redis_conn.del(mappack_key(mappack)).await?;
 
             for map in event::event_edition_maps(mysql_conn, edition.event_id, edition.id).await? {
-                redis_conn
-                    .sadd(mappack_key(&mappack_id), map.game_id)
-                    .await?;
+                redis_conn.sadd(mappack_key(mappack), map.game_id).await?;
             }
 
-            persist_mappack(redis_conn, &mappack_id).await?;
+            update_mappack(mappack, mysql_conn, redis_conn).await?;
         }
     }
 
@@ -41,7 +48,12 @@ pub async fn update(
     let mappacks: Vec<String> = redis_conn.smembers(mappacks_key()).await?;
 
     for mappack_id in mappacks {
-        update_mappack(&mappack_id, &mut mysql_conn, &mut redis_conn).await?;
+        update_mappack(
+            MappackKind::Id(&mappack_id),
+            &mut mysql_conn,
+            &mut redis_conn,
+        )
+        .await?;
     }
 
     Ok(())

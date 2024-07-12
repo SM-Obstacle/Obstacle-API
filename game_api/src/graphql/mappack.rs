@@ -10,9 +10,9 @@ use records_lib::{
         mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_mx_created_key,
         mappack_mx_name_key, mappack_mx_username_key, mappack_nb_map_key,
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
-        mappack_player_worst_rank_key, mappack_time_key, MappackKey,
+        mappack_player_worst_rank_key, mappack_time_key,
     },
-    update_mappacks::update_mappack,
+    update_mappacks::{update_mappack, MappackKind},
     Database, MySqlPool, RedisPool,
 };
 use reqwest::Client;
@@ -35,10 +35,10 @@ async fn fill_mappack(
     client: &Client,
     db: &mut MySqlConnection,
     redis_conn: &mut RedisConnection,
-    mappack_key: &MappackKey<'_>,
+    mappack: MappackKind<'_>,
     mappack_id: u32,
 ) -> RecordsResult<()> {
-    let maps = map::fetch_mx_mappack_maps(client, mappack_id);
+    let maps = map::fetch_mx_mappack_maps(client, mappack_id, None);
 
     let info = async {
         let res: MXMappackInfoResponse = client
@@ -62,29 +62,27 @@ async fn fill_mappack(
         // We check that the map exists in our database
         let _ = must::have_map(&mut *db, &mx_map.TrackUID).await?;
         redis_conn
-            .sadd(mappack_key, mx_map.TrackUID)
+            .sadd(mappack_key(mappack), mx_map.TrackUID)
             .await
             .with_api_err()?;
     }
-
-    let mappack_id = &mappack_id.to_string();
 
     // --------
     // These keys would probably be null for some mappacks, because they would belong
     // to an event edition, so these info would be retrieved from our information system.
 
     redis_conn
-        .set(mappack_mx_username_key(mappack_id), info.Username)
+        .set(mappack_mx_username_key(mappack), info.Username)
         .await
         .with_api_err()?;
 
     redis_conn
-        .set(mappack_mx_name_key(mappack_id), info.Name)
+        .set(mappack_mx_name_key(mappack), info.Name)
         .await
         .with_api_err()?;
 
     redis_conn
-        .set(mappack_mx_created_key(mappack_id), info.Created)
+        .set(mappack_mx_created_key(mappack), info.Created)
         .await
         .with_api_err()?;
 
@@ -119,52 +117,52 @@ struct MappackPlayer<'a> {
 
 pub(super) async fn player_rank(
     ctx: &async_graphql::Context<'_>,
-    mappack_id: &str,
+    mappack: MappackKind<'_>,
     player_id: u32,
 ) -> async_graphql::Result<usize> {
     let redis_pool = ctx.data_unchecked::<RedisPool>();
     let redis_conn = &mut redis_pool.get().await?;
     let rank = redis_conn
-        .zscore(mappack_lb_key(mappack_id), player_id)
+        .zscore(mappack_lb_key(mappack), player_id)
         .await?;
     Ok(rank)
 }
 
 pub(super) async fn player_rank_avg(
     ctx: &async_graphql::Context<'_>,
-    mappack_id: &str,
+    mappack: MappackKind<'_>,
     player_id: u32,
 ) -> async_graphql::Result<f64> {
     let redis_pool = ctx.data_unchecked::<RedisPool>();
     let redis_conn = &mut redis_pool.get().await?;
     let rank = redis_conn
-        .get(mappack_player_rank_avg_key(mappack_id, player_id))
+        .get(mappack_player_rank_avg_key(mappack, player_id))
         .await?;
     Ok(rank)
 }
 
 pub(super) async fn player_map_finished(
     ctx: &async_graphql::Context<'_>,
-    mappack_id: &str,
+    mappack: MappackKind<'_>,
     player_id: u32,
 ) -> async_graphql::Result<usize> {
     let redis_pool = ctx.data_unchecked::<RedisPool>();
     let redis_conn = &mut redis_pool.get().await?;
     let map_finished = redis_conn
-        .get(mappack_player_map_finished_key(mappack_id, player_id))
+        .get(mappack_player_map_finished_key(mappack, player_id))
         .await?;
     Ok(map_finished)
 }
 
 pub(super) async fn player_worst_rank(
     ctx: &async_graphql::Context<'_>,
-    mappack_id: &str,
+    mappack: MappackKind<'_>,
     player_id: u32,
 ) -> async_graphql::Result<i32> {
     let redis_pool = ctx.data_unchecked::<RedisPool>();
     let redis_conn = &mut redis_pool.get().await?;
     let worst_rank = redis_conn
-        .get(mappack_player_worst_rank_key(mappack_id, player_id))
+        .get(mappack_player_worst_rank_key(mappack, player_id))
         .await?;
     Ok(worst_rank)
 }
@@ -172,7 +170,12 @@ pub(super) async fn player_worst_rank(
 #[async_graphql::Object]
 impl MappackPlayer<'_> {
     async fn rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
-        player_rank(ctx, &self.mappack.mappack_id, self.inner.inner.id).await
+        player_rank(
+            ctx,
+            MappackKind::Id(&self.mappack.mappack_id),
+            self.inner.inner.id,
+        )
+        .await
     }
 
     async fn player(&self) -> &Player {
@@ -191,7 +194,10 @@ impl MappackPlayer<'_> {
 
         let maps_uids: Vec<String> = redis_conn
             .zrange_withscores(
-                mappack_player_ranks_key(&self.mappack.mappack_id, self.inner.inner.id),
+                mappack_player_ranks_key(
+                    MappackKind::Id(&self.mappack.mappack_id),
+                    self.inner.inner.id,
+                ),
                 0,
                 -1,
             )
@@ -206,7 +212,10 @@ impl MappackPlayer<'_> {
             };
             let rank = rank.parse()?;
             let last_rank = redis_conn
-                .get(mappack_map_last_rank(&self.mappack.mappack_id, game_id))
+                .get(mappack_map_last_rank(
+                    MappackKind::Id(&self.mappack.mappack_id),
+                    game_id,
+                ))
                 .await?;
             let map = must::have_map(&mut **mysql_conn, game_id).await?;
 
@@ -221,15 +230,30 @@ impl MappackPlayer<'_> {
     }
 
     async fn rank_avg(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<f64> {
-        player_rank_avg(ctx, &self.mappack.mappack_id, self.inner.inner.id).await
+        player_rank_avg(
+            ctx,
+            MappackKind::Id(&self.mappack.mappack_id),
+            self.inner.inner.id,
+        )
+        .await
     }
 
     async fn map_finished(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
-        player_map_finished(ctx, &self.mappack.mappack_id, self.inner.inner.id).await
+        player_map_finished(
+            ctx,
+            MappackKind::Id(&self.mappack.mappack_id),
+            self.inner.inner.id,
+        )
+        .await
     }
 
     async fn worst_rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i32> {
-        player_worst_rank(ctx, &self.mappack.mappack_id, self.inner.inner.id).await
+        player_worst_rank(
+            ctx,
+            MappackKind::Id(&self.mappack.mappack_id),
+            self.inner.inner.id,
+        )
+        .await
     }
 
     async fn last_medal(
@@ -246,7 +270,9 @@ impl Mappack {
     async fn nb_maps(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
-        let nb_map = redis_conn.get(mappack_nb_map_key(&self.mappack_id)).await?;
+        let nb_map = redis_conn
+            .get(mappack_nb_map_key(MappackKind::Id(&self.mappack_id)))
+            .await?;
         Ok(nb_map)
     }
 
@@ -257,7 +283,7 @@ impl Mappack {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
         let author = redis_conn
-            .get(mappack_mx_username_key(&self.mappack_id))
+            .get(mappack_mx_username_key(MappackKind::Id(&self.mappack_id)))
             .await?;
         Ok(author)
     }
@@ -269,7 +295,7 @@ impl Mappack {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
         let created_at: Option<String> = redis_conn
-            .get(mappack_mx_created_key(&self.mappack_id))
+            .get(mappack_mx_created_key(MappackKind::Id(&self.mappack_id)))
             .await?;
         Ok(created_at.map(|s| s.parse()).transpose()?)
     }
@@ -281,7 +307,7 @@ impl Mappack {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
         let name = redis_conn
-            .get(mappack_mx_name_key(&self.mappack_id))
+            .get(mappack_mx_name_key(MappackKind::Id(&self.mappack_id)))
             .await?;
         Ok(name)
     }
@@ -297,7 +323,7 @@ impl Mappack {
         let mysql_conn = &mut mysql_pool.acquire().await?;
 
         let leaderboard: Vec<u32> = redis_conn
-            .zrange(mappack_lb_key(&self.mappack_id), 0, -1)
+            .zrange(mappack_lb_key(MappackKind::Id(&self.mappack_id)), 0, -1)
             .await?;
 
         let mut out = Vec::with_capacity(leaderboard.len());
@@ -337,7 +363,9 @@ impl Mappack {
 
         let db = ctx.data_unchecked::<Database>();
         let redis_conn = &mut db.redis_pool.get().await?;
-        let last_upd_time: Option<u64> = redis_conn.get(mappack_time_key(&self.mappack_id)).await?;
+        let last_upd_time: Option<u64> = redis_conn
+            .get(mappack_time_key(MappackKind::Id(&self.mappack_id)))
+            .await?;
         Ok(last_upd_time.map(|last| last + 24 * 3600).and_then(|last| {
             SystemTime::UNIX_EPOCH
                 .elapsed()
@@ -354,9 +382,12 @@ pub async fn get_mappack(
     let db = ctx.data_unchecked::<Database>();
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err()?;
     let redis_conn = &mut db.redis_pool.get().await?;
-    let mappack_key = mappack_key(&mappack_id);
+    let mappack = MappackKind::Id(&mappack_id);
 
-    let mappack_uids: Vec<String> = redis_conn.smembers(&mappack_key).await.with_api_err()?;
+    let mappack_uids: Vec<String> = redis_conn
+        .smembers(mappack_key(mappack))
+        .await
+        .with_api_err()?;
 
     // We load the campaign, and update it, before retrieving the scores from it
     if mappack_uids.is_empty() {
@@ -367,10 +398,10 @@ pub async fn get_mappack(
         let client = ctx.data_unchecked::<Client>();
 
         // We fill the mappack
-        fill_mappack(client, mysql_conn, redis_conn, &mappack_key, mappack_id_int).await?;
+        fill_mappack(client, mysql_conn, redis_conn, mappack, mappack_id_int).await?;
 
         // And we update it to have its scores cached
-        update_mappack(&mappack_id, mysql_conn, redis_conn)
+        update_mappack(MappackKind::Id(&mappack_id), mysql_conn, redis_conn)
             .await
             .with_api_err()?;
     }

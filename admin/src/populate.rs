@@ -9,7 +9,8 @@ use records_lib::{
     models::{self, Medal},
     must,
     redis_key::mappack_key,
-    update_mappacks, Database, MySqlPool,
+    update_mappacks::{self, MappackKind},
+    Database, MySqlPool,
 };
 
 use crate::clear;
@@ -25,7 +26,7 @@ pub struct PopulateCommand {
 #[derive(clap::Subcommand, Debug)]
 enum PopulateKind {
     CsvFile { csv_file: PathBuf },
-    MxId { mx_id: i64 },
+    MxId { mx_id: Option<i64> },
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -158,10 +159,12 @@ pub async fn populate(
 
     let categories = event::get_categories_by_edition_id(mysql_conn, event.id, edition.id).await?;
 
-    tracing::info!(
-        "Found categories for this event edition: {}",
-        categories.iter().map(|cat| &cat.handle).join(", ")
-    );
+    if !categories.is_empty() {
+        tracing::info!(
+            "Found categories for this event edition: {}",
+            categories.iter().map(|cat| &cat.handle).join(", ")
+        );
+    }
 
     tracing::info!("Clearing old content...");
 
@@ -170,7 +173,21 @@ pub async fn populate(
     let csv_file = match kind {
         PopulateKind::CsvFile { csv_file } => csv_file,
         PopulateKind::MxId { mx_id } => {
-            let maps = map::fetch_mx_mappack_maps(&client, mx_id as _).await?;
+            let mx_id = match (mx_id, edition.mx_id) {
+                (Some(provided_id), Some(original_id)) if provided_id != original_id => {
+                    tracing::warn!("Provided MX id {provided_id} is different from the event edition original MX id {original_id}");
+                    provided_id
+                }
+                (Some(id), _) | (_, Some(id)) => id,
+                (None, None) => anyhow::bail!("no MX id provided"),
+            };
+
+            let maps =
+                map::fetch_mx_mappack_maps(&client, mx_id as _, edition.mx_secret.as_deref())
+                    .await?;
+
+            tracing::info!("Found {} map(s) in MX mappack with ID {mx_id}", maps.len());
+
             for map in maps {
                 let player = must::have_player(&mut **mysql_conn, &map.AuthorLogin).await?;
                 let map_id = match map::get_map_from_game_id(&mut **mysql_conn, &map.TrackUID)
@@ -227,7 +244,7 @@ pub async fn populate(
 
     tracing::info!("Inserting new content...");
 
-    let mappack_id = event::event_edition_mappack_id(&edition);
+    let mappack = MappackKind::Event(&event, &edition);
 
     for (
         Row {
@@ -277,32 +294,43 @@ pub async fn populate(
             continue;
         };
 
-        // FIXME: I'm too lazy to make a single request
-        for (medal_id, time) in [
-            (Medal::Bronze as u8, bronze_time),
-            (Medal::Silver as _, silver_time),
-            (Medal::Gold as _, gold_time),
-            (Medal::Champion as _, champion_time),
-        ] {
-            sqlx::query("replace into event_edition_maps_medals (event_id, edition_id, map_id, medal_id, time) \
-            values (?, ?, ?, ?, ?)")
-                .bind(event.id)
-                .bind(edition.id)
-                .bind(map.id)
-                .bind(medal_id)
-                .bind(time).execute(&mut **mysql_conn).await?;
-        }
+        sqlx::query(
+            "replace into event_edition_maps_medals
+            (event_id, edition_id, map_id, medal_id, time)
+            values (?, ?, ?, ?, ?),
+                   (?, ?, ?, ?, ?),
+                   (?, ?, ?, ?, ?),
+                   (?, ?, ?, ?, ?)",
+        )
+        .bind(event.id)
+        .bind(edition.id)
+        .bind(map.id)
+        .bind(Medal::Bronze as u8)
+        .bind(bronze_time)
+        .bind(event.id)
+        .bind(edition.id)
+        .bind(map.id)
+        .bind(Medal::Silver as u8)
+        .bind(silver_time)
+        .bind(event.id)
+        .bind(edition.id)
+        .bind(map.id)
+        .bind(Medal::Gold as u8)
+        .bind(gold_time)
+        .bind(event.id)
+        .bind(edition.id)
+        .bind(map.id)
+        .bind(Medal::Champion as u8)
+        .bind(champion_time)
+        .execute(&mut **mysql_conn)
+        .await?;
 
-        redis_conn
-            .sadd(mappack_key(&mappack_id), map.game_id)
-            .await?;
+        redis_conn.sadd(mappack_key(mappack), map.game_id).await?;
     }
-
-    update_mappacks::persist_mappack(redis_conn, &mappack_id).await?;
 
     tracing::info!("Filling mappack in the Redis database...");
 
-    update_mappacks::update_mappack(&mappack_id, mysql_conn, redis_conn).await?;
+    update_mappacks::update_mappack(mappack, mysql_conn, redis_conn).await?;
 
     tracing::info!("Done");
 

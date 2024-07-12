@@ -1,3 +1,5 @@
+use core::fmt;
+
 use sqlx::{Executor, MySql};
 
 use crate::{error::RecordsResult, models::Map};
@@ -25,10 +27,24 @@ pub struct MxMappackMapItem {
 pub async fn fetch_mx_mappack_maps(
     client: &reqwest::Client,
     mappack_id: u32,
+    secret: Option<&str>,
 ) -> RecordsResult<Vec<MxMappackMapItem>> {
+    struct SecretParam<'a>(Option<&'a str>);
+
+    impl fmt::Display for SecretParam<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            if let Some(s) = self.0 {
+                write!(f, "?secret={s}")?;
+            }
+            Ok(())
+        }
+    }
+
+    let secret = SecretParam(secret);
+
     client
         .get(format!(
-            "https://sm.mania.exchange/api/mappack/get_mappack_tracks/{mappack_id}"
+            "https://sm.mania.exchange/api/mappack/get_mappack_tracks/{mappack_id}{secret}"
         ))
         .header("User-Agent", "obstacle (discord @ahmadbky)")
         .send()

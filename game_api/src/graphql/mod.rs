@@ -137,7 +137,16 @@ impl QueryRoot {
 
     async fn events(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<Event>> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        Ok(query_as("SELECT * FROM event").fetch_all(db).await?)
+
+        Ok(query_as(
+            "select e.* from event e
+            inner join event_edition ee on ee.event_id = e.id
+            where ee.start_date < sysdate()
+                and (ee.ttl is null or sysdate() < ee.start_date + interval ee.ttl second)
+            group by e.id",
+        )
+        .fetch_all(db)
+        .await?)
     }
 
     async fn players(
@@ -445,7 +454,7 @@ fn create_schema(db: Database, client: Client) -> Schema {
             .limit_depth(16)
             .finish();
 
-    #[cfg(feature = "output_gql_schema")]
+    #[cfg(feature = "gql_schema")]
     {
         use std::fs::OpenOptions;
         use std::io::Write;

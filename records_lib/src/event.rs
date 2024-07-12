@@ -1,3 +1,4 @@
+use futures::TryStreamExt;
 use sqlx::MySqlConnection;
 
 use crate::{error::RecordsResult, models};
@@ -6,12 +7,15 @@ use crate::{error::RecordsResult, models};
 pub struct EventListItem {
     pub handle: String,
     pub last_edition_id: i64,
+    pub event: models::Event,
 }
 
 #[derive(sqlx::FromRow)]
 struct RawSqlEventListItem {
     handle: String,
     last_edition_id: u32,
+    #[sqlx(flatten)]
+    event: models::Event,
 }
 
 impl From<RawSqlEventListItem> for EventListItem {
@@ -19,23 +23,26 @@ impl From<RawSqlEventListItem> for EventListItem {
         Self {
             handle: value.handle,
             last_edition_id: value.last_edition_id as _,
+            event: value.event,
         }
     }
 }
 
 pub async fn event_list(db: &mut MySqlConnection) -> RecordsResult<Vec<EventListItem>> {
     sqlx::query_as::<_, RawSqlEventListItem>(
-        "select ev.handle as handle, max(ee.id) as last_edition_id from event ev
+        "select ev.handle as handle, max(ee.id) as last_edition_id, ev.*
+        from event ev
         inner join event_edition ee on ev.id = ee.event_id
         inner join event_edition_maps eem on ee.id = eem.edition_id and ee.event_id = eem.event_id
         where ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate()
         group by ev.id, ev.handle
         order by ev.id",
     )
-    .fetch_all(db)
-    .await
+    .fetch(db)
+    .map_ok(From::from)
     .map_err(From::from)
-    .map(|e| e.into_iter().map(From::from).collect())
+    .try_collect()
+    .await
 }
 
 pub async fn event_editions_list(
@@ -46,7 +53,7 @@ pub async fn event_editions_list(
         "select ee.* from event_edition ee
         inner join event e on ee.event_id = e.id
         where e.handle = ?
-            and ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate()",
+            and (ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate())",
     )
     .bind(event_handle)
     .fetch_all(db)
@@ -71,19 +78,6 @@ pub async fn event_edition_maps(
     .map_err(From::from)
 }
 
-pub fn event_edition_mappack_id(edition: &models::EventEdition) -> String {
-    edition
-        .mx_id
-        .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| event_edition_key(edition.event_id, edition.id))
-}
-
-#[inline(always)]
-pub fn event_edition_key(event_id: u32, edition_id: u32) -> String {
-    format!("__{event_id}__{edition_id}__")
-}
-
 pub async fn get_event_by_handle(
     db: &mut MySqlConnection,
     handle: &str,
@@ -102,12 +96,12 @@ pub async fn get_edition_by_id(
 ) -> RecordsResult<Option<models::EventEdition>> {
     let r = sqlx::query_as(
         "SELECT * FROM event_edition
-        WHERE event_id = ? AND id = ?"
+        WHERE event_id = ? AND id = ?",
     )
-        .bind(event_id)
-        .bind(edition_id)
-        .fetch_optional(db)
-        .await?;
+    .bind(event_id)
+    .bind(edition_id)
+    .fetch_optional(db)
+    .await?;
     Ok(r)
 }
 

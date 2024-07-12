@@ -43,4 +43,4 @@ mkenv = { workspace = true }
 
 [features]
 default = []
-output_gql_schema = []
+gql_schema = []

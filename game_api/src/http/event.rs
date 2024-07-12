@@ -119,7 +119,7 @@ struct EventHandleEditionResponse {
     start_date: chrono::NaiveDateTime,
     banner_img_url: String,
     banner2_img_url: String,
-    mx_id: i32,
+    mx_id: i64,
     expired: bool,
     categories: Vec<Category>,
 }

@@ -2,12 +2,11 @@ use core::fmt;
 
 use deadpool_redis::redis::{RedisWrite, ToRedisArgs};
 
-use crate::models;
+use crate::{models, update_mappacks::MappackKind};
 
 const V3_KEY_PREFIX: &str = "v3";
 
 const V3_MAPPACK_KEY_PREFIX: &str = "mappack";
-const V3_NO_TTL_MAPPACKS: &str = "no_ttl_mappacks";
 
 const V3_MAP_KEY_PREFIX: &str = "lb";
 
@@ -33,11 +32,13 @@ const V3_MAPPACK_MAP_LAST_RANK: &str = "last_rank";
 
 macro_rules! create_key {
     (
+        $(#[$($attr:tt)*])*
         struct $name:ident$(<$l:lifetime => $_:lifetime>)? = $fn_name:ident $({
             $($field:ident: $field_ty:ty),* $(,)?
         })?$(;$semicolon:tt)?
         |$self:ident, $f:ident| $fmt_expr:expr
     ) => {
+        $(#[$($attr)*])*
         #[derive(Debug)]
         pub struct $name$(<$l>)? $({
             $(pub $field: $field_ty),*
@@ -73,18 +74,13 @@ create_key! {
 
 create_key! {
     struct MappackKey<'a => '_> = mappack_key {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
     }
     |self, f| write!(
-            f,
-            "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}",
-            self.mappack_id
-        )
-}
-
-create_key! {
-    struct NoTtlMappacks = no_ttl_mappacks;;
-    |self, f| write!(f, "{V3_KEY_PREFIX}:{V3_NO_TTL_MAPPACKS}")
+        f,
+        "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}",
+        self.mappack.mappack_id()
+    )
 }
 
 create_key! {
@@ -215,116 +211,116 @@ impl fmt::Display for TokenKey<'_, MP> {
 
 create_key! {
     struct MappackTimeKey<'a => '_> = mappack_time_key {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
     }
-    |self, f| write!(f, "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_TIME}", self.mappack_id)
+    |self, f| write!(f, "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_TIME}", self.mappack.mappack_id())
 }
 
 create_key! {
     struct MappackNbMapKey<'a => '_> = mappack_nb_map_key {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
     }
     |self, f| write!(
         f,
         "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_NB_MAP}",
-        self.mappack_id
+        self.mappack.mappack_id()
     )
 }
 
 create_key! {
     struct MappackMxUsernameKey<'a => '_> = mappack_mx_username_key {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
     }
     |self, f| write!(f, "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_MX_USERNAME}",
-        self.mappack_id
+        self.mappack.mappack_id()
     )
 }
 
 create_key! {
     struct MappackMxNameKey<'a => '_> = mappack_mx_name_key {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
     }
     |self, f| write!(f, "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_MX_NAME}",
-        self.mappack_id
+        self.mappack.mappack_id()
     )
 }
 
 create_key! {
     struct MappackMxCreatedKey<'a => '_> = mappack_mx_created_key {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
     }
     |self, f| write!(f, "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_MX_CREATED}",
-        self.mappack_id
+        self.mappack.mappack_id()
     )
 }
 
 create_key! {
     struct MappackLbKey<'a => '_> = mappack_lb_key {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
     }
     |self, f| write!(
         f,
         "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_LB}",
-        self.mappack_id
+        self.mappack.mappack_id()
     )
 }
 
 create_key! {
     struct MappackPlayerRankAvg<'a => '_> = mappack_player_rank_avg_key {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
         player_id: u32,
     }
     |self, f| write!(
         f,
         "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_LB}:{}:{V3_MAPPACK_LB_RANK_AVG}",
-        self.mappack_id, self.player_id
+        self.mappack.mappack_id(), self.player_id
     )
 }
 
 create_key! {
     struct MappackPlayerMapFinished<'a => '_> = mappack_player_map_finished_key {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
         player_id: u32,
     }
     |self, f| write!(
         f,
         "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_LB}:{}:{V3_MAPPACK_LB_MAP_FINISHED}",
-        self.mappack_id, self.player_id
+        self.mappack.mappack_id(), self.player_id
     )
 }
 
 create_key! {
     struct MappackPlayerWorstRank<'a => '_> = mappack_player_worst_rank_key {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
         player_id: u32,
     }
     |self, f| write!(
         f,
         "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_LB}:{}:{V3_MAPPACK_LB_WORST_RANK}",
-        self.mappack_id, self.player_id
+        self.mappack.mappack_id(), self.player_id
     )
 }
 
 create_key! {
     struct MappackPlayerRanks<'a => '_> = mappack_player_ranks_key {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
         player_id: u32,
     }
     |self, f| write!(
         f,
         "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_LB}:{}:{V3_MAPPACK_LB_RANKS}",
-        self.mappack_id, self.player_id
+        self.mappack.mappack_id(), self.player_id
     )
 }
 
 create_key! {
     struct MappackMapLastRank<'a => '_> = mappack_map_last_rank {
-        mappack_id: &'a str,
+        mappack: MappackKind<'a>,
         game_id: &'a str,
     }
     |self, f| write!(
         f,
         "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_MAP_KEY_PREFIX}:{}:{V3_MAPPACK_MAP_LAST_RANK}",
-        self.mappack_id, self.game_id
+        self.mappack.mappack_id(), self.game_id
     )
 }
