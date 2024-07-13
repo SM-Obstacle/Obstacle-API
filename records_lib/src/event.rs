@@ -7,6 +7,7 @@ use crate::{error::RecordsResult, models};
 pub struct EventListItem {
     pub handle: String,
     pub last_edition_id: i64,
+    #[serde(skip_serializing)]
     pub event: models::Event,
 }
 
@@ -34,7 +35,8 @@ pub async fn event_list(db: &mut MySqlConnection) -> RecordsResult<Vec<EventList
         from event ev
         inner join event_edition ee on ev.id = ee.event_id
         inner join event_edition_maps eem on ee.id = eem.edition_id and ee.event_id = eem.event_id
-        where ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate()
+        where ee.start_date < sysdate()
+            and (ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate())
         group by ev.id, ev.handle
         order by ev.id",
     )
@@ -52,7 +54,7 @@ pub async fn event_editions_list(
     let res = sqlx::query_as(
         "select ee.* from event_edition ee
         inner join event e on ee.event_id = e.id
-        where e.handle = ?
+        where e.handle = ? and ee.start_date < sysdate()
             and (ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate())",
     )
     .bind(event_handle)

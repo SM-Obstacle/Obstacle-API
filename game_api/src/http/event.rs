@@ -3,7 +3,7 @@ use actix_web::{
     Responder, Scope,
 };
 use itertools::Itertools;
-use records_lib::{event, models, Database};
+use records_lib::{error::RecordsError, event, models, Database};
 use serde::Serialize;
 use sqlx::FromRow;
 use tracing_actix_web::RequestId;
@@ -151,7 +151,7 @@ async fn event_editions(
 
     let res: Vec<RawEventHandleResponse> = sqlx::query_as(
         "select ee.* from event_edition ee
-        where ee.event_id = ?
+        where ee.event_id = ? and ee.start_date < sysdate()
             and (ee.event_id, ee.id) in (
             select eem.event_id, eem.edition_id from event_edition_maps eem
         ) order by ee.id desc",
@@ -212,6 +212,13 @@ async fn edition(
         records_lib::must::have_event_edition(mysql_conn, &event_handle, edition_id)
             .await
             .fit(req_id)?;
+
+    // The edition is not yet released
+    if chrono::Utc::now() < edition.start_date.and_utc() {
+        return Err(RecordsError::EventEditionNotFound(event_handle, edition_id))
+            .with_api_err()
+            .fit(req_id);
+    }
 
     let maps = get_maps_by_edition_id(&db, event_id, edition_id)
         .await
