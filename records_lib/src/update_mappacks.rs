@@ -317,7 +317,7 @@ async fn calc_scores(
     let mut maps = Vec::with_capacity(mappack_uids.len().max(5));
 
     let event = mappack.to_opt_event();
-    let (join_event, and_event) = event.get_sql_fragments();
+    let (view_name, and_event) = event.get_view();
 
     let mappack = if mappack_uids.is_empty() {
         // If the mappack is empty, it means either that it's an invalid/unknown mappack ID,
@@ -348,8 +348,7 @@ async fn calc_scores(
     for (i, map) in mappack.iter().enumerate() {
         let query = format!(
             "SELECT r.*, p.id as player_id2, p.login as player_login, p.name as player_name
-            FROM global_records r
-            {join_event}
+            FROM {view_name} r
             INNER JOIN players p ON p.id = r.record_player_id
             WHERE map_id = ?
             {and_event}
@@ -386,7 +385,7 @@ async fn calc_scores(
                     (&mut *mysql_conn, redis_conn),
                     map.id,
                     record.record.time,
-                    None,
+                    event,
                 )
                 .await?,
                 record,

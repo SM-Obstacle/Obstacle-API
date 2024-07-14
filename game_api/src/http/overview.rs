@@ -50,7 +50,7 @@ async fn get_range(
 ) -> RecordsResult<Vec<RankedRecord>> {
     let key = map_key(*map_id, event);
 
-    let (join_event, and_event) = event.get_sql_fragments();
+    let (join_event, and_event) = event.get_join();
 
     // transforms exclusive to inclusive range
     let end = end - 1;
@@ -85,8 +85,6 @@ async fn get_range(
         GROUP BY record_player_id
         ORDER BY time, record_date ASC",
         params = params,
-        join_event = join_event,
-        and_event = and_event,
     );
 
     let mut query = sqlx::query_as(&query).bind(map_id);

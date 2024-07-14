@@ -54,7 +54,7 @@ impl Map {
 
         let key = alone_map_key(self.inner.id);
 
-        update_leaderboard((mysql_conn, redis_conn), self.inner.id, None).await?;
+        update_leaderboard((mysql_conn, redis_conn), self.inner.id, event).await?;
 
         let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
         let record_ids: Vec<i32> = if to_reverse {
@@ -86,12 +86,11 @@ impl Map {
             )
         };
 
-        let (join_event, and_event) = event.get_sql_fragments();
+        let (view_name, and_event) = event.get_view();
 
         // Query the records with these ids
         let query = format!(
-            "SELECT * FROM global_records r
-            {join_event}
+            "SELECT * FROM {view_name} r
             WHERE map_id = ? {and_player_id_in}
             {and_event}
             ORDER BY {order_by_clause}
@@ -125,7 +124,7 @@ impl Map {
                 (&mut *mysql_conn, redis_conn),
                 self.inner.id,
                 record.time,
-                None,
+                event,
             )
             .await?;
 

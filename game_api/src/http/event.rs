@@ -273,6 +273,7 @@ async fn edition(
                 .fit(req_id)?;
                 let personal_best = personal_best.unwrap_or(-1);
 
+                // FIXME: use the `global_event_records` view
                 let next_opponent = sqlx::query_as(
                     "select p.login, p.name, gr2.time from global_records gr
                     inner join players player_from on player_from.id = gr.record_player_id

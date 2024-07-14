@@ -221,7 +221,6 @@ struct EventEditionPlayer<'a> {
 #[graphql(complex)]
 struct EventEditionMap<'a> {
     edition: &'a EventEdition<'a>,
-    #[graphql(flatten)]
     map: super::map::Map,
 }
 
@@ -347,12 +346,11 @@ impl EventEditionPlayerCategorizedRank<'_> {
 
         if self.category.id == 0 {
             let res = sqlx::query(
-                "select m.game_id, r.time from event_edition_records
-                inner join global_records r on event_edition_records.record_id = r.record_id
-                inner join event_edition_maps eem on r.map_id = eem.map_id
-                inner join maps m on eem.map_id = m.id
-                where eem.event_id = ? and eem.edition_id = ? and r.record_player_id = ?
-                order by eem.`order` asc",
+                "select m.game_id, r.time from global_event_records r
+                inner join maps m on m.id = r.map_id
+                inner join event_edition_maps eem on eem.map_id = m.id
+                where r.event_id = ? and r.edition_id = ? and r.record_player_id = ?
+                order by eem.`order`",
             )
             .bind(self.player.edition.inner.event_id)
             .bind(self.player.edition.inner.id)
@@ -373,13 +371,13 @@ impl EventEditionPlayerCategorizedRank<'_> {
         }
 
         let res = sqlx::query(
-            "select m.game_id AS game_id, r.time AS time from event_edition_records
-            inner join global_records r on event_edition_records.record_id = r.record_id
-            inner join event_edition_maps eem on r.map_id = eem.map_id
-            inner join maps m on eem.map_id = m.id
+            "select m.game_id as game_id, r.time as time
+            from global_event_records r
+            inner join event_edition_maps eem on eem.map_id = r.map_id
+            inner join maps m on m.id = eem.map_id
             inner join event_category ec on eem.category_id = ec.id
             where eem.event_id = ? and eem.edition_id = ? and r.record_player_id = ? and ec.id = ?
-            order by eem.`order` asc",
+            order by eem.`order`",
         )
         .bind(self.player.edition.inner.event_id)
         .bind(self.player.edition.inner.id)
@@ -483,7 +481,7 @@ impl EventEditionPlayer<'_> {
         let mut unfinished_maps = sqlx::query_as(
             "select m.* from maps m
             inner join event_edition_maps eem on m.id = eem.map_id
-            left join global_records gr on m.id = gr.map_id and gr.record_player_id = ?
+            left join records gr on m.id = gr.map_id and gr.record_player_id = ?
             left join event_edition_records eer on gr.record_id = eer.record_id
             where eem.event_id = ? and eem.edition_id = ? and gr.record_id is null",
         )

@@ -137,7 +137,7 @@ pub async fn finished(
         cps: body.cps,
     };
 
-    let (join_event, and_event) = event.get_sql_fragments();
+    let (join_event, and_event) = event.get_join();
 
     // We check that the cps times are coherent to the final time
     if matches!(cps_number, Some(num) if num + 1 != params.cps.len() as u32)
