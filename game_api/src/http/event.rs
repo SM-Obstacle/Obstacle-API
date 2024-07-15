@@ -273,19 +273,23 @@ async fn edition(
                 .fit(req_id)?;
                 let personal_best = personal_best.unwrap_or(-1);
 
-                // FIXME: use the `global_event_records` view
                 let next_opponent = sqlx::query_as(
-                    "select p.login, p.name, gr2.time from global_records gr
-                    inner join players player_from on player_from.id = gr.record_player_id
-                    inner join event_edition_records eer on gr.record_id = eer.record_id
-                    inner join event_edition_records eer2 on eer.event_id = eer2.event_id and eer.edition_id = eer2.edition_id
-                    inner join global_records gr2 on gr.map_id = gr2.map_id and gr2.record_id = eer2.record_id
+                    "select p.login, p.name, gr2.time from global_event_records gr
+                    inner join players player_from
+                    on player_from.id = gr.record_player_id
+                    inner join global_event_records gr2
+                    on gr2.map_id = gr.map_id
+                        and gr2.event_id = gr.event_id
+                        and gr2.edition_id = gr.edition_id
                         and gr2.time < gr.time
                     inner join players p on p.id = gr2.record_player_id
-                    where player_from.login = ? and gr.map_id = ?
-                        and eer.event_id = ? and eer.edition_id = ?
+                    where player_from.login = ?
+                        and gr.map_id = ?
+                        and gr.event_id = ?
+                        and gr.edition_id = ?
                     order by gr2.time desc
-                    limit 1")
+                    limit 1",
+                )
                 .bind(login)
                 .bind(map.id)
                 .bind(event_id)
