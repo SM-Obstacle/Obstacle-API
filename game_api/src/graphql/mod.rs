@@ -315,7 +315,7 @@ impl QueryRoot {
                 (mysql_conn, redis_conn),
                 record.map_id,
                 record.time,
-                None,
+                Default::default(),
             )
             .await?,
             record,
@@ -373,9 +373,13 @@ impl QueryRoot {
         while let Some(record) = records.next().await {
             let record = record?;
 
-            let rank =
-                get_rank_or_full_update((mysql_conn, redis_conn), record.map_id, record.time, None)
-                    .await?;
+            let rank = get_rank_or_full_update(
+                (mysql_conn, redis_conn),
+                record.map_id,
+                record.time,
+                Default::default(),
+            )
+            .await?;
 
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }

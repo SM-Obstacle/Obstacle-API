@@ -2,7 +2,7 @@ use core::fmt;
 
 use deadpool_redis::redis::{RedisWrite, ToRedisArgs};
 
-use crate::{models, update_mappacks::MappackKind};
+use crate::{event::OptEvent, update_mappacks::MappackKind};
 
 const V3_KEY_PREFIX: &str = "v3";
 
@@ -150,11 +150,8 @@ impl fmt::Display for MapKey<'_> {
     }
 }
 
-pub fn map_key<'a>(
-    map_id: u32,
-    event: Option<(&'a models::Event, &'a models::EventEdition)>,
-) -> MapKey<'a> {
-    match event {
+pub fn map_key<'a>(map_id: u32, event: OptEvent<'a, 'a>) -> MapKey<'a> {
+    match event.0 {
         Some((event, edition)) => MapKey::Evented(event_map_key(map_id, &event.handle, edition.id)),
         None => MapKey::Alone(alone_map_key(map_id)),
     }

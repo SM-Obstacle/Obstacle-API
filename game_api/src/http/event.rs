@@ -4,7 +4,11 @@ use actix_web::{
 };
 use futures::TryStreamExt;
 use itertools::Itertools;
-use records_lib::{error::RecordsError, event, models, Database};
+use records_lib::{
+    error::RecordsError,
+    event::{self, OptEvent},
+    models, Database,
+};
 use serde::Serialize;
 use sqlx::FromRow;
 use tracing_actix_web::RequestId;
@@ -424,7 +428,7 @@ async fn edition_overview(
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    overview::overview(req_id, db, query, Some((&event, &edition))).await
+    overview::overview(req_id, db, query, OptEvent::new(&event, &edition)).await
 }
 
 #[inline(always)]
@@ -476,7 +480,7 @@ pub async fn edition_finished_at(
     }
 
     // Then we insert the record for the global records
-    let res = pf::finished(login, &db, body, Some((&event, &edition)), at)
+    let res = pf::finished(login, &db, body, OptEvent::new(&event, &edition), at)
         .await
         .fit(req_id)?;
 
@@ -524,5 +528,5 @@ async fn edition_pb(
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    pb::pb(login, req_id, db, body, Some((&event, &edition))).await
+    pb::pb(login, req_id, db, body, OptEvent::new(&event, &edition)).await
 }

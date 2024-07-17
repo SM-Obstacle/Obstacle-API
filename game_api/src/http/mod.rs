@@ -83,5 +83,5 @@ async fn overview(
     db: Res<Database>,
     query: overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    overview::overview(req_id, db, query, None).await
+    overview::overview(req_id, db, query, Default::default()).await
 }

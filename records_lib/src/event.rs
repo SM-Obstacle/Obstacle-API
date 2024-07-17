@@ -3,6 +3,36 @@ use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
 
 use crate::{error::RecordsResult, models};
 
+#[derive(Default, Clone, Copy)]
+pub struct OptEvent<'ev, 'ed>(pub Option<(&'ev models::Event, &'ed models::EventEdition)>);
+
+impl<'ev, 'ed> OptEvent<'ev, 'ed> {
+    pub fn new(event: &'ev models::Event, edition: &'ed models::EventEdition) -> Self {
+        Self(Some((event, edition)))
+    }
+
+    pub fn get_view(&self) -> (&'static str, &'static str) {
+        if self.0.is_some() {
+            (
+                "global_event_records",
+                "and r.event_id = ? and r.edition_id = ?",
+            )
+        } else {
+            ("global_records", "")
+        }
+    }
+
+    pub fn get_join(&self) -> (&'static str, &'static str) {
+        self.0
+            .is_some()
+            .then_some((
+                "inner join event_edition_records eer on eer.record_id = r.record_id",
+                "and eer.event_id = ? and eer.edition_id = ?",
+            ))
+            .unwrap_or_default()
+    }
+}
+
 #[derive(serde::Serialize)]
 pub struct EventListItem {
     pub handle: String,

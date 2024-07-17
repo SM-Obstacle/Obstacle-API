@@ -1,10 +1,11 @@
 use actix_web::web::Json;
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
-    models::{self, Map, Record},
+    event::OptEvent,
+    models,
     redis_key::map_key,
     update_ranks::{get_rank_or_full_update, update_leaderboard},
-    Database, GetSqlFragments,
+    Database,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Connection;
@@ -82,10 +83,10 @@ async fn send_query(
 
 async fn insert_record(
     db: &Database,
-    map @ Map { id: map_id, .. }: &Map,
+    map @ models::Map { id: map_id, .. }: &models::Map,
     player_id: u32,
     body: &InsertRecordParams,
-    event: Option<(&models::Event, &models::EventEdition)>,
+    event: OptEvent<'_, '_>,
     at: chrono::NaiveDateTime,
 ) -> RecordsResult<u32> {
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err()?;
@@ -117,14 +118,14 @@ pub async fn finished(
     login: String,
     db: &Database,
     body: HasFinishedBody,
-    event: Option<(&models::Event, &models::EventEdition)>,
+    event: OptEvent<'_, '_>,
     at: chrono::NaiveDateTime,
 ) -> RecordsResult<FinishedOutput> {
     // First, we retrieve all what we need to save the record
     let player_id = records_lib::must::have_player(&db.mysql_pool, &login)
         .await?
         .id;
-    let ref map @ Map {
+    let ref map @ models::Map {
         id: map_id,
         cps_number,
         ..
@@ -157,17 +158,17 @@ pub async fn finished(
     );
 
     // We retrieve the optional old record to compare with the new one
-    let mut query = sqlx::query_as::<_, Record>(&query)
+    let mut query = sqlx::query_as::<_, models::Record>(&query)
         .bind(map_id)
         .bind(player_id);
 
-    if let Some((event, edition)) = event {
+    if let Some((event, edition)) = event.0 {
         query = query.bind(event.id).bind(edition.id);
     }
 
     let old_record = query.fetch_optional(&db.mysql_pool).await.with_api_err()?;
 
-    let (old, new, has_improved) = if let Some(Record { time: old, .. }) = old_record {
+    let (old, new, has_improved) = if let Some(models::Record { time: old, .. }) = old_record {
         let improved = params.time < old;
 
         (old, params.time, improved)
@@ -181,13 +182,13 @@ pub async fn finished(
     // TODO: Remove this after having added event mode into the TP
     let original_uid = body.map_uid.replace("_benchmark", "");
     if original_uid != body.map_uid {
-        let ref map @ Map {
+        let ref map @ models::Map {
             cps_number: original_cps_number,
             ..
         } = records_lib::must::have_map(&db.mysql_pool, &original_uid).await?;
 
         if cps_number == original_cps_number {
-            insert_record(db, map, player_id, &params, None, at).await?;
+            insert_record(db, map, player_id, &params, Default::default(), at).await?;
         } else {
             return Err(RecordsErrorKind::from(
                 records_lib::error::RecordsError::MapNotFound(original_uid),

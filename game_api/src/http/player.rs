@@ -196,7 +196,7 @@ pub async fn finished_at(
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
-    let res = pf::finished(login, &db, body, None, at)
+    let res = pf::finished(login, &db, body, Default::default(), at)
         .await
         .fit(req_id)?
         .res;
@@ -316,7 +316,7 @@ async fn pb(
     db: Res<Database>,
     body: pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
-    pb::pb(login, req_id, db, body, None).await
+    pb::pb(login, req_id, db, body, Default::default()).await
 }
 
 #[derive(Deserialize)]

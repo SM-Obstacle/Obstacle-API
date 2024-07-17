@@ -7,6 +7,7 @@ use sqlx::MySqlConnection;
 use crate::{
     error::RecordsResult,
     escaped::Escaped,
+    event::OptEvent,
     models, must,
     redis_key::{
         mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_nb_map_key,
@@ -14,7 +15,7 @@ use crate::{
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
     update_ranks::get_rank_or_full_update,
-    GetSqlFragments, RedisConnection,
+    RedisConnection,
 };
 
 #[derive(SimpleObject, Default, Clone, Debug)]
@@ -116,10 +117,10 @@ impl MappackKind<'_> {
         MappackIdDisp { kind: self }
     }
 
-    fn get_event(&self) -> Option<(&models::Event, &models::EventEdition)> {
+    fn get_event(&self) -> OptEvent<'_, '_> {
         match self {
-            Self::Event(event, edition) => Some((event, edition)),
-            Self::Id(_) => None,
+            Self::Event(event, edition) => OptEvent::new(event, edition),
+            Self::Id(_) => Default::default(),
         }
     }
 
@@ -356,7 +357,7 @@ async fn calc_scores(
         );
 
         let query = sqlx::query_as::<_, RecordRow>(&query).bind(map.id);
-        let query = if let Some((event, edition)) = event {
+        let query = if let Some((event, edition)) = event.0 {
             query.bind(event.id).bind(edition.id)
         } else {
             query

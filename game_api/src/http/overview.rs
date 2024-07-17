@@ -2,10 +2,11 @@ use actix_web::{web::Query, Responder};
 use deadpool_redis::{redis::AsyncCommands, Connection as RedisConnection};
 use futures::StreamExt;
 use records_lib::{
-    models::{self, Map},
+    event::OptEvent,
+    models,
     redis_key::map_key,
     update_ranks::{get_rank_or_full_update, update_leaderboard},
-    Database, GetSqlFragments,
+    Database,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlConnection;
@@ -29,7 +30,7 @@ pub struct RecordQueryRow {
     pub nickname: String,
     pub time: i32,
     #[sqlx(flatten)]
-    pub map: Map,
+    pub map: models::Map,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, sqlx::FromRow)]
@@ -44,9 +45,9 @@ pub struct RankedRecord {
 async fn get_range(
     db: &Database,
     (mysql_conn, redis_conn): (&mut MySqlConnection, &mut RedisConnection),
-    Map { id: map_id, .. }: &Map,
+    models::Map { id: map_id, .. }: &models::Map,
     (start, end): (u32, u32),
-    event: Option<(&models::Event, &models::EventEdition)>,
+    event: OptEvent<'_, '_>,
 ) -> RecordsResult<Vec<RankedRecord>> {
     let key = map_key(*map_id, event);
 
@@ -92,7 +93,7 @@ async fn get_range(
         query = query.bind(id);
     }
 
-    if let Some((event, edition)) = event {
+    if let Some((event, edition)) = event.0 {
         query = query.bind(event.id).bind(edition.id);
     }
 
@@ -125,12 +126,12 @@ pub async fn overview(
     req_id: RequestId,
     db: Res<Database>,
     Query(body): Query<OverviewQuery>,
-    event: Option<(&models::Event, &models::EventEdition)>,
+    event: OptEvent<'_, '_>,
 ) -> RecordsResponse<impl Responder> {
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
     let redis_conn = &mut db.redis_pool.get().await.fit(req_id)?;
 
-    let ref map @ Map { id, linked_map, .. } =
+    let ref map @ models::Map { id, linked_map, .. } =
         records_lib::must::have_map(&mut **mysql_conn, &body.map_uid)
             .await
             .fit(req_id)?;

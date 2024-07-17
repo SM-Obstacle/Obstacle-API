@@ -7,7 +7,7 @@ use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use records_lib::{
     escaped::Escaped,
-    event::{self, MedalTimes},
+    event::{self, MedalTimes, OptEvent},
     models::{self, EventCategory},
     must,
     redis_key::{mappack_map_last_rank, mappack_player_ranks_key},
@@ -516,10 +516,10 @@ impl EventEditionMap<'_> {
                 ctx,
                 rank_sort_by,
                 date_sort_by,
-                Some(match self.edition.event {
-                    Cow::Borrowed(event) => (&event.inner, &self.edition.inner),
-                    Cow::Owned(ref event) => (&event.inner, &self.edition.inner),
-                }),
+                match self.edition.event {
+                    Cow::Borrowed(event) => OptEvent::new(&event.inner, &self.edition.inner),
+                    Cow::Owned(ref event) => OptEvent::new(&event.inner, &self.edition.inner),
+                },
             )
             .await
     }

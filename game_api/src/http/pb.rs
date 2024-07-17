@@ -1,6 +1,6 @@
 use actix_web::{web::Query, Responder};
 use futures::StreamExt;
-use records_lib::{models, Database, GetSqlFragments};
+use records_lib::{event::OptEvent, Database};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use tracing_actix_web::RequestId;
@@ -38,7 +38,7 @@ pub async fn pb(
     req_id: RequestId,
     db: Res<Database>,
     Query(PbBody { map_uid }): PbReq,
-    event: Option<(&models::Event, &models::EventEdition)>,
+    event: OptEvent<'_, '_>,
 ) -> RecordsResponse<impl Responder> {
     let (view_name, and_event) = event.get_view();
 
@@ -56,7 +56,7 @@ pub async fn pb(
         .bind(map_uid)
         .bind(login);
 
-    let query = if let Some((event, edition)) = event {
+    let query = if let Some((event, edition)) = event.0 {
         query.bind(event.id).bind(edition.id)
     } else {
         query

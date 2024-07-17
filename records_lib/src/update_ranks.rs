@@ -3,9 +3,9 @@ use sqlx::{Executor, MySql, MySqlConnection};
 
 use crate::{
     error::RecordsResult,
-    models,
+    event::OptEvent,
     redis_key::{map_key, MapKey},
-    GetSqlFragments, RedisConnection,
+    RedisConnection,
 };
 
 async fn count_records_map<'c, E: Executor<'c, Database = MySql>>(
@@ -33,7 +33,7 @@ async fn count_records_map<'c, E: Executor<'c, Database = MySql>>(
 pub async fn update_leaderboard(
     (db, redis_conn): (&mut MySqlConnection, &mut RedisConnection),
     map_id: u32,
-    event: Option<(&models::Event, &models::EventEdition)>,
+    event: OptEvent<'_, '_>,
 ) -> RecordsResult<i64> {
     let key = map_key(map_id, event);
     let redis_count: i64 = redis_conn.zcount(&key, "-inf", "+inf").await?;
@@ -54,7 +54,7 @@ pub async fn update_leaderboard(
 
         let mut query = sqlx::query_as(&query).bind(map_id);
 
-        if let Some((event, edition)) = event {
+        if let Some((event, edition)) = event.0 {
             query = query.bind(event.id).bind(edition.id);
         }
 
@@ -79,7 +79,7 @@ pub async fn get_rank_or_full_update(
     (db, redis_conn): (&mut MySqlConnection, &mut RedisConnection),
     map_id: u32,
     time: i32,
-    event: Option<(&models::Event, &models::EventEdition)>,
+    event: OptEvent<'_, '_>,
 ) -> RecordsResult<i32> {
     async fn get_rank(
         redis_conn: &mut RedisConnection,

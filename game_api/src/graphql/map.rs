@@ -8,12 +8,13 @@ use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
     escaped::Escaped,
+    event::OptEvent,
     map,
     models::{self, Record},
     must,
     redis_key::alone_map_key,
     update_ranks::{get_rank_or_full_update, update_leaderboard},
-    Database, GetSqlFragments as _,
+    Database,
 };
 use sqlx::{mysql, FromRow, MySqlPool};
 
@@ -46,7 +47,7 @@ impl Map {
         ctx: &async_graphql::Context<'_>,
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
-        event: Option<(&models::Event, &models::EventEdition)>,
+        event: OptEvent<'_, '_>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let mysql_conn = &mut db.mysql_pool.acquire().await?;
@@ -109,7 +110,7 @@ impl Map {
             }
         }
 
-        if let Some((event, edition)) = event {
+        if let Some((event, edition)) = event.0 {
             query = query.bind(event.id).bind(edition.id);
         }
 
@@ -284,7 +285,7 @@ impl Map {
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
-        self.get_records(ctx, rank_sort_by, date_sort_by, None)
+        self.get_records(ctx, rank_sort_by, date_sort_by, Default::default())
             .await
     }
 }

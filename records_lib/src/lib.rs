@@ -20,34 +20,6 @@ pub type MySqlPool = Pool<MySql>;
 pub type RedisPool = deadpool_redis::Pool;
 pub type RedisConnection = deadpool_redis::Connection;
 
-pub trait GetSqlFragments {
-    fn get_view(self) -> (&'static str, &'static str);
-
-    fn get_join(self) -> (&'static str, &'static str);
-}
-
-impl GetSqlFragments for Option<(&models::Event, &models::EventEdition)> {
-    fn get_view(self) -> (&'static str, &'static str) {
-        if self.is_some() {
-            (
-                "global_event_records",
-                "and r.event_id = ? and r.edition_id = ?",
-            )
-        } else {
-            ("global_records", "")
-        }
-    }
-
-    fn get_join(self) -> (&'static str, &'static str) {
-        self.is_some()
-            .then_some((
-                "inner join event_edition_records eer on eer.record_id = r.record_id",
-                "and eer.event_id = ? and eer.edition_id = ?",
-            ))
-            .unwrap_or_default()
-    }
-}
-
 #[derive(Clone)]
 pub struct Database {
     pub mysql_pool: MySqlPool,
