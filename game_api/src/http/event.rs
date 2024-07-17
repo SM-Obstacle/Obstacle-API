@@ -2,6 +2,7 @@ use actix_web::{
     web::{self, Path},
     Responder, Scope,
 };
+use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{error::RecordsError, event, models, Database};
 use serde::Serialize;
@@ -111,16 +112,38 @@ impl From<Vec<Map>> for Category {
     }
 }
 
+/// An event edition from the point of view of the Obstacle gamemode.
 #[derive(Serialize)]
 struct EventHandleEditionResponse {
+    /// The edition ID.
     id: u32,
+    /// The name of the edition.
     name: String,
+    /// The subtitle of the edition.
+    ///
+    /// For the 2nd campaign, the name is "Winter" and the subtitle is "2024" for example.
+    /// It is empty if it doesn't have a subtitle.
     subtitle: String,
-    start_date: chrono::NaiveDateTime,
+    /// The ManiaPlanet nicknames of the authors.
+    authors: Vec<String>,
+    /// The formatted start date of the edition, in the format dd/mm/YYYY HH:MM.
+    start_date: String,
+    /// The formatted end date of the edition, in the format dd/mm/YYYY HH:MM.
+    ///
+    /// This is empty if the edition doesn't expire.
+    end_date: String,
+    /// The URL to the banner image of the edition, used in the Titlepack menu.
     banner_img_url: String,
+    /// The URL to the small banner image of the edition, used in game in the Campaign mode.
     banner2_img_url: String,
+    /// The MX ID of the related mappack.
     mx_id: i64,
+    /// Whether the edition has expired or not.
     expired: bool,
+    /// The content of the edition (the categories).
+    ///
+    /// If the event has no category, the maps are grouped in a single category with all
+    /// its fields empty.
     categories: Vec<Category>,
 }
 
@@ -224,7 +247,7 @@ async fn edition(
         .await
         .fit(req_id)?
         .into_iter()
-        .group_by(|m| m.category_id);
+        .chunk_by(|m| m.category_id);
     let maps = maps.into_iter();
 
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
@@ -357,10 +380,20 @@ async fn edition(
 
     json(EventHandleEditionResponse {
         expired: edition.has_expired(),
+        end_date: edition
+            .expire_date()
+            .map(|d| d.format("%d/%m/%Y %H:%M").to_string())
+            .unwrap_or_default(),
         id: edition.id,
         name: edition.name,
         subtitle: edition.subtitle.unwrap_or_default(),
-        start_date: edition.start_date,
+        authors: event::get_admins_of(mysql_conn, edition.event_id, edition.id)
+            .map_ok(|p| p.name)
+            .try_collect()
+            .await
+            .with_api_err()
+            .fit(req_id)?,
+        start_date: edition.start_date.format("%d/%m/%Y %H:%M").to_string(),
         banner_img_url: edition.banner_img_url.unwrap_or_default(),
         banner2_img_url: edition.banner2_img_url.unwrap_or_default(),
         mx_id: edition.mx_id.unwrap_or(-1),

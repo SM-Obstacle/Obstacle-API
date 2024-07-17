@@ -2,7 +2,7 @@ use std::{borrow::Cow, collections::HashMap, iter::repeat, sync::Arc};
 
 use async_graphql::{dataloader::Loader, Context};
 use deadpool_redis::redis::AsyncCommands;
-use futures::StreamExt as _;
+use futures::{StreamExt as _, TryStreamExt};
 use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use records_lib::{
@@ -541,20 +541,12 @@ impl EventEdition<'_> {
     }
 
     async fn admins(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Player>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let q = sqlx::query_as(
-            "SELECT * FROM players
-            WHERE id IN (
-                SELECT player_id FROM event_edition_admins
-                WHERE event_id = ? AND edition_id = ?
-            )",
-        )
-        .bind(self.inner.event_id)
-        .bind(self.inner.id)
-        .fetch_all(db)
-        .await?;
-
-        Ok(q)
+        let mut db = ctx.data_unchecked::<MySqlPool>().acquire().await?;
+        let a = event::get_admins_of(&mut db, self.inner.event_id, self.inner.id)
+            .map_ok(From::from)
+            .try_collect()
+            .await?;
+        Ok(a)
     }
 
     async fn event(&self) -> &Event {

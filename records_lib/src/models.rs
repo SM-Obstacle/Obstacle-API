@@ -248,7 +248,7 @@ pub struct EventEdition {
 }
 
 impl EventEdition {
-    fn expire_date(&self) -> Option<chrono::NaiveDateTime> {
+    pub fn expire_date(&self) -> Option<chrono::NaiveDateTime> {
         self.ttl.and_then(|ttl| {
             self.start_date
                 .checked_add_signed(chrono::Duration::seconds(ttl as _))

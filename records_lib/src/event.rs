@@ -1,5 +1,5 @@
-use futures::TryStreamExt;
-use sqlx::MySqlConnection;
+use futures::{Stream, TryStreamExt as _};
+use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
 
 use crate::{error::RecordsResult, models};
 
@@ -156,4 +156,21 @@ pub async fn get_medal_times_of<E: for<'c> sqlx::Executor<'c, Database = sqlx::M
         gold_time,
         champion_time,
     })
+}
+
+pub fn get_admins_of(
+    db: &mut PoolConnection<MySql>,
+    event_id: u32,
+    edition_id: u32,
+) -> impl Stream<Item = sqlx::Result<models::Player>> + '_ {
+    sqlx::query_as(
+        "SELECT * FROM players
+            WHERE id IN (
+                SELECT player_id FROM event_edition_admins
+                WHERE event_id = ? AND edition_id = ?
+            )",
+    )
+    .bind(event_id)
+    .bind(edition_id)
+    .fetch(&mut **db)
 }

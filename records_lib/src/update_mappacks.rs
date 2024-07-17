@@ -116,7 +116,7 @@ impl MappackKind<'_> {
         MappackIdDisp { kind: self }
     }
 
-    fn to_opt_event(&self) -> Option<(&models::Event, &models::EventEdition)> {
+    fn get_event(&self) -> Option<(&models::Event, &models::EventEdition)> {
         match self {
             Self::Event(event, edition) => Some((event, edition)),
             Self::Id(_) => None,
@@ -316,7 +316,7 @@ async fn calc_scores(
 
     let mut maps = Vec::with_capacity(mappack_uids.len().max(5));
 
-    let event = mappack.to_opt_event();
+    let event = mappack.get_event();
     let (view_name, and_event) = event.get_view();
 
     let mappack = if mappack_uids.is_empty() {

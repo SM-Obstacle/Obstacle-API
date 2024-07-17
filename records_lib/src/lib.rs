@@ -40,12 +40,10 @@ impl GetSqlFragments for Option<(&models::Event, &models::EventEdition)> {
 
     fn get_join(self) -> (&'static str, &'static str) {
         self.is_some()
-            .then(|| {
-                (
-                    "inner join event_edition_records eer on eer.record_id = r.record_id",
-                    "and eer.event_id = ? and eer.edition_id = ?",
-                )
-            })
+            .then_some((
+                "inner join event_edition_records eer on eer.record_id = r.record_id",
+                "and eer.event_id = ? and eer.edition_id = ?",
+            ))
             .unwrap_or_default()
     }
 }
