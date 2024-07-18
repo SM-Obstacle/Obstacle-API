@@ -3,7 +3,6 @@ use std::{collections::HashMap, sync::Arc};
 use async_graphql::{connection, dataloader::Loader, Context, Enum, ID};
 use futures::StreamExt;
 use records_lib::{
-    escaped::Escaped,
     models::{self, Role},
     Database,
 };
@@ -63,12 +62,12 @@ impl Player {
         ID(format!("v0:Player:{}", self.inner.id))
     }
 
-    async fn login(&self) -> Escaped {
-        self.inner.login.clone().into()
+    async fn login(&self) -> &str {
+        &self.inner.login
     }
 
-    async fn name(&self) -> Escaped {
-        self.inner.name.clone().into()
+    async fn name(&self) -> &str {
+        &self.inner.name
     }
 
     async fn zone_path(&self) -> Option<&str> {

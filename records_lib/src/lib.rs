@@ -5,7 +5,6 @@ use once_cell::sync::OnceCell;
 use sqlx::{MySql, Pool};
 
 pub mod error;
-pub mod escaped;
 pub mod models;
 pub mod must;
 pub mod redis_key;

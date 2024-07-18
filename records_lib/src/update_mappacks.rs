@@ -6,7 +6,6 @@ use sqlx::MySqlConnection;
 
 use crate::{
     error::RecordsResult,
-    escaped::Escaped,
     event::OptEvent,
     models, must,
     redis_key::{
@@ -28,7 +27,7 @@ pub struct Rank {
 pub struct PlayerScore {
     pub player_id: u32,
     pub login: String,
-    pub name: Escaped,
+    pub name: String,
     pub ranks: Vec<Rank>,
     pub score: f64,
     pub maps_finished: usize,
@@ -38,8 +37,8 @@ pub struct PlayerScore {
 
 #[derive(SimpleObject, Debug)]
 pub struct MappackMap {
-    pub map: Escaped,
-    pub map_id: Escaped,
+    pub map: String,
+    pub map_id: String,
     pub last_rank: i32,
     #[graphql(skip)]
     pub records: Option<Vec<RankedRecordRow>>,
@@ -62,8 +61,7 @@ struct RecordRow {
     pub record: models::Record,
     pub player_id2: u32,
     pub player_login: String,
-    #[sqlx(try_from = "String")]
-    pub player_name: Escaped,
+    pub player_name: String,
 }
 
 #[derive(Debug)]
@@ -334,8 +332,8 @@ async fn calc_scores(
         for map_uid in &mappack_uids {
             let map = must::have_map(&mut *mysql_conn, map_uid).await?;
             maps.push(MappackMap {
-                map: map.name.clone().into(),
-                map_id: map.game_id.clone().into(),
+                map: map.name.clone(),
+                map_id: map.game_id.clone(),
                 last_rank: 0,
                 records: None,
             });

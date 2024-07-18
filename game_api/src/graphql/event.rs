@@ -6,7 +6,6 @@ use futures::{StreamExt as _, TryStreamExt};
 use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use records_lib::{
-    escaped::Escaped,
     event::{self, MedalTimes, OptEvent},
     models::{self, EventCategory},
     must,
@@ -310,8 +309,8 @@ impl EventEditionPlayerRank<'_> {
 
 #[async_graphql::Object]
 impl EventEditionPlayerCategorizedRank<'_> {
-    async fn category_name(&self) -> Escaped {
-        self.category.name.clone().into()
+    async fn category_name(&self) -> &str {
+        &self.category.name
     }
 
     async fn banner_img_url(&self) -> Option<&str> {

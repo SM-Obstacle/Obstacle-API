@@ -7,7 +7,6 @@ use async_graphql::{
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
-    escaped::Escaped,
     event::OptEvent,
     map,
     models::{self, Record},
@@ -142,8 +141,8 @@ impl Map {
         ID(format!("v0:Map:{}", self.inner.id))
     }
 
-    async fn game_id(&self) -> Escaped {
-        self.inner.game_id.clone().into()
+    async fn game_id(&self) -> &str {
+        &self.inner.game_id
     }
 
     async fn player_id(&self) -> ID {
@@ -161,8 +160,8 @@ impl Map {
             .ok_or_else(|| async_graphql::Error::new("Player not found."))
     }
 
-    async fn name(&self) -> Escaped {
-        self.inner.name.clone().into()
+    async fn name(&self) -> &str {
+        &self.inner.name
     }
 
     async fn related_event_editions(
