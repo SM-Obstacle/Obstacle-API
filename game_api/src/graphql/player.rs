@@ -12,7 +12,7 @@ use crate::RecordsErrorKind;
 
 use super::{
     ban::Banishment,
-    get_rank_or_full_update,
+    get_rank,
     map::Map,
     record::RankedRecord,
     utils::{
@@ -37,7 +37,7 @@ impl TryFrom<Role> for PlayerRole {
     fn try_from(role: Role) -> Result<Self, Self::Error> {
         if role.id < 3 {
             // SAFETY: enum is repr(u8) and role id is in range
-            Ok(unsafe { std::mem::transmute(role.id) })
+            Ok(unsafe { std::mem::transmute::<u8, PlayerRole>(role.id) })
         } else {
             Err(RecordsErrorKind::UnknownRole(role.id, role.role_name))
         }
@@ -183,7 +183,7 @@ impl Player {
         while let Some(record) = records.next().await {
             let record = record?;
 
-            let rank = get_rank_or_full_update(
+            let rank = get_rank(
                 (mysql_conn, redis_conn),
                 record.map_id,
                 record.time,

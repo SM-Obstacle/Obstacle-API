@@ -6,9 +6,9 @@
 //!
 //! Unlike the Rust conventions, when such an object doesn't exist, the returned value isn't
 //! `Option::None` but the corresponding error (for example, `RecordsError::PlayerNotFound`).
-//! This makes the code cleaner thanks to the `?` syntax, because at some point we most likely want
-//! things to be already existing, without checking it repeatedly and returning the error to
-//! the client.
+//! This makes the code cleaner thanks to the [`Try`](std::ops::Try) trait syntax, because at some point
+//! we most likely want things to be already existing, without checking it repeatedly
+//! and returning the error to the client.
 
 use sqlx::{Executor, MySql, MySqlConnection};
 
@@ -17,6 +17,7 @@ use crate::{
     event, map, models, player,
 };
 
+/// Returns the event in the database bound to the provided event handle.
 pub async fn have_event_handle(
     db: &mut MySqlConnection,
     handle: &str,
@@ -26,6 +27,7 @@ pub async fn have_event_handle(
         .ok_or_else(|| RecordsError::EventNotFound(handle.to_owned()))
 }
 
+/// Returns the event and its edition in the database bound to the provided handles and edition ID.
 pub async fn have_event_edition(
     db: &mut MySqlConnection,
     event_handle: &str,
@@ -43,6 +45,7 @@ pub async fn have_event_edition(
     Ok((event, event_edition))
 }
 
+/// Returns the player in the database bound to the provided login.
 pub async fn have_player<'c, E: sqlx::Executor<'c, Database = sqlx::MySql>>(
     db: E,
     login: &str,
@@ -52,18 +55,26 @@ pub async fn have_player<'c, E: sqlx::Executor<'c, Database = sqlx::MySql>>(
         .ok_or_else(|| RecordsError::PlayerNotFound(login.to_owned()))
 }
 
+/// Returns the map in the database bound to the provided map UID.
 pub async fn have_map<'c, E: Executor<'c, Database = MySql>>(
     db: E,
     map_uid: &str,
 ) -> RecordsResult<models::Map> {
-    map::get_map_from_game_id(db, map_uid)
+    map::get_map_from_uid(db, map_uid)
         .await?
         .ok_or_else(|| RecordsError::MapNotFound(map_uid.to_owned()))
 }
 
+/// Returns the event and its edition bound to their IDs and that contain a specific map.
+///
+/// ## Parameters
+///
+/// * `map_uid`: the UID of the map.
+/// * `event_handle`: the handle of the event.
+/// * `edition_id`: the ID of its edition.
 pub async fn have_event_edition_with_map(
     db: &mut MySqlConnection,
-    game_id: &str,
+    map_uid: &str,
     event_handle: String,
     edition_id: u32,
 ) -> RecordsResult<(models::Event, models::EventEdition)> {
@@ -77,13 +88,13 @@ pub async fn have_event_edition_with_map(
     )
     .bind(event_edition.id)
     .bind(event.id)
-    .bind(game_id)
+    .bind(map_uid)
     .fetch_one(db)
     .await?
         == 0
     {
         return Err(RecordsError::MapNotInEventEdition(
-            game_id.to_owned(),
+            map_uid.to_owned(),
             event_handle,
             edition_id,
         ));

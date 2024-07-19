@@ -12,7 +12,7 @@ use records_lib::{
     models::{self, Record},
     must,
     redis_key::alone_map_key,
-    update_ranks::{get_rank_or_full_update, update_leaderboard},
+    update_ranks::{get_rank, update_leaderboard},
     Database,
 };
 use sqlx::{mysql, FromRow, MySqlPool};
@@ -21,7 +21,6 @@ use crate::auth::{self, privilege, WebToken};
 
 use super::{
     event::EventEdition,
-    medal::MedalPrice,
     player::{Player, PlayerLoader},
     rating::{PlayerRating, Rating},
     record::RankedRecord,
@@ -120,7 +119,7 @@ impl Map {
 
         while let Some(record) = records.next().await {
             let record = record?;
-            let rank = get_rank_or_full_update(
+            let rank = get_rank(
                 (&mut *mysql_conn, redis_conn),
                 self.inner.id,
                 record.time,
@@ -172,7 +171,7 @@ impl Map {
 
         let mysql_conn = &mut mysql_pool.acquire().await?;
 
-        if map::get_map_from_game_id(mysql_pool, &format!("{}_benchmark", self.inner.game_id))
+        if map::get_map_from_uid(mysql_pool, &format!("{}_benchmark", self.inner.game_id))
             .await?
             .is_some()
         {
@@ -198,39 +197,6 @@ impl Map {
         }
 
         Ok(out)
-    }
-
-    async fn medal_for(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-        req_login: String,
-    ) -> async_graphql::Result<Option<MedalPrice>> {
-        let Some(WebToken { login, token }) = ctx.data_opt::<WebToken>() else {
-            return Err(async_graphql::Error::new("Unauthorized."));
-        };
-
-        let role = if *login != req_login {
-            privilege::ADMIN
-        } else {
-            privilege::PLAYER
-        };
-
-        let db = ctx.data_unchecked();
-
-        auth::website_check_auth_for(db, login, token, role).await?;
-
-        let player_id: u32 = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
-            .bind(login)
-            .fetch_one(&db.mysql_pool)
-            .await?;
-
-        Ok(sqlx::query_as(
-            "SELECT * FROM prizes WHERE map_id = ? AND player_id = ? ORDER BY medal DESC",
-        )
-        .bind(self.inner.id)
-        .bind(player_id)
-        .fetch_optional(&db.mysql_pool)
-        .await?)
     }
 
     async fn ratings(

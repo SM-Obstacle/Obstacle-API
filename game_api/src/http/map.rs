@@ -42,7 +42,7 @@ async fn insert(
     db: Res<Database>,
     Json(body): Json<UpdateMapBody>,
 ) -> RecordsResponse<impl Responder> {
-    let res = records_lib::map::get_map_from_game_id(&db.mysql_pool, &body.map_uid)
+    let res = records_lib::map::get_map_from_uid(&db.mysql_pool, &body.map_uid)
         .await
         .fit(req_id)?;
 

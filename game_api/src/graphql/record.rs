@@ -1,5 +1,8 @@
 use async_graphql::{dataloader::DataLoader, Context};
-use records_lib::{models::{self, CheckpointTimes}, Database};
+use records_lib::{
+    models::{self, CheckpointTime},
+    Database,
+};
 
 use super::{
     map::{Map, MapLoader},
@@ -45,7 +48,7 @@ impl RankedRecord {
     async fn average_cps_times(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<CheckpointTimes>> {
+    ) -> async_graphql::Result<Vec<CheckpointTime>> {
         let db = &ctx.data_unchecked::<Database>().mysql_pool;
 
         Ok(sqlx::query_as(
@@ -63,7 +66,7 @@ impl RankedRecord {
     async fn cps_times(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<CheckpointTimes>> {
+    ) -> async_graphql::Result<Vec<CheckpointTime>> {
         let db = &ctx.data_unchecked::<Database>().mysql_pool;
 
         Ok(sqlx::query_as(

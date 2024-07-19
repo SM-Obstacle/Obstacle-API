@@ -1,6 +1,7 @@
+//! This module contains anything related to mappacks in this library.
+
 use std::{fmt, time::SystemTime};
 
-use async_graphql::SimpleObject;
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
 use sqlx::MySqlConnection;
 
@@ -13,90 +14,88 @@ use crate::{
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
-    update_ranks::get_rank_or_full_update,
+    update_ranks::get_rank,
     RedisConnection,
 };
 
-#[derive(SimpleObject, Default, Clone, Debug)]
-pub struct Rank {
-    pub rank: i32,
-    pub map_idx: usize,
-}
-
-#[derive(SimpleObject, Debug)]
-pub struct PlayerScore {
-    pub player_id: u32,
-    pub login: String,
-    pub name: String,
-    pub ranks: Vec<Rank>,
-    pub score: f64,
-    pub maps_finished: usize,
-    pub rank: u32,
-    pub worst: Rank,
-}
-
-#[derive(SimpleObject, Debug)]
-pub struct MappackMap {
-    pub map: String,
-    pub map_id: String,
-    pub last_rank: i32,
-    #[graphql(skip)]
-    pub records: Option<Vec<RankedRecordRow>>,
-}
-
-#[derive(SimpleObject)]
-struct PlayerScoresDetails {
-    pub a: i32,
+#[derive(Default, Clone, Debug)]
+struct Rank {
+    rank: i32,
+    map_idx: usize,
 }
 
 #[derive(Debug)]
-pub struct MappackScores {
-    pub maps: Vec<MappackMap>,
-    pub scores: Vec<PlayerScore>,
+struct PlayerScore {
+    player_id: u32,
+    ranks: Vec<Rank>,
+    score: f64,
+    maps_finished: usize,
+    rank: u32,
+    worst: Rank,
+}
+
+#[derive(Debug)]
+struct MappackMap {
+    map_id: String,
+    last_rank: i32,
+    records: Option<Vec<RankedRecordRow>>,
+}
+
+#[derive(Debug)]
+struct MappackScores {
+    maps: Vec<MappackMap>,
+    scores: Vec<PlayerScore>,
 }
 
 #[derive(sqlx::FromRow, Debug)]
 struct RecordRow {
     #[sqlx(flatten)]
-    pub record: models::Record,
-    pub player_id2: u32,
-    pub player_login: String,
-    pub player_name: String,
+    record: models::Record,
+    player_id2: u32,
 }
 
 #[derive(Debug)]
-pub struct RankedRecordRow {
+struct RankedRecordRow {
     rank: i32,
     record: RecordRow,
 }
 
+/// Represents any mappack ID, meaning an event or a regular MX mappack.
+///
+/// If it is an event without an associated mappack, the mappack ID is `__X__Y__` where X
+/// is the event ID and Y the edition ID. Otherwise, it is the ID of the associated mappack.
+///
+/// If it is a regular MX mappack, it is its ID.
 #[derive(Clone, Copy)]
-pub enum MappackKind<'a> {
+pub enum AnyMappackId<'a> {
+    /// The mappack is related to an event.
     Event(&'a models::Event, &'a models::EventEdition),
+    /// The mappack is a regular MX mappack.
     Id(&'a str),
 }
 
-impl fmt::Debug for MappackKind<'_> {
+impl fmt::Debug for AnyMappackId<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.mappack_id(), f)
     }
 }
 
+/// Wrapper type of the [`AnyMappackId`] type to be displayed as a mappack ID.
 pub struct MappackIdDisp<'a, 'b> {
-    kind: &'a MappackKind<'b>,
+    mappack_id: &'a AnyMappackId<'b>,
 }
 
 impl fmt::Display for MappackIdDisp<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.kind {
-            MappackKind::Event(_, edition) => {
+        match self.mappack_id {
+            AnyMappackId::Event(_, edition) => {
                 if let Some(id) = edition.mx_id {
                     fmt::Display::fmt(&id, f)
                 } else {
                     write!(f, "__{}__{}__", edition.event_id, edition.id)
                 }
             }
-            MappackKind::Id(id) => f.write_str(id),
+            AnyMappackId::Id(id) => f.write_str(id),
         }
     }
 }
@@ -110,11 +109,13 @@ impl ToRedisArgs for MappackIdDisp<'_, '_> {
     }
 }
 
-impl MappackKind<'_> {
+impl AnyMappackId<'_> {
+    /// Returns a displayable version of the mappack ID.
     pub fn mappack_id(&self) -> MappackIdDisp<'_, '_> {
-        MappackIdDisp { kind: self }
+        MappackIdDisp { mappack_id: self }
     }
 
+    /// Returns the related optional event.
     fn get_event(&self) -> OptEvent<'_, '_> {
         match self {
             Self::Event(event, edition) => OptEvent::new(event, edition),
@@ -122,21 +123,35 @@ impl MappackKind<'_> {
         }
     }
 
+    /// Returns whether the mappack has a time-to-live or not.
+    ///
+    /// Only regular MX mappacks have a time-to-live.
     fn has_ttl(&self) -> bool {
         matches!(self, Self::Id(_))
     }
 
+    /// Returns the optional time-to-live, in seconds, of the mappack.
+    ///
+    /// Only regular MX mappacks have a time-to-live.
     fn get_ttl(&self) -> Option<i64> {
         self.has_ttl().then_some(crate::env().mappack_ttl)
     }
 }
 
+/// Calculates the scores of the players on the provided mappack, and save the results
+/// on the Redis database.
+///
+/// ## Parameters
+///
+/// * `mappack`: the mappack.
+/// * `mysql_conn`: a connection to the MySQL/MariaDB database, to fetch the records.
+/// * `redis_conn`: a connection to the Redis database, to store the scores.
 #[cfg_attr(
     feature = "tracing",
     tracing::instrument(skip(mysql_conn, redis_conn), err, ret)
 )]
 pub async fn update_mappack(
-    mappack: MappackKind<'_>,
+    mappack: AnyMappackId<'_>,
     mysql_conn: &mut MySqlConnection,
     redis_conn: &mut RedisConnection,
 ) -> RecordsResult<()> {
@@ -165,7 +180,7 @@ pub async fn update_mappack(
 
 #[cfg_attr(feature = "tracing", tracing::instrument(skip(scores, redis_conn)))]
 async fn save(
-    mappack: MappackKind<'_>,
+    mappack: AnyMappackId<'_>,
     scores: MappackScores,
     redis_conn: &mut RedisConnection,
 ) -> RecordsResult<()> {
@@ -306,7 +321,7 @@ async fn save(
 /// Returns an `Option` because the mappack may have expired.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip(mysql_conn, redis_conn)))]
 async fn calc_scores(
-    mappack: MappackKind<'_>,
+    mappack: AnyMappackId<'_>,
     mysql_conn: &mut MySqlConnection,
     redis_conn: &mut RedisConnection,
 ) -> RecordsResult<Option<MappackScores>> {
@@ -332,7 +347,6 @@ async fn calc_scores(
         for map_uid in &mappack_uids {
             let map = must::have_map(&mut *mysql_conn, map_uid).await?;
             maps.push(MappackMap {
-                map: map.name.clone(),
                 map_id: map.game_id.clone(),
                 last_rank: 0,
                 records: None,
@@ -369,8 +383,6 @@ async fn calc_scores(
             if !scores.iter().any(|p| p.player_id == record.player_id2) {
                 scores.push(PlayerScore {
                     player_id: record.player_id2,
-                    login: record.player_login.clone(),
-                    name: record.player_name.clone(),
                     ranks: Vec::new(),
                     score: 0.,
                     maps_finished: 0,
@@ -380,7 +392,7 @@ async fn calc_scores(
             }
 
             let record = RankedRecordRow {
-                rank: get_rank_or_full_update(
+                rank: get_rank(
                     (&mut *mysql_conn, redis_conn),
                     map.id,
                     record.record.time,

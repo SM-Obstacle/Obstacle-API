@@ -108,6 +108,7 @@ impl RecordsErrorKind {
     pub fn get_type(&self) -> i32 {
         match self {
             Self::Lib(err) => err.get_code(),
+            // SAFETY: Self is repr(i32).
             other => unsafe { *(other as *const Self as *const _) },
         }
     }
@@ -403,6 +404,7 @@ pub struct InitEnvOut {
 static ENV: OnceCell<mkenv::init_env!(ApiEnv)> = OnceCell::new();
 
 pub fn env() -> &'static mkenv::init_env!(ApiEnv) {
+    // SAFETY: this function is always called when the `init_env()` is called at the start.
     unsafe { ENV.get_unchecked() }
 }
 

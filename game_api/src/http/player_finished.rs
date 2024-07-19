@@ -4,7 +4,7 @@ use records_lib::{
     event::OptEvent,
     models,
     redis_key::map_key,
-    update_ranks::{get_rank_or_full_update, update_leaderboard},
+    update_ranks::{get_rank, update_leaderboard},
     Database,
 };
 use serde::{Deserialize, Serialize};
@@ -199,7 +199,7 @@ pub async fn finished(
     let redis_conn = &mut db.redis_pool.get().await?;
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err()?;
     let current_rank =
-        get_rank_or_full_update((mysql_conn, redis_conn), map.id, old.min(new), event).await?;
+        get_rank((mysql_conn, redis_conn), map.id, old.min(new), event).await?;
 
     Ok(FinishedOutput {
         record_id,

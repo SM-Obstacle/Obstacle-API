@@ -8,7 +8,7 @@ use async_graphql::{connection, Enum, ErrorExtensionValues, Object, Value, ID};
 use async_graphql_actix_web::GraphQLRequest;
 use futures::StreamExt as _;
 use records_lib::models;
-use records_lib::update_ranks::get_rank_or_full_update;
+use records_lib::update_ranks::get_rank;
 use records_lib::{must, Database};
 use reqwest::Client;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
@@ -34,7 +34,6 @@ mod ban;
 mod event;
 mod map;
 mod mappack;
-mod medal;
 mod player;
 mod rating;
 mod record;
@@ -311,7 +310,7 @@ impl QueryRoot {
         let mysql_conn = &mut db.mysql_pool.acquire().await?;
 
         Ok(models::RankedRecord {
-            rank: get_rank_or_full_update(
+            rank: get_rank(
                 (mysql_conn, redis_conn),
                 record.map_id,
                 record.time,
@@ -329,7 +328,7 @@ impl QueryRoot {
         game_id: String,
     ) -> async_graphql::Result<Map> {
         let db = ctx.data_unchecked::<Database>();
-        records_lib::map::get_map_from_game_id(&db.mysql_pool, &game_id)
+        records_lib::map::get_map_from_uid(&db.mysql_pool, &game_id)
             .await?
             .ok_or_else(|| async_graphql::Error::new("Map not found."))
             .map(Into::into)
@@ -373,7 +372,7 @@ impl QueryRoot {
         while let Some(record) = records.next().await {
             let record = record?;
 
-            let rank = get_rank_or_full_update(
+            let rank = get_rank(
                 (mysql_conn, redis_conn),
                 record.map_id,
                 record.time,

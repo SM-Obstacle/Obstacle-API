@@ -1,5 +1,8 @@
+//! This module contains anything related to in-game players in this library.
+
 use crate::{error::RecordsResult, models::Player};
 
+/// Returns the optional player from the provided login.
 pub async fn get_player_from_login<'c, E: sqlx::Executor<'c, Database = sqlx::MySql>>(
     db: E,
     player_login: &str,
@@ -11,6 +14,10 @@ pub async fn get_player_from_login<'c, E: sqlx::Executor<'c, Database = sqlx::My
     Ok(r)
 }
 
+/// Returns the player from the provided ID.
+///
+/// The return of this function isn't optional as if an ID is provided, the player most likely
+/// already exists.
 pub async fn get_player_from_id<'c, E: sqlx::Executor<'c, Database = sqlx::MySql>>(
     db: E,
     id: u32,

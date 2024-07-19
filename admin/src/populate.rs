@@ -6,10 +6,10 @@ use futures::{stream, StreamExt as _, TryStreamExt};
 use itertools::Itertools as _;
 use records_lib::{
     event, map,
+    mappack::{self, AnyMappackId},
     models::{self, Medal},
     must,
     redis_key::mappack_key,
-    update_mappacks::{self, MappackKind},
     Database, MySqlPool,
 };
 
@@ -76,7 +76,7 @@ async fn insert_mx_maps(
     for mx_map in mx_maps {
         let author = must::have_player(&mut **mysql_conn, &mx_map.author_login).await?;
         // Skip if we already know this map
-        if let Some(map) = map::get_map_from_game_id(&mut **mysql_conn, &mx_map.map_uid).await? {
+        if let Some(map) = map::get_map_from_uid(&mut **mysql_conn, &mx_map.map_uid).await? {
             out.push((mx_map.mx_id, map));
             continue;
         }
@@ -190,9 +190,7 @@ pub async fn populate(
 
             for map in maps {
                 let player = must::have_player(&mut **mysql_conn, &map.AuthorLogin).await?;
-                let map_id = match map::get_map_from_game_id(&mut **mysql_conn, &map.TrackUID)
-                    .await?
-                {
+                let map_id = match map::get_map_from_uid(&mut **mysql_conn, &map.TrackUID).await? {
                     Some(map) => map.id,
                     None => sqlx::query_scalar(
                         "insert into maps (game_id, player_id, name) values (?, ?, ?) returning id",
@@ -244,7 +242,7 @@ pub async fn populate(
 
     tracing::info!("Inserting new content...");
 
-    let mappack = MappackKind::Event(&event, &edition);
+    let mappack = AnyMappackId::Event(&event, &edition);
 
     for (
         Row {
@@ -330,7 +328,7 @@ pub async fn populate(
 
     tracing::info!("Filling mappack in the Redis database...");
 
-    update_mappacks::update_mappack(mappack, mysql_conn, redis_conn).await?;
+    mappack::update_mappack(mappack, mysql_conn, redis_conn).await?;
 
     tracing::info!("Done");
 

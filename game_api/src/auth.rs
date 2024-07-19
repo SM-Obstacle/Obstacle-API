@@ -26,9 +26,9 @@
 //! 1. The script generates a random string named `state`
 //! 2. It sends a POST request to `/player/get_token`, with the corresponding payload
 //! 3. It waits a bit, then opens a URL for the player to
-//! https://prod.live.maniaplanet.com/login/oauth/authorize?response_type=code&client_id=de1ce3ba8e&redirect_uri=https://obstacle.titlepack.io/give_token&state=`state`&scope=basic
+//! <https://prod.live.maniaplanet.com/login/oauth/authorize?response_type=code&client_id=de1ce3ba8e&redirect_uri=https://obstacle.titlepack.io/give_token&state=`state`&scope=basic>
 //! 4. The player logs in with his ManiaPlanet account, and is redirected to the page at
-//! https://obstacle.titlepack.io/give_token URL.
+//! <https://obstacle.titlepack.io/give_token> URL.
 //! 5. This page executes a JavaScript code that sends a POST request to `/player/give_token`
 //! with the code provided by the ManiaPlanet OAuth system and the same `state`.
 //! 6. The authentication system validates the provided code, and generates the 2 tokens
@@ -45,7 +45,7 @@
 //! So in the documentation, the `/player/give_token` endpoint represents the POST request sent by
 //! the browser ; while `/player/get_token` is the one sent by Obstacle gamemode.
 //!
-//! See https://github.com/maniaplanet/documentation/blob/master/13.web-services/01.oauth2/docs.md#auth-code-flow-or-explicit-flow-or-server-side-flow
+//! See <https://github.com/maniaplanet/documentation/blob/master/13.web-services/01.oauth2/docs.md#auth-code-flow-or-explicit-flow-or-server-side-flow>
 //! for more information.
 
 use std::future::{ready, Ready};

@@ -1,3 +1,8 @@
+//! This is a tiny module which contains utility functions used to update the maps leaderboards
+//! in Redis.
+//! 
+//! See the [`update_leaderboard`] and [`get_rank`] functions for more information.
+
 use deadpool_redis::redis::AsyncCommands;
 use sqlx::{Executor, MySql, MySqlConnection};
 
@@ -27,7 +32,7 @@ async fn count_records_map<'c, E: Executor<'c, Database = MySql>>(
 /// Checks if the Redis leaderboard for the map with the `key` has a different count
 /// that in the database, and reupdates the Redis leaderboard completly if so.
 ///
-/// This is a check to avoid records duplicates, that may happen sometimes.
+/// This is a check to avoid records duplicates, which may happen sometimes.
 ///
 /// It returns the number of records in the map.
 pub async fn update_leaderboard(
@@ -70,18 +75,18 @@ pub async fn update_leaderboard(
     Ok(mysql_count)
 }
 
-/// Get the rank of a time in a map, or fully updates its leaderboard if not found.
+/// Gets the rank of a time in a map, or fully updates its leaderboard if not found.
 ///
 /// The full update means a delete of the Redis key then a reinsertion of all the records.
 /// This may be called when the SQL and Redis databases had the same amount of records on a map,
 /// but the times were not corresponding. It generally happens after a database migration.
-pub async fn get_rank_or_full_update(
+pub async fn get_rank(
     (db, redis_conn): (&mut MySqlConnection, &mut RedisConnection),
     map_id: u32,
     time: i32,
     event: OptEvent<'_, '_>,
 ) -> RecordsResult<i32> {
-    async fn get_rank(
+    async fn get_rank_(
         redis_conn: &mut RedisConnection,
         key: &MapKey<'_>,
         time: i32,
@@ -101,12 +106,12 @@ pub async fn get_rank_or_full_update(
 
     let key = &map_key(map_id, event);
 
-    match get_rank(redis_conn, key, time).await? {
+    match get_rank_(redis_conn, key, time).await? {
         Some(rank) => Ok(rank),
         None => {
             redis_conn.del(key).await?;
             update_leaderboard((db, redis_conn), map_id, event).await?;
-            let rank = get_rank(redis_conn, key, time).await?.unwrap_or_else(|| {
+            let rank = get_rank_(redis_conn, key, time).await?.unwrap_or_else(|| {
                 // TODO: make a more clear message showing diff
                 panic!(
                     "redis leaderboard for (`{key}`) should be updated \

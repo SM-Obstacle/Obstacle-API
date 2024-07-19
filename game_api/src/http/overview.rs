@@ -5,7 +5,7 @@ use records_lib::{
     event::OptEvent,
     models,
     redis_key::map_key,
-    update_ranks::{get_rank_or_full_update, update_leaderboard},
+    update_ranks::{get_rank, update_leaderboard},
     Database,
 };
 use serde::{Deserialize, Serialize};
@@ -111,7 +111,7 @@ async fn get_range(
         } = record.with_api_err()?;
 
         out.push(RankedRecord {
-            rank: get_rank_or_full_update((mysql_conn, redis_conn), map.id, time, event).await?
+            rank: get_rank((mysql_conn, redis_conn), map.id, time, event).await?
                 as _,
             login,
             nickname,

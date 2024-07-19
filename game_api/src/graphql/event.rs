@@ -7,10 +7,10 @@ use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use records_lib::{
     event::{self, MedalTimes, OptEvent},
+    mappack::AnyMappackId,
     models::{self, EventCategory},
     must,
     redis_key::{mappack_map_last_rank, mappack_player_ranks_key},
-    update_mappacks::MappackKind,
     RedisPool,
 };
 
@@ -250,7 +250,7 @@ impl EventEditionMapExt<'_> {
         let redis_conn = &mut redis_pool.get().await?;
         let last_rank = redis_conn
             .get(mappack_map_last_rank(
-                MappackKind::Event(
+                AnyMappackId::Event(
                     &self.edition_player.edition.event.inner,
                     &self.edition_player.edition.inner,
                 ),
@@ -281,7 +281,7 @@ impl EventEditionPlayerRank<'_> {
         let rank = redis_conn
             .zscore(
                 mappack_player_ranks_key(
-                    MappackKind::Event(
+                    AnyMappackId::Event(
                         &self.edition_player.edition.event.inner,
                         &self.edition_player.edition.inner,
                     ),
@@ -407,7 +407,7 @@ impl EventEditionPlayer<'_> {
     async fn rank(&self, ctx: &Context<'_>) -> async_graphql::Result<usize> {
         mappack::player_rank(
             ctx,
-            MappackKind::Event(&self.edition.event.inner, &self.edition.inner),
+            AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,
         )
         .await
@@ -416,7 +416,7 @@ impl EventEditionPlayer<'_> {
     async fn rank_avg(&self, ctx: &Context<'_>) -> async_graphql::Result<f64> {
         mappack::player_rank_avg(
             ctx,
-            MappackKind::Event(&self.edition.event.inner, &self.edition.inner),
+            AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,
         )
         .await
@@ -425,7 +425,7 @@ impl EventEditionPlayer<'_> {
     async fn map_finished(&self, ctx: &Context<'_>) -> async_graphql::Result<usize> {
         mappack::player_map_finished(
             ctx,
-            MappackKind::Event(&self.edition.event.inner, &self.edition.inner),
+            AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,
         )
         .await
@@ -434,7 +434,7 @@ impl EventEditionPlayer<'_> {
     async fn worst_rank(&self, ctx: &Context<'_>) -> async_graphql::Result<i32> {
         mappack::player_worst_rank(
             ctx,
-            MappackKind::Event(&self.edition.event.inner, &self.edition.inner),
+            AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,
         )
         .await
@@ -532,7 +532,7 @@ impl EventEdition<'_> {
 
     async fn mappack(&self) -> Option<Mappack> {
         Some(Mappack {
-            mappack_id: MappackKind::Event(&self.event.inner, &self.inner)
+            mappack_id: AnyMappackId::Event(&self.event.inner, &self.inner)
                 .mappack_id()
                 .to_string(),
             event_has_expired: self.inner.has_expired(),

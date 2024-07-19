@@ -3,8 +3,8 @@ use std::time::Duration;
 use deadpool_redis::{redis::AsyncCommands, Connection};
 use records_lib::{
     event,
+    mappack::{update_mappack, AnyMappackId},
     redis_key::{mappack_key, mappacks_key},
-    update_mappacks::{update_mappack, MappackKind},
 };
 use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
 
@@ -24,7 +24,7 @@ async fn update_event_mappacks(
                 edition.name
             );
 
-            let mappack = MappackKind::Event(&event.event, &edition);
+            let mappack = AnyMappackId::Event(&event.event, &edition);
 
             redis_conn.del(mappack_key(mappack)).await?;
 
@@ -49,7 +49,7 @@ pub async fn update(
 
     for mappack_id in mappacks {
         update_mappack(
-            MappackKind::Id(&mappack_id),
+            AnyMappackId::Id(&mappack_id),
             &mut mysql_conn,
             &mut redis_conn,
         )
