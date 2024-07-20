@@ -26,7 +26,7 @@ jobs:
       - name: Clean docs folder
         run: cargo clean --doc
       - name: Build docs
-        run: cargo doc --no-deps
+        run: cargo doc --no-deps && cargo doc --no-deps --document-private-items --package game-api
       - name: Add redirect
         run: echo '<meta http-equiv="refresh" content="0;url=game_api/index.html">' > target/doc/index.html
       - name: Remove lock file
