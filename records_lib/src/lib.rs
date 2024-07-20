@@ -1,4 +1,4 @@
-//! The main crate for the ShootMania Obstacle API infrastructure.
+//! The main crate of the ShootMania Obstacle API infrastructure.
 //!
 //! This crate is used by all the services related to the API. It contains environment setup
 //! functions, the models saved in the database, and some other stuff.
