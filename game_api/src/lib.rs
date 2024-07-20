@@ -1,5 +1,5 @@
 //! The ShootMania Obstacle API library that the program uses.
-//! 
+//!
 //! The content of this library is only made for the API program.
 
 use actix_web::dev::Payload;
