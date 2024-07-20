@@ -1,3 +1,9 @@
+//! The ShootMania Obstacle Cache Manager (SOCC)
+//!
+//! The cache manager is a service that runs alongside the API. It fetches periodically the records
+//! in the database to calculate the scores in certain contexts, then store the results in the Redis
+//! database.
+
 use std::{future::Future, time::Duration};
 
 use anyhow::Context;

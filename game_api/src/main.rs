@@ -1,3 +1,8 @@
+//! The ShootMania Obstacle API program.
+//!
+//! The program also includes a [library](game_api_lib). Overall, it uses the [`records_lib`] crate
+//! as a main dependency.
+
 use actix_cors::Cors;
 use actix_session::{
     config::{CookieContentSecurity, PersistentSession},
@@ -18,10 +23,12 @@ use reqwest::Client;
 use tracing_actix_web::{RequestId, TracingLogger};
 use tracing_subscriber::fmt::format::FmtSpan;
 
+/// The actix route handler for the Not Found response.
 async fn not_found(req_id: RequestId) -> RecordsResponse<impl Responder> {
     Err::<String, _>(RecordsErrorKind::EndpointNotFound).fit(req_id)
 }
 
+/// The main entry point.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
