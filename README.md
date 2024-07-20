@@ -1,5 +1,7 @@
 # Records server
 
+![Static Badge](https://img.shields.io/badge/records_lib-blue?style=flat&logo=rust&label=Doc&labelColor=gray&link=http%3A%2F%2Fobstacle-reborn.github.io%2FRecords)
+
 This repository contains the source code of the server that holds the Obstacle API. It manages
 records saving, authentication, players and maps registering and all the stuff it goes with.
 
