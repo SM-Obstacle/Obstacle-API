@@ -10,7 +10,7 @@ use actix_web::{
     App, HttpServer, Responder,
 };
 use anyhow::Context;
-use game_api::{
+use game_api_lib::{
     api_route, graphql_route, AuthState, FitRequestId, RecordsErrorKind, RecordsResponse,
 };
 use records_lib::{get_mysql_pool, get_redis_pool, Database};
@@ -25,7 +25,7 @@ async fn not_found(req_id: RequestId) -> RecordsResponse<impl Responder> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
-    let env = game_api::init_env()?;
+    let env = game_api_lib::init_env()?;
 
     let mysql_pool = get_mysql_pool(env.db_env.db_url.db_url)
         .await
@@ -68,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
                     .cookie_secure(cfg!(not(debug_assertions)))
                     .cookie_content_security(CookieContentSecurity::Private)
                     .session_lifecycle(PersistentSession::default().session_ttl(
-                        CookieDuration::seconds(game_api::env().auth_token_ttl as i64),
+                        CookieDuration::seconds(game_api_lib::env().auth_token_ttl as i64),
                     ))
                     .build(),
             )
@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
             .service(api_route())
             .default_service(web::to(not_found))
     })
-    .bind(("0.0.0.0", game_api::env().port))
+    .bind(("0.0.0.0", game_api_lib::env().port))
     .context("Cannot bind 0.0.0.0 address")?
     .run()
     .await
