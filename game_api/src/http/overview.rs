@@ -111,8 +111,7 @@ async fn get_range(
         } = record.with_api_err()?;
 
         out.push(RankedRecord {
-            rank: get_rank((mysql_conn, redis_conn), map.id, time, event).await?
-                as _,
+            rank: get_rank((mysql_conn, redis_conn), map.id, time, event).await? as _,
             login,
             nickname,
             time,

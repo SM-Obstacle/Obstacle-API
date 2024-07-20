@@ -1,6 +1,6 @@
 //! This is a tiny module which contains utility functions used to update the maps leaderboards
 //! in Redis.
-//! 
+//!
 //! See the [`update_leaderboard`] and [`get_rank`] functions for more information.
 
 use deadpool_redis::redis::AsyncCommands;

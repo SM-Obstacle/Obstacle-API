@@ -198,8 +198,7 @@ pub async fn finished(
 
     let redis_conn = &mut db.redis_pool.get().await?;
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err()?;
-    let current_rank =
-        get_rank((mysql_conn, redis_conn), map.id, old.min(new), event).await?;
+    let current_rank = get_rank((mysql_conn, redis_conn), map.id, old.min(new), event).await?;
 
     Ok(FinishedOutput {
         record_id,

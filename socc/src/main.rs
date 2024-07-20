@@ -58,7 +58,8 @@ async fn main() -> anyhow::Result<()> {
     let mysql_pool = records_lib::get_mysql_pool(env.db_env.db_url.db_url)
         .await
         .context("When creating MySQL pool")?;
-    let redis_pool = records_lib::get_redis_pool(env.db_env.redis_url.redis_url).context("When creating Redis pool")?;
+    let redis_pool = records_lib::get_redis_pool(env.db_env.redis_url.redis_url)
+        .context("When creating Redis pool")?;
 
     let res = tokio::spawn(handle(
         mysql_pool.clone(),
