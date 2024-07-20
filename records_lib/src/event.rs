@@ -34,10 +34,12 @@ impl<'ev, 'ed> OptEvent<'ev, 'ed> {
     /// ## Example usage
     ///
     /// ```no_run
-    /// # fn main() -> Result<(), Box<dyn std::error::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use records_lib::event::OptEvent;
     /// let event = OptEvent::default();
     /// let (view_name, and_event) = event.get_view();
-    /// let query = sqlx::query(format!("select * from {view_name} r where ... {and_event}"));
+    /// let query = format!("select * from {view_name} r where ... {and_event}");
+    /// let query = sqlx::query(&query);
     /// let query = if let Some((event, edition)) = event.0 {
     ///     query.bind(event.id).bind(edition.id)
     /// } else {
@@ -69,10 +71,12 @@ impl<'ev, 'ed> OptEvent<'ev, 'ed> {
     /// ## Example usage
     ///
     /// ```no_run
-    /// # fn main() -> Result<(), Box<dyn std::error::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use records_lib::event::OptEvent;
     /// let event = OptEvent::default();
     /// let (join_event, and_event) = event.get_join();
-    /// let query = sqlx::query(format!("select * from records r {join_event} where ... {and_event}"));
+    /// let query = format!("select * from records r {join_event} where ... {and_event}");
+    /// let query = sqlx::query(&query);
     /// let query = if let Some((event, edition)) = event.0 {
     ///     query.bind(event.id).bind(edition.id)
     /// } else {
