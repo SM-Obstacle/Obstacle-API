@@ -2,6 +2,9 @@
 //!
 //! This crate is used by all the services related to the API. It contains environment setup
 //! functions, the models saved in the database, and some other stuff.
+//!
+//! If you wish to see the crate of the server program itself, take a look
+//! at the [`game_api`] package.
 
 #![warn(missing_docs)]
 
