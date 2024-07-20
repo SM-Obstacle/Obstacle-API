@@ -9,3 +9,4 @@ Cargo.lock
 *.http
 *.csv
 run_local.sh
+gen_doc.sh

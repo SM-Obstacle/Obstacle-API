@@ -4,7 +4,7 @@
 //! functions, the models saved in the database, and some other stuff.
 //!
 //! If you wish to see the crate of the server program itself, take a look
-//! at the [`game_api`] package.
+//! at the [`game_api`](../game_api/index.html) package.
 
 #![warn(missing_docs)]
 
