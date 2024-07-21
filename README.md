@@ -1,6 +1,6 @@
 # ShootMania Obstacle API
 
-[![](https://img.shields.io/badge/records_lib-blue?style=flat&logo=rust&label=Doc&labelColor=gray)](http://sm-obstacle.github.io/Obstacle-API)
+[![](https://img.shields.io/badge/records_lib-blue?style=flat&logo=rust&label=Doc&labelColor=gray)](https://sm-obstacle.github.io/Obstacle-API)
 
 This repository contains the source code of the server that holds the ShootMania Obstacle API, with other services. It manages records saving, authentication, players and maps registering and all the stuff it goes with.
 
@@ -20,4 +20,4 @@ The API also includes a cache manager (the [`socc`](socc/) package).
 
 ## Documentation
 
-You can find the crates documentation [here](http://sm-obstacle.github.io/Obstacle-API).
+You can find the crates documentation [here](https://sm-obstacle.github.io/Obstacle-API).
