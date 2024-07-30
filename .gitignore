@@ -8,5 +8,5 @@ Cargo.lock
 .docker
 *.http
 *.csv
-run_local.sh
+etc/*
 gen_doc.sh
