@@ -7,16 +7,15 @@ use itertools::Itertools;
 use records_lib::{
     error::RecordsError,
     event::{self, OptEvent},
-    models, Database,
+    models, opt_ser, Database, MpDefaultI32,
 };
 use serde::Serialize;
 use sqlx::FromRow;
 use tracing_actix_web::RequestId;
 
 use crate::{
-    auth::{privilege, MPAuthGuard},
-    utils::json,
-    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
+    auth::MPAuthGuard, utils::json, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult,
+    RecordsResultExt, Res,
 };
 
 use super::{overview, pb, player::PlayerInfoNetBody, player_finished as pf};
@@ -95,7 +94,8 @@ struct Map {
     silver_time: i32,
     gold_time: i32,
     champion_time: i32,
-    personal_best: i32,
+    #[serde(serialize_with = "opt_ser")]
+    personal_best: Option<MpDefaultI32>,
     next_opponent: NextOpponent,
 }
 
@@ -141,7 +141,8 @@ struct EventHandleEditionResponse {
     /// The URL to the small banner image of the edition, used in game in the Campaign mode.
     banner2_img_url: String,
     /// The MX ID of the related mappack.
-    mx_id: i64,
+    #[serde(serialize_with = "opt_ser")]
+    mx_id: Option<MpDefaultI32>,
     /// Whether the edition has expired or not.
     expired: bool,
     /// The content of the edition (the categories).
@@ -199,34 +200,27 @@ async fn event_editions(
     )
 }
 
-#[derive(FromRow, Serialize)]
+#[derive(FromRow, Serialize, Default)]
 struct NextOpponent {
-    login: String,
-    name: String,
-    time: i32,
-}
-
-impl Default for NextOpponent {
-    fn default() -> Self {
-        Self {
-            login: Default::default(),
-            name: Default::default(),
-            time: -1,
-        }
-    }
+    #[serde(serialize_with = "opt_ser")]
+    login: Option<String>,
+    #[serde(serialize_with = "opt_ser")]
+    name: Option<String>,
+    #[serde(serialize_with = "opt_ser")]
+    time: Option<MpDefaultI32>,
 }
 
 struct AuthorWithPlayerTime {
     /// The author of the map
     main_author: PlayerInfoNetBody,
     /// The time of the player (not the same player as the author)
-    personal_best: i32,
+    personal_best: Option<MpDefaultI32>,
     /// The next opponent of the player
     next_opponent: Option<NextOpponent>,
 }
 
 async fn edition(
-    auth: Option<MPAuthGuard<{ privilege::PLAYER }>>,
+    auth: Option<MPAuthGuard>,
     db: Res<Database>,
     req_id: RequestId,
     path: Path<(String, u32)>,
@@ -283,7 +277,7 @@ async fn edition(
                     .with_api_err()
                     .fit(req_id)?;
 
-                let personal_best: Option<_> = sqlx::query_scalar(
+                let personal_best = sqlx::query_scalar(
                     "select min(time) from records r
                     inner join players p on p.id = r.record_player_id
                     inner join event_edition_records eer on eer.record_id = r.record_id
@@ -298,7 +292,6 @@ async fn edition(
                 .await
                 .with_api_err()
                 .fit(req_id)?;
-                let personal_best = personal_best.unwrap_or(-1);
 
                 let next_opponent = sqlx::query_as(
                     "select p.login, p.name, gr2.time from global_event_records gr
@@ -339,7 +332,7 @@ async fn edition(
                         .await
                         .with_api_err()
                         .fit(req_id)?,
-                    personal_best: -1,
+                    personal_best: None,
                     next_opponent: None,
                 }
             };
@@ -400,7 +393,7 @@ async fn edition(
         start_date: edition.start_date.format("%d/%m/%Y %H:%M").to_string(),
         banner_img_url: edition.banner_img_url.unwrap_or_default(),
         banner2_img_url: edition.banner2_img_url.unwrap_or_default(),
-        mx_id: edition.mx_id.unwrap_or(-1),
+        mx_id: edition.mx_id.map(|id| MpDefaultI32(id as _)),
         categories,
     })
 }
@@ -433,7 +426,7 @@ async fn edition_overview(
 
 #[inline(always)]
 async fn edition_finished(
-    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard,
     req_id: RequestId,
     db: Res<Database>,
     path: Path<(String, u32)>,
@@ -503,7 +496,7 @@ pub async fn edition_finished_at(
 }
 
 async fn edition_pb(
-    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard,
     req_id: RequestId,
     path: Path<(String, u32)>,
     db: Res<Database>,

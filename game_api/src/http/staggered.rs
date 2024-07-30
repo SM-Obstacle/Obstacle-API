@@ -4,7 +4,7 @@ use records_lib::Database;
 use tracing_actix_web::RequestId;
 
 use crate::{
-    auth::{privilege, ApiAvailable, MPAuthGuard},
+    auth::{ApiAvailable, MPAuthGuard},
     RecordsResponse, Res,
 };
 
@@ -40,7 +40,7 @@ type StaggeredBody<B> = web::Json<Staggered<B>>;
 async fn staggered_finished(
     _: ApiAvailable,
     req_id: RequestId,
-    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     body: StaggeredBody<pf::HasFinishedBody>,
 ) -> RecordsResponse<impl Responder> {
@@ -51,7 +51,7 @@ async fn staggered_finished(
 #[inline(always)]
 async fn staggered_edition_finished(
     req_id: RequestId,
-    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     path: web::Path<(String, u32)>,
     body: StaggeredBody<pf::HasFinishedBody>,

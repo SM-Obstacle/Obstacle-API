@@ -13,6 +13,8 @@ use once_cell::sync::OnceCell;
 use sqlx::{MySql, Pool};
 use std::time::Duration;
 
+mod mpdefault;
+
 pub mod error;
 pub mod mappack;
 pub mod models;
@@ -30,6 +32,8 @@ pub type MySqlPool = Pool<MySql>;
 pub type RedisPool = deadpool_redis::Pool;
 /// The type of a Redis connection.
 pub type RedisConnection = deadpool_redis::Connection;
+
+pub use mpdefault::*;
 
 /// Represents the database of the API, meaning the MySQL and Redis pools.
 #[derive(Clone)]

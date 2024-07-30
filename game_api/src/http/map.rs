@@ -106,7 +106,7 @@ struct PlayerRatingResponse {
 
 pub async fn player_rating(
     req_id: RequestId,
-    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     Json(body): Json<PlayerRatingBody>,
 ) -> RecordsResponse<impl Responder> {
@@ -349,7 +349,7 @@ struct RateResponse {
 // TODO: use a SQL transaction
 pub async fn rate(
     req_id: RequestId,
-    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     Json(body): Json<RateBody>,
 ) -> RecordsResponse<impl Responder> {

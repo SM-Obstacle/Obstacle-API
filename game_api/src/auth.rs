@@ -364,7 +364,7 @@ fn ext_auth_headers(req: &HttpRequest) -> ExtAuthHeaders {
     }
 }
 
-pub struct MPAuthGuard<const ROLE: privilege::Flags> {
+pub struct MPAuthGuard<const ROLE: privilege::Flags = { privilege::PLAYER }> {
     pub login: String,
 }
 

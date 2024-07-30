@@ -207,7 +207,7 @@ pub async fn finished_at(
 async fn finished(
     _: ApiAvailable,
     req_id: RequestId,
-    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
@@ -312,7 +312,7 @@ pub async fn post_give_token(
 async fn pb(
     _: ApiAvailable,
     req_id: RequestId,
-    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     body: pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
@@ -332,7 +332,7 @@ struct TimesResponseItem {
 
 async fn times(
     req_id: RequestId,
-    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     Json(body): Json<TimesBody>,
 ) -> RecordsResponse<impl Responder> {
@@ -443,7 +443,7 @@ struct WebhookBody {
 
 async fn report_error(
     req_id: RequestId,
-    MPAuthGuard { login }: MPAuthGuard<{ privilege::PLAYER }>,
+    MPAuthGuard { login }: MPAuthGuard,
     Res(client): Res<Client>,
     Json(body): Json<ReportErrorBody>,
 ) -> RecordsResponse<impl Responder> {
