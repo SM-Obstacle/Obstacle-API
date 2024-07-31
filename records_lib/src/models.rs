@@ -359,6 +359,8 @@ pub struct EventEdition {
     pub mx_secret: Option<String>,
     /// The optional time-to-live of the event, in seconds.
     pub ttl: Option<u64>,
+    /// Do we save records that weren't made in an event context for this event edition?
+    pub save_non_event_record: bool,
 }
 
 impl EventEdition {

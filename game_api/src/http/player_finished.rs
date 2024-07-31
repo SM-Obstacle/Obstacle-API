@@ -12,6 +12,8 @@ use sqlx::Connection;
 
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 
+use super::event;
+
 #[derive(Deserialize, Debug)]
 pub struct HasFinishedBody {
     pub time: i32,
@@ -199,6 +201,22 @@ pub async fn finished(
     let redis_conn = &mut db.redis_pool.get().await?;
     let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err()?;
     let current_rank = get_rank((mysql_conn, redis_conn), map.id, old.min(new), event).await?;
+
+    if event.0.is_none() {
+        let editions: Vec<(u32, u32)> = sqlx::query_as(
+            "select eem.event_id, eem.edition_id from event_edition_maps eem
+            inner join event_edition ee on ee.event_id = eem.event_id and ee.id = eem.edition_id
+            where ee.save_non_event_record and map_id = ?",
+        )
+        .bind(map_id)
+        .fetch_all(&mut **mysql_conn)
+        .await
+        .with_api_err()?;
+
+        for (event_id, edition_id) in editions {
+            event::insert_event_record(&mut **mysql_conn, record_id, event_id, edition_id).await?;
+        }
+    }
 
     Ok(FinishedOutput {
         record_id,

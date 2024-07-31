@@ -10,7 +10,7 @@ use records_lib::{
     models, opt_ser, Database, MpDefaultI32,
 };
 use serde::Serialize;
-use sqlx::FromRow;
+use sqlx::{FromRow, MySqlConnection};
 use tracing_actix_web::RequestId;
 
 use crate::{
@@ -480,19 +480,36 @@ pub async fn edition_finished_at(
     // Then we insert it for the event edition records.
     // This is not part of the transaction, because we don't want to roll back
     // the insertion of the record if this query fails.
+    insert_event_record(
+        &mut *db.mysql_pool.acquire().await.with_api_err().fit(req_id)?,
+        res.record_id,
+        event.id,
+        edition.id,
+    )
+    .await
+    .fit(req_id)?;
+
+    json(res.res)
+}
+
+pub async fn insert_event_record(
+    conn: &mut MySqlConnection,
+    record_id: u32,
+    event_id: u32,
+    edition_id: u32,
+) -> RecordsResult<()> {
     sqlx::query(
         "INSERT INTO event_edition_records (record_id, event_id, edition_id)
             VALUES (?, ?, ?)",
     )
-    .bind(res.record_id)
-    .bind(event.id)
-    .bind(edition.id)
-    .execute(&db.mysql_pool)
+    .bind(record_id)
+    .bind(event_id)
+    .bind(edition_id)
+    .execute(conn)
     .await
-    .with_api_err()
-    .fit(req_id)?;
+    .with_api_err()?;
 
-    json(res.res)
+    Ok(())
 }
 
 async fn edition_pb(
