@@ -11,6 +11,7 @@ pub trait MpDefault {
 
 /// Allows the special case for default int values for the [`MpDefault`] trait.
 #[derive(serde::Serialize)]
+#[repr(transparent)]
 pub struct MpDefaultI32<const DEFAULT: i32 = -1>(pub i32);
 
 impl<'r, const DEFAULT: i32, Db> sqlx::Decode<'r, Db> for MpDefaultI32<DEFAULT>
@@ -50,6 +51,7 @@ impl<const DEFAULT: i32> From<i32> for MpDefaultI32<DEFAULT> {
 }
 
 impl<const DEFAULT: i32> MpDefault for MpDefaultI32<DEFAULT> {
+    #[inline]
     fn mp_default() -> Self {
         Self(DEFAULT)
     }
