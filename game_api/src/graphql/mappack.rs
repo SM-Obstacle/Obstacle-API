@@ -1,7 +1,7 @@
 use std::time::SystemTime;
 
 use async_graphql::SimpleObject;
-use deadpool_redis::{redis::AsyncCommands, Connection as RedisConnection};
+use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
     map,
     mappack::{update_mappack, AnyMappackId},
@@ -13,11 +13,10 @@ use records_lib::{
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key,
     },
-    Database, MySqlPool, RedisPool,
+    Database, DatabaseConnection, MySqlPool, RedisPool,
 };
 use reqwest::Client;
 use serde::Deserialize;
-use sqlx::MySqlConnection;
 
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 
@@ -33,8 +32,7 @@ struct MXMappackInfoResponse {
 
 async fn fill_mappack(
     client: &Client,
-    db: &mut MySqlConnection,
-    redis_conn: &mut RedisConnection,
+    conn: &mut DatabaseConnection,
     mappack: AnyMappackId<'_>,
     mappack_id: u32,
 ) -> RecordsResult<()> {
@@ -60,8 +58,8 @@ async fn fill_mappack(
 
     for mx_map in maps {
         // We check that the map exists in our database
-        let _ = must::have_map(&mut *db, &mx_map.TrackUID).await?;
-        redis_conn
+        let _ = must::have_map(&mut conn.mysql_conn, &mx_map.TrackUID).await?;
+        conn.redis_conn
             .sadd(mappack_key(mappack), mx_map.TrackUID)
             .await
             .with_api_err()?;
@@ -71,17 +69,17 @@ async fn fill_mappack(
     // These keys would probably be null for some mappacks, because they would belong
     // to an event edition, so these info would be retrieved from our information system.
 
-    redis_conn
+    conn.redis_conn
         .set(mappack_mx_username_key(mappack), info.Username)
         .await
         .with_api_err()?;
 
-    redis_conn
+    conn.redis_conn
         .set(mappack_mx_name_key(mappack), info.Name)
         .await
         .with_api_err()?;
 
-    redis_conn
+    conn.redis_conn
         .set(mappack_mx_created_key(mappack), info.Created)
         .await
         .with_api_err()?;
@@ -217,7 +215,7 @@ impl MappackPlayer<'_> {
                     game_id,
                 ))
                 .await?;
-            let map = must::have_map(&mut **mysql_conn, game_id).await?;
+            let map = must::have_map(mysql_conn, game_id).await?;
 
             out.push(MappackMap {
                 map: map.into(),
@@ -345,7 +343,8 @@ impl Mappack {
         login: String,
     ) -> async_graphql::Result<MappackPlayer<'a>> {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let player = must::have_player(mysql_pool, &login).await?;
+        let mut mysql_conn = mysql_pool.acquire().await?;
+        let player = must::have_player(&mut mysql_conn, &login).await?;
 
         Ok(MappackPlayer {
             inner: player.into(),
@@ -380,11 +379,11 @@ pub async fn get_mappack(
     mappack_id: String,
 ) -> RecordsResult<Mappack> {
     let db = ctx.data_unchecked::<Database>();
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err()?;
-    let redis_conn = &mut db.redis_pool.get().await?;
+    let mut conn = db.acquire().await.with_api_err()?;
     let mappack = AnyMappackId::Id(&mappack_id);
 
-    let mappack_uids: Vec<String> = redis_conn
+    let mappack_uids: Vec<String> = conn
+        .redis_conn
         .smembers(mappack_key(mappack))
         .await
         .with_api_err()?;
@@ -398,10 +397,10 @@ pub async fn get_mappack(
         let client = ctx.data_unchecked::<Client>();
 
         // We fill the mappack
-        fill_mappack(client, mysql_conn, redis_conn, mappack, mappack_id_int).await?;
+        fill_mappack(client, &mut conn, mappack, mappack_id_int).await?;
 
         // And we update it to have its scores cached
-        update_mappack(AnyMappackId::Id(&mappack_id), mysql_conn, redis_conn)
+        update_mappack(AnyMappackId::Id(&mappack_id), &mut conn)
             .await
             .with_api_err()?;
     }

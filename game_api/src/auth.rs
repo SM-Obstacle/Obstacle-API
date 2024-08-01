@@ -252,7 +252,7 @@ pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String,
     let mp_token = generate_token(256);
     let web_token = generate_token(32);
 
-    let mut connection = db.redis_pool.get().await?;
+    let mut connection = db.redis_pool.get().await.with_api_err()?;
     let mp_key = mp_token_key(login);
     let web_key = web_token_key(login);
 
@@ -279,15 +279,16 @@ async fn inner_check_auth_for(
     required: privilege::Flags,
     key: impl ToRedisArgs + std::marker::Sync + std::marker::Sync,
 ) -> RecordsResult<u32> {
-    let mut connection = db.redis_pool.get().await?;
+    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err()?;
+    let mut connection = db.redis_pool.get().await.with_api_err()?;
     let stored_token: Option<String> = connection.get(&key).await.with_api_err()?;
     if !matches!(stored_token, Some(t) if t == digest(token)) {
         return Err(RecordsErrorKind::Unauthorized);
     }
 
-    let player = records_lib::must::have_player(&db.mysql_pool, login).await?;
+    let player = records_lib::must::have_player(&mut mysql_conn, login).await?;
 
-    if let Some(ban) = player::check_banned(&db.mysql_pool, player.id).await? {
+    if let Some(ban) = player::check_banned(&mut mysql_conn, player.id).await? {
         return Err(RecordsErrorKind::BannedPlayer(ban));
     };
 

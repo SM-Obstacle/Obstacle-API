@@ -19,15 +19,15 @@ impl From<models::Banishment> for Banishment {
 #[async_graphql::Object]
 impl Banishment {
     async fn id(&self) -> u32 {
-        self.inner.inner.id
+        self.inner.id
     }
 
     async fn date_ban(&self) -> chrono::NaiveDateTime {
-        self.inner.inner.date_ban
+        self.inner.date_ban
     }
 
     async fn duration(&self) -> i64 {
-        self.inner.inner.duration
+        self.inner.duration
     }
 
     async fn was_reprieved(&self) -> bool {
@@ -35,20 +35,34 @@ impl Banishment {
     }
 
     async fn reason(&self) -> &str {
-        &self.inner.inner.reason
+        &self.inner.reason
     }
 
-    async fn player(&self, ctx: &Context<'_>) -> async_graphql::Result<Player> {
-        ctx.data_unchecked::<DataLoader<PlayerLoader>>()
-            .load_one(self.inner.inner.player_id)
-            .await?
-            .ok_or_else(|| async_graphql::Error::new("Banned player not found."))
+    async fn player(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<Player>> {
+        match self.inner.player_id {
+            Some(player_id) => match ctx
+                .data_unchecked::<DataLoader<PlayerLoader>>()
+                .load_one(player_id)
+                .await?
+            {
+                Some(player) => Ok(Some(player)),
+                None => Ok(None),
+            },
+            None => Ok(None),
+        }
     }
 
-    async fn banished_by(&self, ctx: &Context<'_>) -> async_graphql::Result<Player> {
-        ctx.data_unchecked::<DataLoader<PlayerLoader>>()
-            .load_one(self.inner.inner.banished_by)
-            .await?
-            .ok_or_else(|| async_graphql::Error::new("Banner player not found."))
+    async fn banished_by(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<Player>> {
+        match self.inner.banished_by {
+            Some(banished_by) => match ctx
+                .data_unchecked::<DataLoader<PlayerLoader>>()
+                .load_one(banished_by)
+                .await?
+            {
+                Some(player) => Ok(Some(player)),
+                None => Ok(None),
+            },
+            None => Ok(None),
+        }
     }
 }

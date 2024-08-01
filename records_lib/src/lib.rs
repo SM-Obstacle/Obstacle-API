@@ -10,7 +10,7 @@
 
 use deadpool_redis::Runtime;
 use once_cell::sync::OnceCell;
-use sqlx::{MySql, Pool};
+use sqlx::{pool::PoolConnection, MySql, Pool};
 use std::time::Duration;
 
 mod mpdefault;
@@ -35,13 +35,34 @@ pub type RedisConnection = deadpool_redis::Connection;
 
 pub use mpdefault::*;
 
-/// Represents the database of the API, meaning the MySQL and Redis pools.
+use self::error::RecordsResult;
+
+/// Represents a connection to the API database, both MariaDB and Redis.
+pub struct DatabaseConnection {
+    /// The connection to the MariaDB database.
+    pub mysql_conn: PoolConnection<MySql>,
+    /// The connection to the Redis database.
+    pub redis_conn: RedisConnection,
+}
+
+/// Represents the database of the API, meaning the MariaDB and Redis pools.
 #[derive(Clone)]
 pub struct Database {
     /// The MySQL (more precisely MariaDB) pool.
     pub mysql_pool: MySqlPool,
     /// The Redis pool.
     pub redis_pool: RedisPool,
+}
+
+impl Database {
+    /// Retrieves a connection object for each database pool, and returns them wrapped in a
+    /// [`DatabaseConnection`].
+    pub async fn acquire(&self) -> RecordsResult<DatabaseConnection> {
+        Ok(DatabaseConnection {
+            mysql_conn: self.mysql_pool.acquire().await?,
+            redis_conn: self.redis_pool.get().await?,
+        })
+    }
 }
 
 mkenv::make_env! {

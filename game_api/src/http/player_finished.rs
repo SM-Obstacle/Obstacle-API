@@ -1,26 +1,48 @@
 use actix_web::web::Json;
 use deadpool_redis::redis::AsyncCommands;
+use futures::TryStreamExt;
 use records_lib::{
     event::OptEvent,
     models,
     redis_key::map_key,
     update_ranks::{get_rank, update_leaderboard},
-    Database,
+    DatabaseConnection,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Connection;
 
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 
-use super::event;
+use super::{event, map::MapParam};
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct InsertRecordParams {
+    pub time: i32,
+    pub respawn_count: i32,
+    pub flags: Option<u32>,
+    pub cps: Vec<i32>,
+}
+
+pub struct FinishedParams<'a> {
+    pub rest: InsertRecordParams,
+    pub map: MapParam<'a>,
+}
 
 #[derive(Deserialize, Debug)]
 pub struct HasFinishedBody {
-    pub time: i32,
-    pub respawn_count: i32,
     pub map_uid: String,
-    pub flags: Option<u32>,
-    pub cps: Vec<i32>,
+    #[serde(flatten)]
+    pub rest: InsertRecordParams,
+}
+
+impl HasFinishedBody {
+    #[inline]
+    pub fn into_params(self, map: Option<&models::Map>) -> FinishedParams<'_> {
+        FinishedParams {
+            rest: self.rest,
+            map: MapParam::from_map(map, self.map_uid),
+        }
+    }
 }
 
 pub type PlayerFinishedBody = Json<HasFinishedBody>;
@@ -34,24 +56,17 @@ pub struct HasFinishedResponse {
     current_rank: i32,
 }
 
-#[derive(Clone)]
-struct InsertRecordParams {
-    time: i32,
-    respawn_count: i32,
-    flags: Option<u32>,
-    cps: Vec<i32>,
-}
-
 async fn send_query(
     db: &mut sqlx::MySqlConnection,
     map_id: u32,
     player_id: u32,
     body: InsertRecordParams,
+    event_record_id: Option<u32>,
     at: chrono::NaiveDateTime,
 ) -> records_lib::error::RecordsResult<u32> {
     let record_id: u32 = sqlx::query_scalar(
-        "INSERT INTO records (record_player_id, map_id, time, respawn_count, record_date, flags)
-                    VALUES (?, ?, ?, ?, ?, ?) RETURNING record_id",
+        "INSERT INTO records (record_player_id, map_id, time, respawn_count, record_date, flags, event_record_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING record_id",
     )
     .bind(player_id)
     .bind(map_id)
@@ -59,6 +74,7 @@ async fn send_query(
     .bind(body.respawn_count)
     .bind(at)
     .bind(body.flags)
+    .bind(event_record_id)
     .fetch_one(&mut *db)
     .await?;
 
@@ -83,29 +99,33 @@ async fn send_query(
     Ok(record_id)
 }
 
-async fn insert_record(
-    db: &Database,
-    map @ models::Map { id: map_id, .. }: &models::Map,
+pub(super) async fn insert_record(
+    db: &mut DatabaseConnection,
+    map_id: u32,
     player_id: u32,
-    body: &InsertRecordParams,
+    body: InsertRecordParams,
     event: OptEvent<'_, '_>,
+    event_record_id: Option<u32>,
     at: chrono::NaiveDateTime,
 ) -> RecordsResult<u32> {
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err()?;
-    let redis_conn = &mut db.redis_pool.get().await?;
-
-    let key = map_key(*map_id, event);
-    let added: Option<i64> = redis_conn.zadd(key, player_id, body.time).await.ok();
+    let key = map_key(map_id, event);
+    let added: Option<i64> = db.redis_conn.zadd(key, player_id, body.time).await.ok();
     if added.is_none() {
-        let _count = update_leaderboard((mysql_conn, redis_conn), map.id, event).await?;
+        let _count = update_leaderboard(db, map_id, event).await?;
     }
 
-    let body = body.clone();
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err()?;
-    let map_id = *map_id;
-
-    let record_id = mysql_conn
-        .transaction(|txn| Box::pin(send_query(txn, map_id, player_id, body, at)))
+    let record_id = db
+        .mysql_conn
+        .transaction(|txn| {
+            Box::pin(send_query(
+                txn,
+                map_id,
+                player_id,
+                body,
+                event_record_id,
+                at,
+            ))
+        })
         .await?;
 
     Ok(record_id)
@@ -113,38 +133,36 @@ async fn insert_record(
 
 pub struct FinishedOutput {
     pub record_id: u32,
+    pub player_id: u32,
     pub res: HasFinishedResponse,
 }
 
 pub async fn finished(
     login: String,
-    db: &Database,
-    body: HasFinishedBody,
+    db: &mut DatabaseConnection,
+    params: FinishedParams<'_>,
     event: OptEvent<'_, '_>,
+    event_record_id: Option<u32>,
     at: chrono::NaiveDateTime,
 ) -> RecordsResult<FinishedOutput> {
     // First, we retrieve all what we need to save the record
-    let player_id = records_lib::must::have_player(&db.mysql_pool, &login)
+    let player_id = records_lib::must::have_player(&mut db.mysql_conn, &login)
         .await?
         .id;
-    let ref map @ models::Map {
+    let map @ models::Map {
         id: map_id,
         cps_number,
         ..
-    } = records_lib::must::have_map(&db.mysql_pool, &body.map_uid).await?;
-
-    let params = InsertRecordParams {
-        time: body.time,
-        respawn_count: body.respawn_count,
-        flags: body.flags,
-        cps: body.cps,
+    } = match params.map {
+        MapParam::AlreadyQueried(map) => map,
+        MapParam::Uid(uid) => &records_lib::must::have_map(&mut db.mysql_conn, &uid).await?,
     };
 
     let (join_event, and_event) = event.get_join();
 
     // We check that the cps times are coherent to the final time
-    if matches!(cps_number, Some(num) if num + 1 != params.cps.len() as u32)
-        || params.cps.iter().sum::<i32>() != params.time
+    if matches!(cps_number, Some(num) if num + 1 != params.rest.cps.len() as u32)
+        || params.rest.cps.iter().sum::<i32>() != params.rest.time
     {
         return Err(RecordsErrorKind::InvalidTimes);
     }
@@ -168,58 +186,68 @@ pub async fn finished(
         query = query.bind(event.id).bind(edition.id);
     }
 
-    let old_record = query.fetch_optional(&db.mysql_pool).await.with_api_err()?;
-
-    let (old, new, has_improved) = if let Some(models::Record { time: old, .. }) = old_record {
-        let improved = params.time < old;
-
-        (old, params.time, improved)
-    } else {
-        (params.time, params.time, true)
-    };
-
-    // We insert the record (whether it is the new personal best or not)
-    let record_id = insert_record(db, map, player_id, &params, event, at).await?;
-
-    // TODO: Remove this after having added event mode into the TP
-    let original_uid = body.map_uid.replace("_benchmark", "");
-    if original_uid != body.map_uid {
-        let ref map @ models::Map {
-            cps_number: original_cps_number,
-            ..
-        } = records_lib::must::have_map(&db.mysql_pool, &original_uid).await?;
-
-        if cps_number == original_cps_number {
-            insert_record(db, map, player_id, &params, Default::default(), at).await?;
-        } else {
-            return Err(RecordsErrorKind::from(
-                records_lib::error::RecordsError::MapNotFound(original_uid),
-            ));
-        }
-    }
-
-    let redis_conn = &mut db.redis_pool.get().await?;
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err()?;
-    let current_rank = get_rank((mysql_conn, redis_conn), map.id, old.min(new), event).await?;
-
-    if event.0.is_none() {
-        let editions: Vec<(u32, u32)> = sqlx::query_as(
-            "select eem.event_id, eem.edition_id from event_edition_maps eem
-            inner join event_edition ee on ee.event_id = eem.event_id and ee.id = eem.edition_id
-            where ee.save_non_event_record and map_id = ?",
-        )
-        .bind(map_id)
-        .fetch_all(&mut **mysql_conn)
+    let old_record = query
+        .fetch_optional(&mut *db.mysql_conn)
         .await
         .with_api_err()?;
 
-        for (event_id, edition_id) in editions {
-            event::insert_event_record(&mut **mysql_conn, record_id, event_id, edition_id).await?;
+    let (old, new, has_improved) = if let Some(models::Record { time: old, .. }) = old_record {
+        let improved = params.rest.time < old;
+
+        (old, params.rest.time, improved)
+    } else {
+        (params.rest.time, params.rest.time, true)
+    };
+
+    // We insert the record (whether it is the new personal best or not)
+    let record_id = insert_record(
+        db,
+        map.id,
+        player_id,
+        params.rest.clone(),
+        event,
+        event_record_id,
+        at,
+    )
+    .await?;
+
+    let current_rank = get_rank(db, map.id, old.min(new), event).await?;
+
+    // If the record isn't in an event context, save the record to the events that have the map
+    // and allow records saving without an event context.
+    // If `event_record_id` is filled, then this record is simply a clone of the event record.
+    if event.0.is_none() && event_record_id.is_none() {
+        let editions = records_lib::event::get_editions_which_contain(&mut db.mysql_conn, *map_id)
+            .try_collect::<Vec<_>>()
+            .await
+            .with_api_err()?;
+
+        for (event_id, edition_id, original_map_id) in editions {
+            // We can't make a record for an event on the original map without passing by
+            // the event context, so the `on_original` attribute here is false.
+            event::insert_event_record(&mut db.mysql_conn, record_id, event_id, edition_id, false)
+                .await?;
+
+            let Some(original_map_id) = original_map_id else {
+                continue;
+            };
+
+            insert_record(
+                db,
+                original_map_id,
+                player_id,
+                params.rest.clone(),
+                Default::default(),
+                Some(record_id),
+                at,
+            )
+            .await?;
         }
     }
 
     Ok(FinishedOutput {
         record_id,
+        player_id,
         res: HasFinishedResponse {
             has_improved,
             login,

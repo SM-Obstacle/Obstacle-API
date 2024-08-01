@@ -1,4 +1,4 @@
-use actix_web::{HttpResponse, Responder};
+use actix_web::HttpResponse;
 use rand::Rng;
 use records_lib::{models, Database};
 use serde::Serialize;
@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::{RecordsResult, RecordsResultExt};
 
 /// Converts the provided body to a `200 OK` JSON responses.
-pub fn json<T: Serialize, E>(obj: T) -> Result<impl Responder, E> {
+pub fn json<T: Serialize, E>(obj: T) -> Result<HttpResponse, E> {
     Ok(HttpResponse::Ok().json(obj))
 }
 
@@ -41,7 +41,8 @@ pub async fn get_api_status(db: &Database) -> RecordsResult<ApiStatus> {
         "SELECT a.*, sh1.status_history_date as `at`
         FROM api_status_history sh1
         INNER JOIN api_status a ON a.status_id = sh1.status_id
-        WHERE sh1.status_history_id = (SELECT MAX(status_history_id) FROM api_status_history)",
+        ORDER BY sh1.status_history_id
+        LIMIT 1",
     )
     .fetch_one(&db.mysql_pool)
     .await

@@ -133,7 +133,9 @@ pub async fn banishments(
     db: Res<Database>,
     Query(body): Query<BanishmentsBody>,
 ) -> RecordsResponse<impl Responder> {
-    let player_id = records_lib::must::have_player(&db.mysql_pool, &body.player_login)
+    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+
+    let player_id = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
         .await
         .fit(req_id)?
         .id;
@@ -149,7 +151,7 @@ pub async fn banishments(
     )
     .bind(player_id)
     .bind(player_id)
-    .fetch_all(&db.mysql_pool)
+    .fetch_all(&mut *mysql_conn)
     .await
     .with_api_err()
     .fit(req_id)?;
@@ -179,11 +181,13 @@ pub async fn ban(
     db: Res<Database>,
     Json(body): Json<BanBody>,
 ) -> RecordsResponse<impl Responder> {
-    let player_id = records_lib::must::have_player(&db.mysql_pool, &body.player_login)
+    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+
+    let player_id = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
         .await
         .fit(req_id)?
         .id;
-    let admin_id = records_lib::must::have_player(&db.mysql_pool, &login)
+    let admin_id = records_lib::must::have_player(&mut mysql_conn, &login)
         .await
         .fit(req_id)?
         .id;
@@ -191,7 +195,7 @@ pub async fn ban(
     let was_reprieved =
         sqlx::query_as::<_, Banishment>("SELECT * FROM banishments WHERE player_id = ?")
             .bind(&body.player_login)
-            .fetch_optional(&db.mysql_pool)
+            .fetch_optional(&mut *mysql_conn)
             .await
             .with_api_err()
             .fit(req_id)?
@@ -208,7 +212,7 @@ pub async fn ban(
     .bind(body.reason)
     .bind(player_id)
     .bind(admin_id)
-    .fetch_one(&db.mysql_pool)
+    .fetch_one(&mut *mysql_conn)
     .await
     .with_api_err()
     .fit(req_id)?;
@@ -218,7 +222,7 @@ pub async fn ban(
         FROM banishments WHERE id = ?"#,
     )
     .bind(ban_id)
-    .fetch_one(&db.mysql_pool)
+    .fetch_one(&mut *mysql_conn)
     .await.with_api_err().fit(req_id)?;
 
     json(BanResponse {
@@ -259,7 +263,9 @@ pub async fn unban(
     db: Res<Database>,
     Json(body): Json<UnbanBody>,
 ) -> RecordsResponse<impl Responder> {
-    let player_id = records_lib::must::have_player(&db.mysql_pool, &body.player_login)
+    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+
+    let player_id = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
         .await
         .fit(req_id)?
         .id;
@@ -271,7 +277,7 @@ pub async fn unban(
     if let Some(duration) =
         sqlx::query_scalar::<_, i64>("SELECT SYSDATE() - date_ban FROM banishments WHERE id = ?")
             .bind(ban.inner.id)
-            .fetch_optional(&db.mysql_pool)
+            .fetch_optional(&mut *mysql_conn)
             .await
             .with_api_err()
             .fit(req_id)?
@@ -281,7 +287,7 @@ pub async fn unban(
 
     sqlx::query("UPDATE banishments SET duration = SYSDATE() - date_ban WHERE id = ?")
         .bind(ban.inner.id)
-        .execute(&db.mysql_pool)
+        .execute(&mut *mysql_conn)
         .await
         .with_api_err()
         .fit(req_id)?;
@@ -309,7 +315,9 @@ pub async fn player_note(
     db: Res<Database>,
     Json(body): Json<PlayerNoteBody>,
 ) -> RecordsResponse<impl Responder> {
-    let admins_note = records_lib::must::have_player(&db.mysql_pool, &body.player_login)
+    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+
+    let admins_note = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
         .await
         .fit(req_id)?
         .admins_note;

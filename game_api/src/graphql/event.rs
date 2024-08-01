@@ -299,7 +299,8 @@ impl EventEditionPlayerRank<'_> {
 
     async fn map(&self, ctx: &Context<'_>) -> async_graphql::Result<EventEditionMapExt<'_>> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        let map = must::have_map(db, &self.map_game_id).await?;
+        let mut mysql_conn = db.acquire().await?;
+        let map = must::have_map(&mut mysql_conn, &self.map_game_id).await?;
         Ok(EventEditionMapExt {
             inner: map.into(),
             edition_player: self.edition_player,
@@ -578,7 +579,8 @@ impl EventEdition<'_> {
         login: String,
     ) -> async_graphql::Result<EventEditionPlayer<'_>> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        let player = must::have_player(db, &login).await?;
+        let mut mysql_conn = db.acquire().await?;
+        let player = must::have_player(&mut mysql_conn, &login).await?;
         Ok(EventEditionPlayer {
             edition: self,
             player,
@@ -591,7 +593,8 @@ impl EventEdition<'_> {
         game_id: String,
     ) -> async_graphql::Result<EventEditionMap<'_>> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        let map = must::have_map(db, &game_id).await?;
+        let mut mysql_conn = db.acquire().await?;
+        let map = must::have_map(&mut mysql_conn, &game_id).await?;
         Ok(EventEditionMap {
             edition: self,
             map: map.into(),

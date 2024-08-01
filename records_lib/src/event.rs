@@ -313,3 +313,21 @@ pub fn get_admins_of(
     .bind(edition_id)
     .fetch(&mut **db)
 }
+
+/// Returns the event editions which contain the map with the provided ID.
+///
+/// ## Parameters
+///
+/// * `map_id`: the ID of the map the event editions should contain.
+pub fn get_editions_which_contain(
+    db: &mut MySqlConnection,
+    map_id: u32,
+) -> impl Stream<Item = sqlx::Result<(u32, u32, Option<u32>)>> + '_ {
+    sqlx::query_as(
+        "select eem.event_id, eem.edition_id, original_map_id from event_edition_maps eem
+            inner join event_edition ee on ee.event_id = eem.event_id and ee.id = eem.edition_id
+            where ee.save_non_event_record and map_id = ?",
+    )
+    .bind(map_id)
+    .fetch(db)
+}

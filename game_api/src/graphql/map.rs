@@ -13,7 +13,7 @@ use records_lib::{
     must,
     redis_key::alone_map_key,
     update_ranks::{get_rank, update_leaderboard},
-    Database,
+    Database, DatabaseConnection,
 };
 use sqlx::{mysql, FromRow, MySqlPool};
 
@@ -48,18 +48,17 @@ impl Map {
         event: OptEvent<'_, '_>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
-        let mysql_conn = &mut db.mysql_pool.acquire().await?;
-        let redis_conn = &mut db.redis_pool.get().await?;
+        let mut conn = db.acquire().await?;
 
         let key = alone_map_key(self.inner.id);
 
-        update_leaderboard((mysql_conn, redis_conn), self.inner.id, event).await?;
+        update_leaderboard(&mut conn, self.inner.id, event).await?;
 
         let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
         let record_ids: Vec<i32> = if to_reverse {
-            redis_conn.zrevrange(&key, 0, 99)
+            conn.redis_conn.zrevrange(&key, 0, 99)
         } else {
-            redis_conn.zrange(&key, 0, 99)
+            conn.redis_conn.zrange(&key, 0, 99)
         }
         .await?;
         if record_ids.is_empty() {
@@ -112,20 +111,19 @@ impl Map {
             query = query.bind(event.id).bind(edition.id);
         }
 
-        let mut records = query.fetch(&mut **mysql_conn);
+        conn.mysql_conn.close().await?;
+
+        let mut records = query.fetch(&db.mysql_pool);
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
-        let mysql_conn = &mut db.mysql_pool.acquire().await?;
+        let mut conn = DatabaseConnection {
+            mysql_conn: db.mysql_pool.acquire().await?,
+            ..conn
+        };
 
         while let Some(record) = records.next().await {
             let record = record?;
-            let rank = get_rank(
-                (&mut *mysql_conn, redis_conn),
-                self.inner.id,
-                record.time,
-                event,
-            )
-            .await?;
+            let rank = get_rank(&mut conn, self.inner.id, record.time, event).await?;
 
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }
@@ -171,7 +169,9 @@ impl Map {
 
         let mysql_conn = &mut mysql_pool.acquire().await?;
 
-        if map::get_map_from_uid(mysql_pool, &format!("{}_benchmark", self.inner.game_id))
+        // FIXME: this is used to make a relation between non-benchmarked map and the benchmark event.
+        // In the future, this should be removed and the query should use the `original` flags.
+        if map::get_map_from_uid(mysql_conn, &format!("{}_benchmark", self.inner.game_id))
             .await?
             .is_some()
         {
@@ -183,7 +183,8 @@ impl Map {
             ]);
         }
 
-        let mut raw_editions = sqlx::query_as::<_, models::EventEdition>("select ee.* from event_edition ee
+        let mut raw_editions = sqlx::query_as::<_, models::EventEdition>(
+            "select ee.* from event_edition ee
             inner join event_edition_maps eem on ee.id = eem.edition_id and ee.event_id = eem.event_id
             where eem.map_id = ?
             order by ee.start_date desc")

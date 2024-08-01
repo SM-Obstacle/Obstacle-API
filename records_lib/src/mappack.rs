@@ -3,7 +3,6 @@
 use std::{fmt, time::SystemTime};
 
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
-use sqlx::MySqlConnection;
 
 use crate::{
     error::RecordsResult,
@@ -15,7 +14,7 @@ use crate::{
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
     update_ranks::get_rank,
-    RedisConnection,
+    DatabaseConnection, RedisConnection,
 };
 
 #[derive(Default, Clone, Debug)]
@@ -146,17 +145,13 @@ impl AnyMappackId<'_> {
 /// * `mappack`: the mappack.
 /// * `mysql_conn`: a connection to the MySQL/MariaDB database, to fetch the records.
 /// * `redis_conn`: a connection to the Redis database, to store the scores.
-#[cfg_attr(
-    feature = "tracing",
-    tracing::instrument(skip(mysql_conn, redis_conn), err, ret)
-)]
+#[cfg_attr(feature = "tracing", tracing::instrument(skip(db), err, ret))]
 pub async fn update_mappack(
     mappack: AnyMappackId<'_>,
-    mysql_conn: &mut MySqlConnection,
-    redis_conn: &mut RedisConnection,
+    db: &mut DatabaseConnection,
 ) -> RecordsResult<()> {
     // Calculate the scores
-    let scores = calc_scores(mappack, mysql_conn, redis_conn).await?;
+    let scores = calc_scores(mappack, db).await?;
 
     // Early return if the mappack has expired
     let Some(scores) = scores else {
@@ -164,13 +159,13 @@ pub async fn update_mappack(
     };
 
     // Then save them to the Redis database for cache-handling
-    save(mappack, scores, redis_conn).await?;
+    save(mappack, scores, &mut db.redis_conn).await?;
 
     // And we save it to the registered mappacks set.
     if mappack.has_ttl() {
         // The mappack has a TTL, so its member will be removed from the set when
         // attempting to retrieve its maps.
-        redis_conn
+        db.redis_conn
             .sadd(mappacks_key(), mappack.mappack_id())
             .await?;
     }
@@ -319,14 +314,13 @@ async fn save(
 }
 
 /// Returns an `Option` because the mappack may have expired.
-#[cfg_attr(feature = "tracing", tracing::instrument(skip(mysql_conn, redis_conn)))]
+#[cfg_attr(feature = "tracing", tracing::instrument(skip(db)))]
 async fn calc_scores(
     mappack: AnyMappackId<'_>,
-    mysql_conn: &mut MySqlConnection,
-    redis_conn: &mut RedisConnection,
+    db: &mut DatabaseConnection,
 ) -> RecordsResult<Option<MappackScores>> {
     let mappack_key = mappack_key(mappack);
-    let mappack_uids: Vec<String> = redis_conn.smembers(&mappack_key).await?;
+    let mappack_uids: Vec<String> = db.redis_conn.smembers(&mappack_key).await?;
 
     let mut maps = Vec::with_capacity(mappack_uids.len().max(5));
 
@@ -338,14 +332,15 @@ async fn calc_scores(
         // or that its TTL has expired. So we remove its entry in the registered mappacks set.
         // The other keys related to this mappack were set with a TTL so they should
         // be deleted too.
-        let _: i32 = redis_conn
+        let _: i32 = db
+            .redis_conn
             .srem(mappacks_key(), mappack.mappack_id())
             .await?;
         return Ok(None);
     } else {
         let mut out = Vec::with_capacity(mappack_uids.len());
         for map_uid in &mappack_uids {
-            let map = must::have_map(&mut *mysql_conn, map_uid).await?;
+            let map = must::have_map(&mut db.mysql_conn, map_uid).await?;
             maps.push(MappackMap {
                 map_id: map.game_id.clone(),
                 last_rank: 0,
@@ -375,7 +370,7 @@ async fn calc_scores(
             query
         };
 
-        let res = query.fetch_all(&mut *mysql_conn).await?;
+        let res = query.fetch_all(&mut *db.mysql_conn).await?;
 
         let mut records = Vec::with_capacity(res.len());
 
@@ -392,13 +387,7 @@ async fn calc_scores(
             }
 
             let record = RankedRecordRow {
-                rank: get_rank(
-                    (&mut *mysql_conn, redis_conn),
-                    map.id,
-                    record.record.time,
-                    event,
-                )
-                .await?,
+                rank: get_rank(db, map.id, record.record.time, event).await?,
                 record,
             };
             records.push(record);

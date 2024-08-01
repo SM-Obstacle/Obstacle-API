@@ -1,5 +1,7 @@
 //! A module containing the [`RecordsError`] struct, which contains various basic error types.
 
+use deadpool_redis::PoolError;
+
 /// Represents any type of error that could happen when using this crate.
 ///
 /// To be handled by the ShootMania Obstacle gamemode, each kind of error has an associated code.
@@ -27,6 +29,9 @@ pub enum RecordsError {
     /// An error that happened when sending an external request.
     #[error(transparent)]
     ExternalRequest(#[from] reqwest::Error) = 104,
+    /// An error that happened when using the Redis pool.
+    #[error(transparent)]
+    PoolError(#[from] PoolError) = 108,
 
     // --- Logical errors
     /// The player with the provided login was not found.

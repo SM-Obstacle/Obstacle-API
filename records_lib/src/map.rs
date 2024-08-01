@@ -2,13 +2,13 @@
 
 use core::fmt;
 
-use sqlx::{Executor, MySql};
+use sqlx::MySqlConnection;
 
 use crate::{error::RecordsResult, models::Map};
 
 /// Returns the optional map from its UID.
-pub async fn get_map_from_uid<'c, E: Executor<'c, Database = MySql>>(
-    db: E,
+pub async fn get_map_from_uid(
+    db: &mut MySqlConnection,
     map_uid: &str,
 ) -> RecordsResult<Option<Map>> {
     let r = sqlx::query_as("SELECT * FROM maps WHERE game_id = ?")

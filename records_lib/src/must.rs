@@ -10,7 +10,7 @@
 //! we most likely want things to be already existing, without checking it repeatedly
 //! and returning the error to the client.
 
-use sqlx::{Executor, MySql, MySqlConnection};
+use sqlx::MySqlConnection;
 
 use crate::{
     error::{RecordsError, RecordsResult},
@@ -25,6 +25,28 @@ pub async fn have_event_handle(
     event::get_event_by_handle(db, handle)
         .await?
         .ok_or_else(|| RecordsError::EventNotFound(handle.to_owned()))
+}
+
+/// Returns the event and its edition in the database bound to the provided IDs.
+// FIXME: although this function is called when we know the edition exists,
+// do we have to get rid of the `fetch_one` method usage?
+pub async fn have_event_edition_from_ids(
+    db: &mut MySqlConnection,
+    event_id: u32,
+    edition_id: u32,
+) -> RecordsResult<(models::Event, models::EventEdition)> {
+    let event = sqlx::query_as("select * from event where id = ?")
+        .bind(event_id)
+        .fetch_one(&mut *db)
+        .await?;
+
+    let edition = sqlx::query_as("select * from event_edition where event_id = ? and id = ?")
+        .bind(event_id)
+        .bind(edition_id)
+        .fetch_one(db)
+        .await?;
+
+    Ok((event, edition))
 }
 
 /// Returns the event and its edition in the database bound to the provided handles and edition ID.
@@ -46,20 +68,14 @@ pub async fn have_event_edition(
 }
 
 /// Returns the player in the database bound to the provided login.
-pub async fn have_player<'c, E: sqlx::Executor<'c, Database = sqlx::MySql>>(
-    db: E,
-    login: &str,
-) -> RecordsResult<models::Player> {
+pub async fn have_player(db: &mut MySqlConnection, login: &str) -> RecordsResult<models::Player> {
     player::get_player_from_login(db, login)
         .await?
         .ok_or_else(|| RecordsError::PlayerNotFound(login.to_owned()))
 }
 
 /// Returns the map in the database bound to the provided map UID.
-pub async fn have_map<'c, E: Executor<'c, Database = MySql>>(
-    db: E,
-    map_uid: &str,
-) -> RecordsResult<models::Map> {
+pub async fn have_map(db: &mut MySqlConnection, map_uid: &str) -> RecordsResult<models::Map> {
     map::get_map_from_uid(db, map_uid)
         .await?
         .ok_or_else(|| RecordsError::MapNotFound(map_uid.to_owned()))
@@ -72,33 +88,37 @@ pub async fn have_map<'c, E: Executor<'c, Database = MySql>>(
 /// * `map_uid`: the UID of the map.
 /// * `event_handle`: the handle of the event.
 /// * `edition_id`: the ID of its edition.
+///
+/// ## Return
+///
+/// This function returns the event with its edition, and the the corresponding map
+/// bound to the event.
+///
+/// For example, for the Benchmark, if the given map UID is `X`, the returned map will be the one
+/// with the UID `X_benchmark`. If the given map UID is already `X_benchmark`, it will
+/// simply be the corresponding map.
 pub async fn have_event_edition_with_map(
     db: &mut MySqlConnection,
     map_uid: &str,
     event_handle: String,
     edition_id: u32,
-) -> RecordsResult<(models::Event, models::EventEdition)> {
+) -> RecordsResult<(models::Event, models::EventEdition, models::Map)> {
     let (event, event_edition) = have_event_edition(db, &event_handle, edition_id).await?;
 
-    if sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) AS map_in_event
-        FROM event_edition_maps eem
-        INNER JOIN maps m ON m.id = eem.map_id
-        WHERE edition_id = ? AND event_id = ? AND game_id = ?",
+    let map = sqlx::query_as(
+        "select m.* from event_edition_maps eem
+        inner join maps m on m.id = eem.map_id
+        inner join maps om on om.id in (eem.map_id, eem.original_map_id)
+        where eem.event_id = ? and eem.edition_id = ? and om.game_id = ?",
     )
-    .bind(event_edition.id)
     .bind(event.id)
+    .bind(event_edition.id)
     .bind(map_uid)
-    .fetch_one(db)
+    .fetch_optional(db)
     .await?
-        == 0
-    {
-        return Err(RecordsError::MapNotInEventEdition(
-            map_uid.to_owned(),
-            event_handle,
-            edition_id,
-        ));
-    }
+    .ok_or_else(|| {
+        RecordsError::MapNotInEventEdition(map_uid.to_owned(), event_handle, edition_id)
+    })?;
 
-    Ok((event, event_edition))
+    Ok((event, event_edition, map))
 }

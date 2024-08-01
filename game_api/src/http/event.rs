@@ -145,6 +145,7 @@ struct EventHandleEditionResponse {
     mx_id: Option<MpDefaultI32>,
     /// Whether the edition has expired or not.
     expired: bool,
+    original_map_uids: Vec<String>,
     /// The content of the edition (the categories).
     ///
     /// If the event has no category, the maps are grouped in a single category with all
@@ -375,6 +376,19 @@ async fn edition(
         });
     }
 
+    let original_map_uids = sqlx::query_scalar(
+        "
+        select m.game_id as map_uid from event_edition_maps eem
+        inner join maps m on m.id = eem.original_map_id
+        where eem.event_id = ? and eem.edition_id = ?",
+    )
+    .bind(edition.event_id)
+    .bind(edition.id)
+    .fetch_all(&db.mysql_pool)
+    .await
+    .with_api_err()
+    .fit(req_id)?;
+
     json(EventHandleEditionResponse {
         expired: edition.has_expired(),
         end_date: edition
@@ -394,6 +408,7 @@ async fn edition(
         banner_img_url: edition.banner_img_url.unwrap_or_default(),
         banner2_img_url: edition.banner2_img_url.unwrap_or_default(),
         mx_id: edition.mx_id.map(|id| MpDefaultI32(id as _)),
+        original_map_uids,
         categories,
     })
 }
@@ -404,10 +419,10 @@ async fn edition_overview(
     path: Path<(String, u32)>,
     query: overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
     let (event, edition) = path.into_inner();
-    let (event, edition) = records_lib::must::have_event_edition_with_map(
-        &mut mysql_conn,
+    let (event, edition, map) = records_lib::must::have_event_edition_with_map(
+        &mut conn.mysql_conn,
         &query.map_uid,
         event,
         edition,
@@ -415,13 +430,19 @@ async fn edition_overview(
     .await
     .with_api_err()
     .fit(req_id)?;
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     if edition.has_expired() {
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    overview::overview(req_id, db, query, OptEvent::new(&event, &edition)).await
+    overview::overview(
+        req_id,
+        &db.mysql_pool,
+        &mut conn,
+        query.0.into_params(Some(&map)),
+        OptEvent::new(&event, &edition),
+    )
+    .await
 }
 
 #[inline(always)]
@@ -451,14 +472,18 @@ pub async fn edition_finished_at(
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
+    let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
+
     let (event_handle, edition_id) = path.into_inner();
 
-    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let played_map = records_lib::must::have_map(&mut conn.mysql_conn, &body.map_uid)
+        .await
+        .fit(req_id)?;
 
     // We first check that the event and its edition exist
     // and that the map is registered on it.
-    let (event, edition) = records_lib::must::have_event_edition_with_map(
-        &mut mysql_conn,
+    let (event, edition, map) = records_lib::must::have_event_edition_with_map(
+        &mut conn.mysql_conn,
         &body.map_uid,
         event_handle,
         edition_id,
@@ -466,25 +491,60 @@ pub async fn edition_finished_at(
     .await
     .fit(req_id)?;
 
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
-
     if edition.has_expired() {
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
+    let opt_event = OptEvent::new(&event, &edition);
+
+    let params = body.into_params(Some(&map));
+    let rest = params.rest.clone();
+
     // Then we insert the record for the global records
-    let res = pf::finished(login, &db, body, OptEvent::new(&event, &edition), at)
+    let res = pf::finished(login.clone(), &mut conn, params, opt_event, None, at)
         .await
         .fit(req_id)?;
+
+    // The map bound to the event doesn't have the same ID as the played map,
+    // yet we've reached this point, so the played map is the original.
+    let on_original = played_map.id != map.id;
+
+    // If the played map is the original one, we save the record for it too.
+    if on_original {
+        // Here, we don't provide the event instances, because we don't want to save in event mode.
+        pf::insert_record(
+            &mut conn,
+            played_map.id,
+            res.player_id,
+            rest,
+            Default::default(),
+            Some(res.record_id),
+            at,
+        )
+        .await
+        .fit(req_id)?;
+    }
+
+    let original_map_count: i64 = sqlx::query_scalar(
+        "select count(*) from event_edition_maps
+        where event_id = ? and edition_id = ? and original_map_id is not null",
+    )
+    .bind(event.id)
+    .bind(edition.id)
+    .fetch_one(&mut *conn.mysql_conn)
+    .await
+    .with_api_err()
+    .fit(req_id)?;
 
     // Then we insert it for the event edition records.
     // This is not part of the transaction, because we don't want to roll back
     // the insertion of the record if this query fails.
     insert_event_record(
-        &mut *db.mysql_pool.acquire().await.with_api_err().fit(req_id)?,
+        &mut conn.mysql_conn,
         res.record_id,
         event.id,
         edition.id,
+        on_original || original_map_count == 0,
     )
     .await
     .fit(req_id)?;
@@ -497,14 +557,16 @@ pub async fn insert_event_record(
     record_id: u32,
     event_id: u32,
     edition_id: u32,
+    on_original: bool,
 ) -> RecordsResult<()> {
     sqlx::query(
-        "INSERT INTO event_edition_records (record_id, event_id, edition_id)
-            VALUES (?, ?, ?)",
+        "INSERT INTO event_edition_records (record_id, event_id, edition_id, on_original)
+            VALUES (?, ?, ?, ?)",
     )
     .bind(record_id)
     .bind(event_id)
     .bind(edition_id)
+    .bind(on_original)
     .execute(conn)
     .await
     .with_api_err()?;
@@ -523,7 +585,7 @@ async fn edition_pb(
 
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let (event, edition) = records_lib::must::have_event_edition_with_map(
+    let (event, edition, map) = records_lib::must::have_event_edition_with_map(
         &mut mysql_conn,
         &body.map_uid,
         event_handle,
@@ -537,6 +599,10 @@ async fn edition_pb(
     if edition.has_expired() {
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
+
+    let body = pb::PbBody {
+        map_uid: map.game_id,
+    };
 
     pb::pb(login, req_id, db, body, OptEvent::new(&event, &edition)).await
 }

@@ -10,7 +10,7 @@ use records_lib::{
     models::{self, Medal},
     must,
     redis_key::mappack_key,
-    Database, MySqlPool,
+    Database, DatabaseConnection, MySqlPool,
 };
 
 use crate::clear;
@@ -45,12 +45,21 @@ enum Id {
 }
 
 #[derive(serde::Deserialize, Debug)]
+#[serde(untagged)]
+enum OriginalId {
+    MapUid { original_map_uid: String },
+    MxId { original_mx_id: i64 },
+}
+
+#[derive(serde::Deserialize, Debug)]
 struct Row {
     #[serde(flatten)]
     id: Id,
     category_handle: Option<String>,
     #[serde(flatten)]
     times: Option<MedalTimes>,
+    #[serde(flatten)]
+    original_id: Option<OriginalId>,
 }
 
 #[derive(serde::Deserialize)]
@@ -73,10 +82,12 @@ async fn insert_mx_maps(
 
     let mysql_conn = &mut db.acquire().await?;
 
+    let mut inserted_count = 0;
+
     for mx_map in mx_maps {
-        let author = must::have_player(&mut **mysql_conn, &mx_map.author_login).await?;
+        let author = must::have_player(mysql_conn, &mx_map.author_login).await?;
         // Skip if we already know this map
-        if let Some(map) = map::get_map_from_uid(&mut **mysql_conn, &mx_map.map_uid).await? {
+        if let Some(map) = map::get_map_from_uid(mysql_conn, &mx_map.map_uid).await? {
             out.push((mx_map.mx_id, map));
             continue;
         }
@@ -95,9 +106,42 @@ async fn insert_mx_maps(
             .await?;
 
         out.push((mx_map.mx_id, map));
+        inserted_count += 1;
     }
 
+    tracing::info!("Inserted {inserted_count} new map(s) from MX");
+
     Ok(out)
+}
+
+enum MxIdIter {
+    None,
+    Single(Option<i64>),
+    Both(Option<i64>, Option<i64>),
+}
+
+impl MxIdIter {
+    #[inline]
+    fn single(x: i64) -> Self {
+        Self::Single(Some(x))
+    }
+
+    #[inline]
+    fn both(a: i64, b: i64) -> Self {
+        Self::Both(Some(a), Some(b))
+    }
+}
+
+impl Iterator for MxIdIter {
+    type Item = i64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::None => None,
+            Self::Single(x) => x.take(),
+            Self::Both(first, second) => first.take().or_else(|| second.take()),
+        }
+    }
 }
 
 #[tracing::instrument(skip(client, pool, rows))]
@@ -110,12 +154,20 @@ async fn populate_mx_maps(
 
     let mx_ids = rows
         .iter()
-        .filter_map(|(row, _)| match row.id {
-            Id::MapUid { .. } => None,
-            Id::MxId { mx_id } => Some(mx_id),
+        .flat_map(|(row, _)| match (&row.id, &row.original_id) {
+            (Id::MapUid { .. }, Some(OriginalId::MapUid { .. }) | None) => MxIdIter::None,
+            (Id::MxId { mx_id }, Some(OriginalId::MxId { original_mx_id })) => {
+                MxIdIter::both(*mx_id, *original_mx_id)
+            }
+            (Id::MxId { mx_id }, _)
+            | (
+                _,
+                Some(OriginalId::MxId {
+                    original_mx_id: mx_id,
+                }),
+            ) => MxIdIter::single(*mx_id),
         })
-        // MX accepts max 50 entries per request
-        .chunks(50);
+        .chunks(25);
 
     let mx_ids: Vec<_> = stream::iter(&mx_ids)
         .map(|mut chunk| async move {
@@ -123,6 +175,7 @@ async fn populate_mx_maps(
                 "https://sm.mania.exchange/api/maps/get_map_info/multi/{}",
                 chunk.join(",")
             );
+            tracing::info!("Requesting MX ({})...", url);
             let mx_maps = client
                 .get(url)
                 .header("User-Agent", "obstacle (discord @ahmadbky)")
@@ -141,23 +194,20 @@ async fn populate_mx_maps(
 
 pub async fn populate(
     client: reqwest::Client,
-    Database {
-        mysql_pool,
-        redis_pool,
-    }: Database,
+    db: Database,
     PopulateCommand {
         event_handle,
         event_edition,
         kind,
     }: PopulateCommand,
 ) -> anyhow::Result<()> {
-    let redis_conn = &mut redis_pool.get().await?;
-    let mysql_conn = &mut mysql_pool.acquire().await?;
+    let mut conn = db.acquire().await?;
 
     let (event, edition) =
-        must::have_event_edition(mysql_conn, &event_handle, event_edition).await?;
+        must::have_event_edition(&mut conn.mysql_conn, &event_handle, event_edition).await?;
 
-    let categories = event::get_categories_by_edition_id(mysql_conn, event.id, edition.id).await?;
+    let categories =
+        event::get_categories_by_edition_id(&mut conn.mysql_conn, event.id, edition.id).await?;
 
     if !categories.is_empty() {
         tracing::info!(
@@ -168,7 +218,7 @@ pub async fn populate(
 
     tracing::info!("Clearing old content...");
 
-    clear::clear_content(mysql_conn, event.id, edition.id).await?;
+    clear::clear_content(&mut conn.mysql_conn, event.id, edition.id).await?;
 
     let csv_file = match kind {
         PopulateKind::CsvFile { csv_file } => csv_file,
@@ -189,8 +239,10 @@ pub async fn populate(
             tracing::info!("Found {} map(s) in MX mappack with ID {mx_id}", maps.len());
 
             for map in maps {
-                let player = must::have_player(&mut **mysql_conn, &map.AuthorLogin).await?;
-                let map_id = match map::get_map_from_uid(&mut **mysql_conn, &map.TrackUID).await? {
+                let player = must::have_player(&mut conn.mysql_conn, &map.AuthorLogin).await?;
+                let map_id = match map::get_map_from_uid(&mut conn.mysql_conn, &map.TrackUID)
+                    .await?
+                {
                     Some(map) => map.id,
                     None => sqlx::query_scalar(
                         "insert into maps (game_id, player_id, name) values (?, ?, ?) returning id",
@@ -198,19 +250,19 @@ pub async fn populate(
                     .bind(&map.TrackUID)
                     .bind(player.id)
                     .bind(&map.GbxMapName)
-                    .fetch_one(&mut **mysql_conn)
+                    .fetch_one(&mut *conn.mysql_conn)
                     .await?,
                 };
 
                 sqlx::query(
-                    "REPLACE INTO event_edition_maps (event_id, edition_id, map_id, mx_id, `order`) \
-                    VALUES (?, ?, ?, ?, 0)"
+                    "REPLACE INTO event_edition_maps (event_id, edition_id, map_id, mx_id, `order`, original_map_id) \
+                    VALUES (?, ?, ?, ?, 0, NULL)"
                 )
                 .bind(event.id)
                 .bind(edition.id)
                 .bind(map_id)
                 .bind(map.MapID)
-                .execute(&mut **mysql_conn)
+                .execute(&mut *conn.mysql_conn)
                 .await?;
             }
 
@@ -225,8 +277,8 @@ pub async fn populate(
         .from_path(&csv_file)
         .with_context(|| format!("Couldn't read CSV file `{}`", csv_file.display()))?;
 
-    let mut rows = Vec::new();
     let mut rows_iter = reader.deserialize::<Row>();
+    let mut rows = Vec::with_capacity(rows_iter.size_hint().0);
 
     loop {
         let line = rows_iter.reader().position().line();
@@ -236,9 +288,14 @@ pub async fn populate(
         }
     }
 
-    let mut mx_maps = populate_mx_maps(&client, &mysql_pool, &rows).await?;
+    conn.mysql_conn.close().await?;
 
-    tracing::info!("Retrieved these MX maps: {mx_maps:#?}");
+    let mut mx_maps = populate_mx_maps(&client, &db.mysql_pool, &rows).await?;
+
+    let mut conn = DatabaseConnection {
+        mysql_conn: db.mysql_pool.acquire().await?,
+        ..conn
+    };
 
     tracing::info!("Inserting new content...");
 
@@ -249,12 +306,13 @@ pub async fn populate(
             id,
             category_handle,
             times,
+            original_id,
         },
         i,
     ) in rows
     {
         let (mx_id, map) = match id {
-            Id::MapUid { map_uid } => (0, must::have_map(&mut **mysql_conn, &map_uid).await?),
+            Id::MapUid { map_uid } => (0, must::have_map(&mut conn.mysql_conn, &map_uid).await?),
             Id::MxId { mx_id } => (
                 mx_id,
                 mx_maps
@@ -264,14 +322,29 @@ pub async fn populate(
             ),
         };
 
+        let original_map = match original_id {
+            Some(id) => match id {
+                OriginalId::MapUid { original_map_uid } => {
+                    Some(must::have_map(&mut conn.mysql_conn, &original_map_uid).await?)
+                }
+                OriginalId::MxId { original_mx_id } => Some(
+                    mx_maps
+                        .remove(&original_mx_id)
+                        .ok_or_else(|| anyhow::anyhow!("missing map with mx_id {original_mx_id}"))
+                        .with_context(|| format!("Failed to load the event on line {i}"))?,
+                ),
+            },
+            None => None,
+        };
+
         let opt_category_id = category_handle
             .filter(|s| !s.is_empty())
             .and_then(|s| categories.iter().find(|c| c.handle == s))
             .map(|c| c.id);
 
         sqlx::query(
-            "replace into event_edition_maps (event_id, edition_id, map_id, category_id, mx_id, `order`) \
-        values (?, ?, ?, ?, ?, ?)",
+            "replace into event_edition_maps (event_id, edition_id, map_id, category_id, mx_id, `order`, original_map_id) \
+        values (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(event.id)
         .bind(edition.id)
@@ -279,7 +352,8 @@ pub async fn populate(
         .bind(opt_category_id)
         .bind(mx_id)
         .bind(i)
-        .execute(&mut **mysql_conn)
+        .bind(original_map.as_ref().map(|m| m.id))
+        .execute(&mut *conn.mysql_conn)
         .await?;
 
         let Some(MedalTimes {
@@ -320,15 +394,17 @@ pub async fn populate(
         .bind(map.id)
         .bind(Medal::Champion as u8)
         .bind(champion_time)
-        .execute(&mut **mysql_conn)
+        .execute(&mut *conn.mysql_conn)
         .await?;
 
-        redis_conn.sadd(mappack_key(mappack), map.game_id).await?;
+        conn.redis_conn
+            .sadd(mappack_key(mappack), map.game_id)
+            .await?;
     }
 
     tracing::info!("Filling mappack in the Redis database...");
 
-    mappack::update_mappack(mappack, mysql_conn, redis_conn).await?;
+    mappack::update_mappack(mappack, &mut conn).await?;
 
     tracing::info!("Done");
 

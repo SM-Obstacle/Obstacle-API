@@ -3,10 +3,15 @@ use actix_web::{
     web::{self, Data, Json, Query},
     HttpResponse, Responder, Scope,
 };
-use records_lib::{models::Banishment, Database};
+use futures::TryStreamExt;
+use records_lib::{
+    event::{self, OptEvent},
+    models::Banishment,
+    must, Database,
+};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, MySqlPool};
+use sqlx::{FromRow, MySqlConnection};
 use tokio::time::timeout;
 use tracing::Level;
 use tracing_actix_web::RequestId;
@@ -110,7 +115,7 @@ pub async fn update_player(
 }
 
 pub async fn check_banned(
-    db: &MySqlPool,
+    db: &mut MySqlConnection,
     player_id: u32,
 ) -> Result<Option<Banishment>, RecordsErrorKind> {
     let r = sqlx::query_as("SELECT * FROM current_bans WHERE player_id = ?")
@@ -196,10 +201,18 @@ pub async fn finished_at(
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
-    let res = pf::finished(login, &db, body, Default::default(), at)
-        .await
-        .fit(req_id)?
-        .res;
+    let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
+    let res = pf::finished(
+        login,
+        &mut conn,
+        body.into_params(None),
+        Default::default(),
+        None,
+        at,
+    )
+    .await
+    .fit(req_id)?
+    .res;
     json(res)
 }
 
@@ -314,9 +327,41 @@ async fn pb(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
-    body: pb::PbReq,
+    Query(body): pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
-    pb::pb(login, req_id, db, body, Default::default()).await
+    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+
+    let map = must::have_map(&mut mysql_conn, &body.map_uid)
+        .await
+        .with_api_err()
+        .fit(req_id)?;
+
+    let mut editions = event::get_editions_which_contain(&mut mysql_conn, map.id);
+    let edition = editions.try_next().await.with_api_err().fit(req_id)?;
+
+    if editions
+        .try_next()
+        .await
+        .with_api_err()
+        .fit(req_id)?
+        .is_some()
+    {
+        return pb::empty();
+    }
+
+    drop(editions);
+
+    match edition {
+        Some((event_id, edition_id, _)) => {
+            let (event, edition) =
+                must::have_event_edition_from_ids(&mut mysql_conn, event_id, edition_id)
+                    .await
+                    .with_api_err()
+                    .fit(req_id)?;
+            pb::pb(login, req_id, db, body, OptEvent::new(&event, &edition)).await
+        }
+        None => pb::pb(login, req_id, db, body, Default::default()).await,
+    }
 }
 
 #[derive(Deserialize)]
@@ -336,7 +381,9 @@ async fn times(
     db: Res<Database>,
     Json(body): Json<TimesBody>,
 ) -> RecordsResponse<impl Responder> {
-    let player = records_lib::must::have_player(&db.mysql_pool, &login)
+    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+
+    let player = records_lib::must::have_player(&mut mysql_conn, &login)
         .await
         .fit(req_id)?;
 
@@ -360,7 +407,7 @@ async fn times(
     }
 
     let result = query
-        .fetch_all(&db.mysql_pool)
+        .fetch_all(&mut *mysql_conn)
         .await
         .with_api_err()
         .fit(req_id)?;

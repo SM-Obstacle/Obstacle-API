@@ -6,7 +6,6 @@ use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest, HttpResponse};
 use chrono::{DateTime, Utc};
 use core::fmt;
-use deadpool::managed::PoolError;
 pub use deadpool_redis::Pool as RedisPool;
 use mkenv::{Env, EnvSplitIncluded};
 use once_cell::sync::OnceCell;
@@ -42,15 +41,20 @@ pub struct AccessTokenErr {
 
 #[derive(Error, Debug)]
 #[repr(i32)] // i32 to be used with clients that don't support unsigned integers
+#[rustfmt::skip]
 pub enum RecordsErrorKind {
     // Caution: when creating a new error, you must ensure its code isn't
     // in conflict with another one in `records_lib::RecordsError`.
 
+    // --------
     // --- Internal server errors
+    // --------
+
     #[error(transparent)]
     IOError(#[from] io::Error) = 101,
 
     // ...Errors from records_lib
+
     #[error("unknown error: {0}")]
     Unknown(String) = 105,
     #[error("server is in maintenance since {0}")]
@@ -58,7 +62,12 @@ pub enum RecordsErrorKind {
     #[error("unknown api status: `{0}` named `{1}`")]
     UnknownStatus(u8, String) = 107,
 
+    // ...Errors from records_lib
+
+    // --------
     // --- Authentication errors
+    // --------
+
     #[error("unauthorized")]
     Unauthorized = 201,
     #[error("forbidden")]
@@ -76,15 +85,20 @@ pub enum RecordsErrorKind {
     #[error("timeout exceeded (max 5 minutes)")]
     Timeout = 208,
 
+    // --------
     // --- Logical errors
+    // --------
+
     #[error("not found")]
     EndpointNotFound = 301,
 
     // ...Error from records_lib
+
     #[error("player not banned: `{0}`")]
     PlayerNotBanned(String) = 303,
 
     // ...Error from records_lib
+
     #[error("unknown role with id `{0}` and name `{1}`")]
     UnknownRole(u8, String) = 305,
     #[error("unknown medal with id `{0}` and name `{1}`")]
@@ -97,6 +111,7 @@ pub enum RecordsErrorKind {
     InvalidRates = 309,
 
     // ...Errors from records_lib
+
     #[error("invalid times")]
     InvalidTimes = 313,
     #[error("map pack id should be an integer, got `{0}`")]
@@ -131,12 +146,6 @@ where
     fn with_api_err(self) -> RecordsResult<T> {
         self.map_err(records_lib::error::RecordsError::from)
             .map_err(Into::into)
-    }
-}
-
-impl<E: Debug> From<PoolError<E>> for RecordsErrorKind {
-    fn from(value: PoolError<E>) -> Self {
-        Self::Unknown(format!("pool error: {value:?}"))
     }
 }
 
@@ -234,6 +243,7 @@ impl actix_web::ResponseError for RecordsError {
                 LR::ExternalRequest(_) => {
                     HttpResponse::InternalServerError().json(self.to_err_res())
                 }
+                LR::PoolError(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
 
                 // Logical errors
                 LR::PlayerNotFound(_) => HttpResponse::BadRequest().json(self.to_err_res()),

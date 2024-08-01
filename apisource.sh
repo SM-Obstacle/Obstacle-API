@@ -127,6 +127,8 @@ stopobs() {
 
     if [[ -z $__obs_started ]]; then
         echo "Error: you need to run startobs before."
+        __api_pid=
+        __website_pid=
         cd $firstwd
         return 1
     fi
@@ -147,4 +149,8 @@ stopobs() {
     __website_pid=
 
     cd $firstwd
+}
+
+restartobs() {
+    stopobs && startobs $1
 }

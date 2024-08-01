@@ -1,7 +1,7 @@
 //! Module used to serve the routes mainly used by the Obstacle gamemode. Each submodule is
 //! specific for a route segment.
 
-use actix_web::web::JsonConfig;
+use actix_web::web::{JsonConfig, Query};
 use actix_web::{web, Scope};
 
 use records_lib::Database;
@@ -81,7 +81,15 @@ async fn info(req_id: RequestId, db: Res<Database>) -> RecordsResponse<impl Resp
 async fn overview(
     req_id: RequestId,
     db: Res<Database>,
-    query: overview::OverviewReq,
+    Query(query): overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    overview::overview(req_id, db, query, Default::default()).await
+    let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
+    overview::overview(
+        req_id,
+        &db.mysql_pool,
+        &mut conn,
+        query.into_params(None),
+        Default::default(),
+    )
+    .await
 }

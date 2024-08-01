@@ -296,6 +296,7 @@ impl QueryRoot {
         record_id: u32,
     ) -> async_graphql::Result<RankedRecord> {
         let db = ctx.data_unchecked::<Database>();
+        let mut conn = db.acquire().await?;
 
         let Some(record) =
             sqlx::query_as::<_, models::Record>("select * from records where record_id = ?")
@@ -306,17 +307,8 @@ impl QueryRoot {
             return Err(async_graphql::Error::new("Record not found."));
         };
 
-        let redis_conn = &mut db.redis_pool.get().await?;
-        let mysql_conn = &mut db.mysql_pool.acquire().await?;
-
         Ok(models::RankedRecord {
-            rank: get_rank(
-                (mysql_conn, redis_conn),
-                record.map_id,
-                record.time,
-                Default::default(),
-            )
-            .await?,
+            rank: get_rank(&mut conn, record.map_id, record.time, Default::default()).await?,
             record,
         }
         .into())
@@ -327,8 +319,9 @@ impl QueryRoot {
         ctx: &async_graphql::Context<'_>,
         game_id: String,
     ) -> async_graphql::Result<Map> {
-        let db = ctx.data_unchecked::<Database>();
-        records_lib::map::get_map_from_uid(&db.mysql_pool, &game_id)
+        let db = ctx.data_unchecked::<MySqlPool>();
+        let mut conn = db.acquire().await?;
+        records_lib::map::get_map_from_uid(&mut conn, &game_id)
             .await?
             .ok_or_else(|| async_graphql::Error::new("Map not found."))
             .map(Into::into)
@@ -351,34 +344,24 @@ impl QueryRoot {
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
-        let redis_conn = &mut db.redis_pool.get().await?;
-        let mysql_conn = &mut db.mysql_pool.acquire().await?;
 
         let date_sort_by = SortState::sql_order_by(&date_sort_by);
 
         let query = format!(
             "SELECT * FROM global_records r
-            INNER JOIN maps m ON m.id = r.map_id
-            WHERE m.game_id NOT LIKE '%_benchmark'
             ORDER BY record_date {date_sort_by}
             LIMIT 100"
         );
 
-        let mut records = sqlx::query_as::<_, models::Record>(&query).fetch(&mut **mysql_conn);
+        let mut records = sqlx::query_as::<_, models::Record>(&query).fetch(&db.mysql_pool);
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
-        let mysql_conn = &mut db.mysql_pool.acquire().await?;
+        let mut conn = db.acquire().await?;
 
         while let Some(record) = records.next().await {
             let record = record?;
 
-            let rank = get_rank(
-                (mysql_conn, redis_conn),
-                record.map_id,
-                record.time,
-                Default::default(),
-            )
-            .await?;
+            let rank = get_rank(&mut conn, record.map_id, record.time, Default::default()).await?;
 
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }

@@ -73,10 +73,17 @@ pub struct Record {
     pub flags: u32,
     /// The amount of tries.
     ///
-    /// This is optional as some old records don't have this info. Some records have it, but the
-    /// newest always save it with a value of 1. In the future, this may be set to the amount of
-    /// full respawns of the player in the session.
+    /// This is optional as some old records don't have this info, and newest records neither, as it
+    /// can be calculated since the Summer update.
+    ///
+    /// In the future, this may be set to the amount of full respawn of the player in the session.
     pub try_count: Option<u32>,
+    /// Represents the ID of the record that this record was cloned from.
+    ///
+    /// When saving a record for an event, if the map has an original map, the record is cloned
+    /// for this map, with this set to its ID. This helps to flag the cloned records
+    /// in this context.
+    pub event_record_id: Option<u32>,
 }
 
 /// A ranked record.
@@ -106,12 +113,8 @@ pub struct Role {
 }
 
 /// A banishment in the database.
-///
-/// This is called `BanishmentInner` because the boolean field
-/// [`was_reprieved`](Banishment::was_reprieved) can't be constructed with the `derive(`[`FromRow`]`)`
-/// implementation. The wrapper type is [`Banishment`].
 #[derive(Serialize, FromRow, Clone, Debug)]
-pub struct BanishmentInner {
+pub struct Banishment {
     /// The ID of the ban.
     pub id: u32,
     /// The UTC date of the ban.
@@ -121,31 +124,14 @@ pub struct BanishmentInner {
     /// The reason of the ban.
     pub reason: String,
     /// The ID of the banned player.
-    pub player_id: u32,
+    pub player_id: Option<u32>,
     /// The ID of the player who banned them.
-    pub banished_by: u32,
-}
-
-/// The (real) banishment in the database. See [`BanishmentInner`] to understand why.
-#[derive(Serialize, Clone, Debug)]
-pub struct Banishment {
-    /// The concrete banishment.
-    #[serde(flatten)]
-    pub inner: BanishmentInner,
+    pub banished_by: Option<u32>,
     /// Equals true if the player was already banned before.
     pub was_reprieved: bool,
 }
 
-impl<'r> FromRow<'r, MySqlRow> for Banishment {
-    fn from_row(row: &'r MySqlRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            inner: BanishmentInner::from_row(row)?,
-            was_reprieved: row.try_get::<i8, _>("was_reprieved")? != 0,
-        })
-    }
-}
-
-impl fmt::Display for BanishmentInner {
+impl fmt::Display for Banishment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -162,12 +148,6 @@ impl fmt::Display for BanishmentInner {
                 &self.reason
             }
         )
-    }
-}
-
-impl fmt::Display for Banishment {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        <BanishmentInner as fmt::Display>::fmt(&self.inner, f)
     }
 }
 
@@ -415,6 +395,11 @@ pub struct EventEditionMaps {
     ///
     /// This equals 0 if the map isn't on MX, which is unlikely.
     pub mx_id: i64,
+    /// The ID of the original map.
+    ///
+    /// For example for a Benchmark map with UID `X_benchmark`, this will be the ID of the map
+    /// with UID `X`.
+    pub original_map_id: Option<u32>,
 }
 
 /// The various status of the API.

@@ -4,19 +4,16 @@
 //! See the [`update_leaderboard`] and [`get_rank`] functions for more information.
 
 use deadpool_redis::redis::AsyncCommands;
-use sqlx::{Executor, MySql, MySqlConnection};
+use sqlx::MySqlConnection;
 
 use crate::{
     error::RecordsResult,
     event::OptEvent,
     redis_key::{map_key, MapKey},
-    RedisConnection,
+    DatabaseConnection, RedisConnection,
 };
 
-async fn count_records_map<'c, E: Executor<'c, Database = MySql>>(
-    db: E,
-    map_id: u32,
-) -> RecordsResult<i64> {
+async fn count_records_map(db: &mut MySqlConnection, map_id: u32) -> RecordsResult<i64> {
     sqlx::query_scalar(
         "SELECT COUNT(*)
         FROM (SELECT * FROM records
@@ -36,13 +33,13 @@ async fn count_records_map<'c, E: Executor<'c, Database = MySql>>(
 ///
 /// It returns the number of records in the map.
 pub async fn update_leaderboard(
-    (db, redis_conn): (&mut MySqlConnection, &mut RedisConnection),
+    db: &mut DatabaseConnection,
     map_id: u32,
     event: OptEvent<'_, '_>,
 ) -> RecordsResult<i64> {
     let key = map_key(map_id, event);
-    let redis_count: i64 = redis_conn.zcount(&key, "-inf", "+inf").await?;
-    let mysql_count: i64 = count_records_map(&mut *db, map_id).await?;
+    let redis_count: i64 = db.redis_conn.zcount(&key, "-inf", "+inf").await?;
+    let mysql_count: i64 = count_records_map(&mut db.mysql_conn, map_id).await?;
 
     let (join_event, and_event) = event.get_join();
 
@@ -63,12 +60,12 @@ pub async fn update_leaderboard(
             query = query.bind(event.id).bind(edition.id);
         }
 
-        let all_map_records: Vec<(u32, i32)> = query.fetch_all(db).await?;
+        let all_map_records: Vec<(u32, i32)> = query.fetch_all(&mut *db.mysql_conn).await?;
 
-        let _removed_count: i64 = redis_conn.del(&key).await?;
+        let _removed_count: i64 = db.redis_conn.del(&key).await?;
 
         for record in all_map_records {
-            let _: i64 = redis_conn.zadd(&key, record.0, record.1).await?;
+            let _: i64 = db.redis_conn.zadd(&key, record.0, record.1).await?;
         }
     }
 
@@ -81,7 +78,7 @@ pub async fn update_leaderboard(
 /// This may be called when the SQL and Redis databases had the same amount of records on a map,
 /// but the times were not corresponding. It generally happens after a database migration.
 pub async fn get_rank(
-    (db, redis_conn): (&mut MySqlConnection, &mut RedisConnection),
+    db: &mut DatabaseConnection,
     map_id: u32,
     time: i32,
     event: OptEvent<'_, '_>,
@@ -106,18 +103,20 @@ pub async fn get_rank(
 
     let key = &map_key(map_id, event);
 
-    match get_rank_(redis_conn, key, time).await? {
+    match get_rank_(&mut db.redis_conn, key, time).await? {
         Some(rank) => Ok(rank),
         None => {
-            redis_conn.del(key).await?;
-            update_leaderboard((db, redis_conn), map_id, event).await?;
-            let rank = get_rank_(redis_conn, key, time).await?.unwrap_or_else(|| {
-                // TODO: make a more clear message showing diff
-                panic!(
-                    "redis leaderboard for (`{key}`) should be updated \
+            db.redis_conn.del(key).await?;
+            update_leaderboard(db, map_id, event).await?;
+            let rank = get_rank_(&mut db.redis_conn, key, time)
+                .await?
+                .unwrap_or_else(|| {
+                    // TODO: make a more clear message showing diff
+                    panic!(
+                        "redis leaderboard for (`{key}`) should be updated \
                         at this point"
-                )
-            });
+                    )
+                });
             Ok(rank)
         }
     }
