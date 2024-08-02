@@ -300,12 +300,6 @@ pub struct GiveTokenBody {
     state: String,
 }
 
-#[derive(Serialize)]
-pub struct GiveTokenResponse {
-    login: String,
-    token: String,
-}
-
 pub async fn post_give_token(
     req_id: RequestId,
     session: Session,

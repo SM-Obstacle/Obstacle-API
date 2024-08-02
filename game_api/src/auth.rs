@@ -26,17 +26,17 @@
 //! 1. The script generates a random string named `state`
 //! 2. It sends a POST request to `/player/get_token`, with the corresponding payload
 //! 3. It waits a bit, then opens a URL for the player to
-//! <https://prod.live.maniaplanet.com/login/oauth/authorize?response_type=code&client_id=de1ce3ba8e&redirect_uri=https://obstacle.titlepack.io/give_token&state=`state`&scope=basic>
+//!    <https://prod.live.maniaplanet.com/login/oauth/authorize?response_type=code&client_id=de1ce3ba8e&redirect_uri=https://obstacle.titlepack.io/give_token&state=`state`&scope=basic>
 //! 4. The player logs in with his ManiaPlanet account, and is redirected to the page at
-//! <https://obstacle.titlepack.io/give_token> URL.
+//!    <https://obstacle.titlepack.io/give_token> URL.
 //! 5. This page executes a JavaScript code that sends a POST request to `/player/give_token`
-//! with the code provided by the ManiaPlanet OAuth system and the same `state`.
+//!    with the code provided by the ManiaPlanet OAuth system and the same `state`.
 //! 6. The authentication system validates the provided code, and generates the 2 tokens
-//! for the player.
+//!    for the player.
 //! 7. The POST `/player/give_token` request returns a `200 OK` response with a `Set-Cookie` header
-//! containing the encoded session ID with the website token stored in it bound with the player's login
+//!    containing the encoded session ID with the website token stored in it bound with the player's login
 //! 8. The POST `/player/get_token` request returns the response with the generated ManiaPlanet token
-//! that will be used to authenticate the player in the gamemode.
+//!    that will be used to authenticate the player in the gamemode.
 //!
 //! The generated tokens have a time-to-live of 6 months. Passed this time, the authentication system
 //! will return an `Unauthorized` error. The gamemode script will have to execute the procedure
@@ -166,7 +166,7 @@ impl AuthState {
     /// # Arguments
     ///
     /// * `state`, the state string, that is the same as the one retrieved by the `/player/give_token`
-    /// endpoint.
+    ///    endpoint.
     pub async fn connect_with_browser(
         &self,
         state: String,
