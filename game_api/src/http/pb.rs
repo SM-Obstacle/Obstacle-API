@@ -1,4 +1,4 @@
-use actix_web::{web::Query, HttpResponse};
+use actix_web::{web::Query, Responder};
 use futures::StreamExt;
 use records_lib::{event::OptEvent, Database};
 use serde::{Deserialize, Serialize};
@@ -33,18 +33,13 @@ struct PbCpTimesResponseItem {
     time: i32,
 }
 
-#[inline]
-pub fn empty() -> RecordsResponse<HttpResponse> {
-    json(PbResponse::default())
-}
-
 pub async fn pb(
     login: String,
     req_id: RequestId,
     db: Res<Database>,
     PbBody { map_uid }: PbBody,
     event: OptEvent<'_, '_>,
-) -> RecordsResponse<HttpResponse> {
+) -> RecordsResponse<impl Responder> {
     let (view_name, and_event) = event.get_view();
 
     let query = format!(

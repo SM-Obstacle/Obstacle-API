@@ -74,7 +74,10 @@ attachobs() {
 
     local code=0
 
-    case $1 in
+    local arg=$1
+    if [[ -z $arg ]]; then arg=api; fi
+
+    case $arg in
     api)
         if [[ -z $__obs_started || -z $__api_pid || ! -f ./etc/api_out ]]; then
             echo "Error: Obstacle API is not running."
@@ -92,7 +95,7 @@ attachobs() {
         fi
         ;;
     *)
-        echo "Error: either attach to \`api\` or \`website\`."
+        echo "Error: either attach to \`api\` (default) or \`website\`."
         code=1
         ;;
     esac

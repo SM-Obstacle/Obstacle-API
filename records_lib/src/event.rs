@@ -319,6 +319,15 @@ pub fn get_admins_of(
 /// ## Parameters
 ///
 /// * `map_id`: the ID of the map the event editions should contain.
+///
+/// ## Return
+///
+/// This function returns three things:
+///
+/// 1. The ID of the event
+/// 2. The ID of the event edition
+/// 3. The ID of the original map bound to the provided map ID. This can be null if the map doesn't
+///    have an original map.
 pub fn get_editions_which_contain(
     db: &mut MySqlConnection,
     map_id: u32,

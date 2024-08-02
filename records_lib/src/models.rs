@@ -392,14 +392,16 @@ pub struct EventEditionMaps {
     /// The optional ID of the category the map belongs.
     pub category_id: Option<u32>,
     /// The MX ID of the map.
-    ///
-    /// This equals 0 if the map isn't on MX, which is unlikely.
-    pub mx_id: i64,
+    pub mx_id: Option<i64>,
     /// The ID of the original map.
     ///
     /// For example for a Benchmark map with UID `X_benchmark`, this will be the ID of the map
     /// with UID `X`.
     pub original_map_id: Option<u32>,
+    /// The MX ID of the original map.
+    pub original_mx_id: Option<i64>,
+    /// Whether to save a record from the original map to the event map.
+    pub transitive_save: Option<bool>,
 }
 
 /// The various status of the API.

@@ -109,7 +109,8 @@ pub async fn have_event_edition_with_map(
         "select m.* from event_edition_maps eem
         inner join maps m on m.id = eem.map_id
         inner join maps om on om.id in (eem.map_id, eem.original_map_id)
-        where eem.event_id = ? and eem.edition_id = ? and om.game_id = ?",
+        where eem.event_id = ? and eem.edition_id = ? and om.game_id = ?
+            and (m.id = om.id or eem.transitive_save)",
     )
     .bind(event.id)
     .bind(event_edition.id)

@@ -25,8 +25,15 @@ pub struct PopulateCommand {
 
 #[derive(clap::Subcommand, Debug)]
 enum PopulateKind {
-    CsvFile { csv_file: PathBuf },
-    MxId { mx_id: Option<i64> },
+    CsvFile {
+        csv_file: PathBuf,
+        #[clap(long)]
+        #[clap(default_value_t = true)]
+        transitive_save: bool,
+    },
+    MxId {
+        mx_id: Option<i64>,
+    },
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -60,6 +67,7 @@ struct Row {
     times: Option<MedalTimes>,
     #[serde(flatten)]
     original_id: Option<OriginalId>,
+    transitive_save: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -220,8 +228,11 @@ pub async fn populate(
 
     clear::clear_content(&mut conn.mysql_conn, event.id, edition.id).await?;
 
-    let csv_file = match kind {
-        PopulateKind::CsvFile { csv_file } => csv_file,
+    let (csv_file, default_transitive_save) = match kind {
+        PopulateKind::CsvFile {
+            csv_file,
+            transitive_save,
+        } => (csv_file, transitive_save),
         PopulateKind::MxId { mx_id } => {
             let mx_id = match (mx_id, edition.mx_id) {
                 (Some(provided_id), Some(original_id)) if provided_id != original_id => {
@@ -307,14 +318,15 @@ pub async fn populate(
             category_handle,
             times,
             original_id,
+            transitive_save,
         },
         i,
     ) in rows
     {
         let (mx_id, map) = match id {
-            Id::MapUid { map_uid } => (0, must::have_map(&mut conn.mysql_conn, &map_uid).await?),
+            Id::MapUid { map_uid } => (None, must::have_map(&mut conn.mysql_conn, &map_uid).await?),
             Id::MxId { mx_id } => (
-                mx_id,
+                Some(mx_id),
                 mx_maps
                     .remove(&mx_id)
                     .ok_or_else(|| anyhow::anyhow!("missing map with mx_id {mx_id}"))
@@ -322,19 +334,25 @@ pub async fn populate(
             ),
         };
 
-        let original_map = match original_id {
+        let (original_mx_id, original_map) = match original_id {
             Some(id) => match id {
-                OriginalId::MapUid { original_map_uid } => {
-                    Some(must::have_map(&mut conn.mysql_conn, &original_map_uid).await?)
-                }
-                OriginalId::MxId { original_mx_id } => Some(
-                    mx_maps
-                        .remove(&original_mx_id)
-                        .ok_or_else(|| anyhow::anyhow!("missing map with mx_id {original_mx_id}"))
-                        .with_context(|| format!("Failed to load the event on line {i}"))?,
+                OriginalId::MapUid { original_map_uid } => (
+                    None,
+                    Some(must::have_map(&mut conn.mysql_conn, &original_map_uid).await?),
+                ),
+                OriginalId::MxId { original_mx_id } => (
+                    Some(original_mx_id),
+                    Some(
+                        mx_maps
+                            .remove(&original_mx_id)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("missing map with mx_id {original_mx_id}")
+                            })
+                            .with_context(|| format!("Failed to load the event on line {i}"))?,
+                    ),
                 ),
             },
-            None => None,
+            None => (None, None),
         };
 
         let opt_category_id = category_handle
@@ -343,8 +361,8 @@ pub async fn populate(
             .map(|c| c.id);
 
         sqlx::query(
-            "replace into event_edition_maps (event_id, edition_id, map_id, category_id, mx_id, `order`, original_map_id) \
-        values (?, ?, ?, ?, ?, ?, ?)",
+            "replace into event_edition_maps (event_id, edition_id, map_id, category_id, mx_id, `order`, original_map_id, original_mx_id, transitive_save) \
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(event.id)
         .bind(edition.id)
@@ -353,6 +371,8 @@ pub async fn populate(
         .bind(mx_id)
         .bind(i)
         .bind(original_map.as_ref().map(|m| m.id))
+        .bind(original_mx_id)
+        .bind(transitive_save.unwrap_or(default_transitive_save))
         .execute(&mut *conn.mysql_conn)
         .await?;
 

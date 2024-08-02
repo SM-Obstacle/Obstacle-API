@@ -332,21 +332,17 @@ async fn pb(
 
     let mut editions = event::get_editions_which_contain(&mut mysql_conn, map.id);
     let edition = editions.try_next().await.with_api_err().fit(req_id)?;
-
-    if editions
+    let single_edition = editions
         .try_next()
         .await
         .with_api_err()
         .fit(req_id)?
-        .is_some()
-    {
-        return pb::empty();
-    }
+        .is_none();
 
     drop(editions);
 
     match edition {
-        Some((event_id, edition_id, _)) => {
+        Some((event_id, edition_id, _)) if single_edition => {
             let (event, edition) =
                 must::have_event_edition_from_ids(&mut mysql_conn, event_id, edition_id)
                     .await
@@ -354,7 +350,7 @@ async fn pb(
                     .fit(req_id)?;
             pb::pb(login, req_id, db, body, OptEvent::new(&event, &edition)).await
         }
-        None => pb::pb(login, req_id, db, body, Default::default()).await,
+        _ => pb::pb(login, req_id, db, body, Default::default()).await,
     }
 }
 

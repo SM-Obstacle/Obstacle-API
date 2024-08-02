@@ -44,7 +44,7 @@ struct MapWithCategory {
     #[sqlx(flatten)]
     map: models::Map,
     category_id: Option<u32>,
-    mx_id: i64,
+    mx_id: Option<i64>,
 }
 
 async fn get_maps_by_edition_id(
@@ -86,7 +86,8 @@ struct EventHandleResponse {
 
 #[derive(Serialize)]
 struct Map {
-    mx_id: i64,
+    #[serde(serialize_with = "opt_ser")]
+    mx_id: Option<MpDefaultI32<0>>,
     main_author: PlayerInfoNetBody,
     name: String,
     map_uid: String,
@@ -345,7 +346,7 @@ async fn edition(
                     .fit(req_id)?;
 
             maps.push(Map {
-                mx_id,
+                mx_id: mx_id.map(|id| MpDefaultI32(id as _)),
                 main_author,
                 name: map.name,
                 map_uid: map.game_id,
@@ -377,10 +378,9 @@ async fn edition(
     }
 
     let original_map_uids = sqlx::query_scalar(
-        "
-        select m.game_id as map_uid from event_edition_maps eem
+        "select m.game_id as map_uid from event_edition_maps eem
         inner join maps m on m.id = eem.original_map_id
-        where eem.event_id = ? and eem.edition_id = ?",
+        where eem.event_id = ? and eem.edition_id = ? and eem.transitive_save",
     )
     .bind(edition.event_id)
     .bind(edition.id)
