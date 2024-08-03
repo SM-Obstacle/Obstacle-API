@@ -340,3 +340,51 @@ pub fn get_editions_which_contain(
     .bind(map_id)
     .fetch(db)
 }
+
+/// The event map retrieved from the [`have_event_edition_with_map`] function.
+#[derive(sqlx::FromRow)]
+pub struct EventMap {
+    /// The map of the event edition.
+    ///
+    /// For example for the Benchmark, this would be a map with a UID finishing with `_benchmark`.
+    #[sqlx(flatten)]
+    pub map: models::Map,
+    /// The optional ID of the original map.
+    ///
+    /// For example for the Benchmark, this would be the ID of the map with a normal UID.
+    pub original_map_id: Option<u32>,
+}
+
+/// Returns the map bound to an event edition from its UID or its original version UID.
+///
+/// ## Parameters
+///
+/// * `map_uid`: the UID of the map.
+/// * `event_id`: the ID of the event.
+/// * `edition_id`: the ID of its edition.
+///
+/// ## Return
+///
+/// For example for the Benchmark, with `map_uid` as `"X"` or `"X_benchmark"`, the function returns
+/// the map with the UID `X_benchmark`, and the ID of the map with UID `X`.
+pub async fn get_map_in_edition(
+    db: &mut MySqlConnection,
+    map_uid: &str,
+    event_id: u32,
+    edition_id: u32,
+) -> RecordsResult<Option<EventMap>> {
+    let map = sqlx::query_as(
+        "select m.*, eem.original_map_id from event_edition_maps eem
+        inner join maps m on m.id = eem.map_id
+        inner join maps om on om.id in (eem.map_id, eem.original_map_id)
+        where eem.event_id = ? and eem.edition_id = ? and om.game_id = ?
+            and (m.id = om.id or eem.transitive_save)",
+    )
+    .bind(event_id)
+    .bind(edition_id)
+    .bind(map_uid)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(map)
+}

@@ -9,7 +9,7 @@ use futures::{StreamExt as _, TryStreamExt};
 use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use records_lib::{
-    event::{self, MedalTimes, OptEvent},
+    event::{self, EventMap, MedalTimes, OptEvent},
     mappack::AnyMappackId,
     models::{self, EventCategory},
     must,
@@ -623,7 +623,16 @@ impl EventEdition<'_> {
     ) -> async_graphql::Result<EventEditionMap<'_>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
-        let map = must::have_map(&mut mysql_conn, &game_id).await?;
+
+        let EventMap { map, .. } = event::get_map_in_edition(
+            &mut mysql_conn,
+            &game_id,
+            self.inner.event_id,
+            self.inner.id,
+        )
+        .await?
+        .ok_or_else(|| async_graphql::Error::new("Map not found in this edition"))?;
+
         Ok(EventEditionMap {
             edition: self,
             map: map.into(),
