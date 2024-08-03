@@ -1,6 +1,9 @@
 use std::{borrow::Cow, collections::HashMap, iter::repeat, sync::Arc};
 
-use async_graphql::{dataloader::Loader, Context};
+use async_graphql::{
+    dataloader::{DataLoader, Loader},
+    Context,
+};
 use deadpool_redis::redis::AsyncCommands;
 use futures::{StreamExt as _, TryStreamExt};
 use sqlx::{mysql, FromRow, MySqlPool, Row};
@@ -17,7 +20,7 @@ use records_lib::{
 use crate::{RecordsResult, RecordsResultExt};
 
 use super::{
-    map::Map,
+    map::{Map, MapLoader},
     mappack::{self, Mappack},
     player::Player,
     record::RankedRecord,
@@ -505,6 +508,32 @@ impl EventEditionPlayer<'_> {
 
 #[async_graphql::ComplexObject]
 impl EventEditionMap<'_> {
+    async fn original_map(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<Map>> {
+        let db = ctx.data_unchecked::<MySqlPool>();
+        let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
+        let mut conn = db.acquire().await?;
+
+        let original_map_id: Option<_> = sqlx::query_scalar(
+            "select original_map_id from event_edition_maps
+            where event_id = ? and edition_id = ? and map_id = ?",
+        )
+        .bind(self.edition.inner.event_id)
+        .bind(self.edition.inner.id)
+        .bind(self.map.inner.id)
+        .fetch_one(&mut *conn)
+        .await?;
+
+        Ok(match original_map_id {
+            Some(id) => Some(
+                map_loader
+                    .load_one(id)
+                    .await?
+                    .expect("unknown original_map_id"),
+            ),
+            _ => None,
+        })
+    }
+
     async fn records(
         &self,
         ctx: &Context<'_>,

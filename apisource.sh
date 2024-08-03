@@ -54,6 +54,9 @@ startobs() {
         cp $schema_file website/schema.graphql
         rm $schema_file
         rm ./etc/api_last_gql_schema
+        cd website
+        yarn compile
+        cd ..
     fi
 
     cd website

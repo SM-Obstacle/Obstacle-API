@@ -8,9 +8,7 @@ use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
     event::OptEvent,
-    map,
     models::{self, Record},
-    must,
     redis_key::alone_map_key,
     update_ranks::{get_rank, update_leaderboard},
     Database, DatabaseConnection,
@@ -132,6 +130,19 @@ impl Map {
     }
 }
 
+#[derive(async_graphql::SimpleObject)]
+struct RelatedEdition<'a> {
+    map: Map,
+    edition: EventEdition<'a>,
+}
+
+#[derive(sqlx::FromRow)]
+struct RawRelatedEdition {
+    map_id: u32,
+    #[sqlx(flatten)]
+    edition: models::EventEdition,
+}
+
 #[async_graphql::Object]
 impl Map {
     pub async fn id(&self) -> ID {
@@ -164,29 +175,16 @@ impl Map {
     async fn related_event_editions(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventEdition>> {
+    ) -> async_graphql::Result<Vec<RelatedEdition>> {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
+        let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
 
         let mysql_conn = &mut mysql_pool.acquire().await?;
 
-        // FIXME: this is used to make a relation between non-benchmarked map and the benchmark event.
-        // In the future, this should be removed and the query should use the `original` flags.
-        if map::get_map_from_uid(mysql_conn, &format!("{}_benchmark", self.inner.game_id))
-            .await?
-            .is_some()
-        {
-            let (_benchmark_event, benchmark_edition2) =
-                must::have_event_edition(mysql_conn, "benchmark", 2).await?;
-
-            return Ok(vec![
-                EventEdition::from_inner(benchmark_edition2, mysql_pool).await?,
-            ]);
-        }
-
-        let mut raw_editions = sqlx::query_as::<_, models::EventEdition>(
-            "select ee.* from event_edition ee
+        let mut raw_editions = sqlx::query_as::<_, RawRelatedEdition>(
+            "select ee.*, eem.map_id from event_edition ee
             inner join event_edition_maps eem on ee.id = eem.edition_id and ee.event_id = eem.event_id
-            where eem.map_id = ?
+            where ? in (eem.map_id, eem.original_map_id)
             order by ee.start_date desc")
         .bind(self.inner.id)
         .fetch(&mut **mysql_conn);
@@ -194,7 +192,14 @@ impl Map {
         let mut out = Vec::with_capacity(raw_editions.size_hint().0);
 
         while let Some(raw_edition) = raw_editions.next().await {
-            out.push(EventEdition::from_inner(raw_edition?, mysql_pool).await?);
+            let edition = raw_edition?;
+            out.push(RelatedEdition {
+                map: map_loader
+                    .load_one(edition.map_id)
+                    .await?
+                    .expect("unknown map id"),
+                edition: EventEdition::from_inner(edition.edition, mysql_pool).await?,
+            });
         }
 
         Ok(out)
