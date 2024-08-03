@@ -7,7 +7,9 @@ use itertools::Itertools;
 use records_lib::{
     error::RecordsError,
     event::{self, OptEvent},
-    models, opt_ser, Database, MpDefaultI32,
+    models,
+    must::EventMap,
+    opt_ser, Database, MpDefaultI32,
 };
 use serde::Serialize;
 use sqlx::{FromRow, MySqlConnection};
@@ -421,7 +423,7 @@ async fn edition_overview(
 ) -> RecordsResponse<impl Responder> {
     let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
     let (event, edition) = path.into_inner();
-    let (event, edition, map) = records_lib::must::have_event_edition_with_map(
+    let (event, edition, EventMap { map, .. }) = records_lib::must::have_event_edition_with_map(
         &mut conn.mysql_conn,
         &query.map_uid,
         event,
@@ -482,7 +484,14 @@ pub async fn edition_finished_at(
 
     // We first check that the event and its edition exist
     // and that the map is registered on it.
-    let (event, edition, map) = records_lib::must::have_event_edition_with_map(
+    let (
+        event,
+        edition,
+        EventMap {
+            map,
+            original_map_id,
+        },
+    ) = records_lib::must::have_event_edition_with_map(
         &mut conn.mysql_conn,
         &body.map_uid,
         event_handle,
@@ -509,12 +518,11 @@ pub async fn edition_finished_at(
     // yet we've reached this point, so the played map is the original.
     let on_original = played_map.id != map.id;
 
-    // If the played map is the original one, we save the record for it too.
-    if on_original {
+    if let Some(original_map_id) = original_map_id {
         // Here, we don't provide the event instances, because we don't want to save in event mode.
         pf::insert_record(
             &mut conn,
-            played_map.id,
+            original_map_id,
             res.player_id,
             rest,
             Default::default(),
@@ -585,7 +593,7 @@ async fn edition_pb(
 
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let (event, edition, map) = records_lib::must::have_event_edition_with_map(
+    let (event, edition, EventMap { map, .. }) = records_lib::must::have_event_edition_with_map(
         &mut mysql_conn,
         &body.map_uid,
         event_handle,

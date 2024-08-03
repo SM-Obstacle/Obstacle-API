@@ -81,6 +81,20 @@ pub async fn have_map(db: &mut MySqlConnection, map_uid: &str) -> RecordsResult<
         .ok_or_else(|| RecordsError::MapNotFound(map_uid.to_owned()))
 }
 
+/// The event map retrieved from the [`have_event_edition_with_map`] function.
+#[derive(sqlx::FromRow)]
+pub struct EventMap {
+    /// The map of the event edition.
+    ///
+    /// For example for the Benchmark, this would be a map with a UID finishing with `_benchmark`.
+    #[sqlx(flatten)]
+    pub map: models::Map,
+    /// The optional ID of the original map.
+    ///
+    /// For example for the Benchmark, this would be the ID of the map with a normal UID.
+    pub original_map_id: Option<u32>,
+}
+
 /// Returns the event and its edition bound to their IDs and that contain a specific map.
 ///
 /// ## Parameters
@@ -102,11 +116,11 @@ pub async fn have_event_edition_with_map(
     map_uid: &str,
     event_handle: String,
     edition_id: u32,
-) -> RecordsResult<(models::Event, models::EventEdition, models::Map)> {
+) -> RecordsResult<(models::Event, models::EventEdition, EventMap)> {
     let (event, event_edition) = have_event_edition(db, &event_handle, edition_id).await?;
 
     let map = sqlx::query_as(
-        "select m.* from event_edition_maps eem
+        "select m.*, eem.original_map_id from event_edition_maps eem
         inner join maps m on m.id = eem.map_id
         inner join maps om on om.id in (eem.map_id, eem.original_map_id)
         where eem.event_id = ? and eem.edition_id = ? and om.game_id = ?
