@@ -223,21 +223,7 @@ pub async fn finished(
             .with_api_err()?;
 
         for (event_id, edition_id, original_map_id) in editions {
-            // If `original_map_id` is filled, the event map has an original map. But we can't
-            // make a record for an event on the original map, without passing by the event context
-            // (`/event/:event/:edition/player/finished`). Thus, the `on_original` attribute is
-            // true if the map doesn't have an original map, so that it can be retrieved from the
-            // `global_records` view.
-            let on_original = original_map_id.is_none();
-
-            event::insert_event_record(
-                &mut db.mysql_conn,
-                record_id,
-                event_id,
-                edition_id,
-                on_original,
-            )
-            .await?;
+            event::insert_event_record(&mut db.mysql_conn, record_id, event_id, edition_id).await?;
 
             let Some(original_map_id) = original_map_id else {
                 continue;

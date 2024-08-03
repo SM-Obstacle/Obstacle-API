@@ -341,6 +341,11 @@ pub struct EventEdition {
     pub ttl: Option<u64>,
     /// Do we save records that weren't made in an event context for this event edition?
     pub save_non_event_record: bool,
+    /// Don't we have any original map?
+    ///
+    /// This is used by the `global_records` view to retrieve the records of the events that don't
+    /// have original maps.
+    pub non_original_maps: bool,
 }
 
 impl EventEdition {

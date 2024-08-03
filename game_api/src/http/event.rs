@@ -478,10 +478,6 @@ pub async fn edition_finished_at(
 
     let (event_handle, edition_id) = path.into_inner();
 
-    let played_map = records_lib::must::have_map(&mut conn.mysql_conn, &body.map_uid)
-        .await
-        .fit(req_id)?;
-
     // We first check that the event and its edition exist
     // and that the map is registered on it.
     let (
@@ -514,10 +510,6 @@ pub async fn edition_finished_at(
         .await
         .fit(req_id)?;
 
-    // The map bound to the event doesn't have the same ID as the played map,
-    // yet we've reached this point, so the played map is the original.
-    let on_original = played_map.id != map.id;
-
     if let Some(original_map_id) = original_map_id {
         // Here, we don't provide the event instances, because we don't want to save in event mode.
         pf::insert_record(
@@ -533,29 +525,12 @@ pub async fn edition_finished_at(
         .fit(req_id)?;
     }
 
-    let original_map_count: i64 = sqlx::query_scalar(
-        "select count(*) from event_edition_maps
-        where event_id = ? and edition_id = ? and original_map_id is not null",
-    )
-    .bind(event.id)
-    .bind(edition.id)
-    .fetch_one(&mut *conn.mysql_conn)
-    .await
-    .with_api_err()
-    .fit(req_id)?;
-
     // Then we insert it for the event edition records.
     // This is not part of the transaction, because we don't want to roll back
     // the insertion of the record if this query fails.
-    insert_event_record(
-        &mut conn.mysql_conn,
-        res.record_id,
-        event.id,
-        edition.id,
-        on_original || original_map_count == 0,
-    )
-    .await
-    .fit(req_id)?;
+    insert_event_record(&mut conn.mysql_conn, res.record_id, event.id, edition.id)
+        .await
+        .fit(req_id)?;
 
     json(res.res)
 }
@@ -565,16 +540,14 @@ pub async fn insert_event_record(
     record_id: u32,
     event_id: u32,
     edition_id: u32,
-    on_original: bool,
 ) -> RecordsResult<()> {
     sqlx::query(
-        "INSERT INTO event_edition_records (record_id, event_id, edition_id, on_original)
-            VALUES (?, ?, ?, ?)",
+        "INSERT INTO event_edition_records (record_id, event_id, edition_id)
+            VALUES (?, ?, ?)",
     )
     .bind(record_id)
     .bind(event_id)
     .bind(edition_id)
-    .bind(on_original)
     .execute(conn)
     .await
     .with_api_err()?;
