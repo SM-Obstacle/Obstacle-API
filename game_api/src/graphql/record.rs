@@ -1,7 +1,7 @@
 use async_graphql::{dataloader::DataLoader, Context};
 use records_lib::{
     models::{self, CheckpointTime},
-    Database,
+    Database, MySqlPool,
 };
 
 use super::{
@@ -86,9 +86,17 @@ impl RankedRecord {
         self.inner.record.respawn_count
     }
 
-    async fn try_count(&self) -> i32 {
-        // TODO: return sum of all try counts
-        self.inner.record.respawn_count
+    async fn try_count(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i32> {
+        let db = ctx.data_unchecked::<MySqlPool>();
+        let sum: Option<i32> = sqlx::query_scalar(
+            "select cast(sum(try_count) as int) from records
+            where record_player_id = ? and map_id = ?",
+        )
+        .bind(self.inner.record.record_player_id)
+        .bind(self.inner.record.map_id)
+        .fetch_one(db)
+        .await?;
+        Ok(sum.map(|m| m).unwrap_or(1))
     }
 
     async fn record_date(&self) -> chrono::NaiveDateTime {

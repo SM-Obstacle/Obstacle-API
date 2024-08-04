@@ -58,11 +58,8 @@ pub fn connections_append_query_string(
     connections_append_query_string_order(query, first, last);
 }
 
-pub type SqlQuery<'q> = sqlx::query::Query<
-    'q,
-    mysql::MySql,
-    <mysql::MySql as sqlx::database::HasArguments<'q>>::Arguments,
->;
+pub type SqlQuery<'q> =
+    sqlx::query::Query<'q, mysql::MySql, <mysql::MySql as sqlx::database::Database>::Arguments<'q>>;
 
 pub fn connections_bind_query_parameters_page(
     mut query: SqlQuery,

@@ -21,9 +21,9 @@ where
 {
     #[inline]
     fn decode(
-        value: <Db as sqlx::database::HasValueRef<'r>>::ValueRef,
+        value: <Db as sqlx::Database>::ValueRef<'r>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
-        Ok(Self(<i32>::decode(value)?))
+        <i32 as sqlx::Decode<'r, Db>>::decode(value).map(From::from)
     }
 }
 

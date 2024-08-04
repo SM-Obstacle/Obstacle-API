@@ -6,7 +6,7 @@ members = ["game_api", "records_lib", "socc", "admin", "clear_redis_mappacks"]
 thiserror = "1.0.40"
 tokio = "1.36.0"
 async-graphql = "7.0.3"
-sqlx = "0.7.2"
+sqlx = "0.8.0"
 chrono = { version = "0.4", features = ["serde"] }
 deadpool = { version = "0.12.1", features = ["managed", "rt_tokio_1"] }
 deadpool-redis = { version = "0.15.0", features = ["rt_tokio_1"] }
