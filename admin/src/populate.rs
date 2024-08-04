@@ -293,7 +293,13 @@ pub async fn populate(
     loop {
         let line = rows_iter.reader().position().line();
         match rows_iter.next() {
-            Some(row) => rows.push((row?, line)),
+            Some(row) => {
+                let row = row?;
+                if row.category_handle.is_none() && !categories.is_empty() {
+                    tracing::warn!("Missing map category at line: {line}");
+                }
+                rows.push((row, line));
+            }
             None => break,
         }
     }
