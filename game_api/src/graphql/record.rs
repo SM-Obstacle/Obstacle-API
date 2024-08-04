@@ -99,8 +99,8 @@ impl RankedRecord {
         Ok(sum.map(|m| m).unwrap_or(1))
     }
 
-    async fn record_date(&self) -> chrono::NaiveDateTime {
-        self.inner.record.record_date
+    async fn record_date(&self) -> chrono::DateTime<chrono::Utc> {
+        self.inner.record.record_date.and_utc()
     }
 
     async fn flags(&self) -> u32 {
