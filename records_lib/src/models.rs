@@ -166,39 +166,6 @@ pub struct CheckpointTime {
     pub time: i32,
 }
 
-/// Represents a medal.
-#[derive(Serialize, PartialEq, Eq, Clone, Copy, Debug, Enum)]
-#[non_exhaustive]
-#[repr(u8)]
-pub enum Medal {
-    /// The bronze medal.
-    Bronze = 1,
-    /// The silver medal.
-    Silver = 2,
-    /// The gold medal.
-    Gold = 3,
-    /// The champion/author medal.
-    Champion = 4,
-}
-
-impl<'r> FromRow<'r, MySqlRow> for Medal {
-    fn from_row(row: &'r MySqlRow) -> Result<Self, sqlx::Error> {
-        let id: u8 = row.try_get("id")?;
-        let medal_name: String = row.try_get("medal_name")?;
-
-        match (id, &*medal_name) {
-            (1, "bronze") => Ok(Self::Bronze),
-            (2, "silver") => Ok(Self::Silver),
-            (3, "gold") => Ok(Self::Gold),
-            (4, "champion") => Ok(Self::Champion),
-            (id, _) => Err(sqlx::Error::ColumnDecode {
-                index: "id".to_owned(),
-                source: format!("unknown medal `{id}`, `{medal_name}`").into(),
-            }),
-        }
-    }
-}
-
 /// The rating kinds of a player on a map.
 ///
 /// This isn't yet used in-game.
@@ -407,6 +374,14 @@ pub struct EventEditionMaps {
     pub original_mx_id: Option<i64>,
     /// Whether to save a record from the original map to the event map.
     pub transitive_save: Option<bool>,
+    /// The time of the bronze medal.
+    pub bronze_time: Option<i32>,
+    /// The time of the silver medal.
+    pub silver_time: Option<i32>,
+    /// The time of the gold medal.
+    pub gold_time: Option<i32>,
+    /// The time of the author medal.
+    pub author_time: Option<i32>,
 }
 
 /// The various status of the API.

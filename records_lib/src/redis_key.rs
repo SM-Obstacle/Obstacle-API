@@ -50,7 +50,7 @@ macro_rules! create_key {
         })?$(;$semicolon:tt)?
         |$self:ident, $f:ident| $fmt_expr:expr
     ) => {
-        #[doc = concat!("The `", stringify!($name), "` Redis key")]
+        #[doc = concat!("The `", stringify!($name), "` Redis key.")]
         $(#[$($attr)*])*
         #[derive(Debug)]
         pub struct $name$(<$l>)? $({
@@ -60,7 +60,7 @@ macro_rules! create_key {
             ),*
         })?$($semicolon)?
 
-        #[doc = concat!("The constructor of the `", stringify!($name), "` Redis key")]
+        #[doc = concat!("The constructor of the `", stringify!($name), "` Redis key.")]
         #[inline(always)]
         pub fn $fn_name$(<$l>)?($($($field: $field_ty),*)?) -> $name$(<$l>)? {
             $name { $($($field),*)? }

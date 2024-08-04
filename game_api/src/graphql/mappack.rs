@@ -5,7 +5,6 @@ use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
     map,
     mappack::{update_mappack, AnyMappackId},
-    models::Medal,
     must, player,
     redis_key::{
         mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_mx_created_key,
@@ -252,14 +251,6 @@ impl MappackPlayer<'_> {
             self.inner.inner.id,
         )
         .await
-    }
-
-    async fn last_medal(
-        &self,
-        _ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<Medal>> {
-        // TODO: last medal
-        Ok(None)
     }
 }
 

@@ -15,11 +15,15 @@ use deadpool_redis::PoolError;
 /// in conflict.
 #[derive(thiserror::Error, Debug)]
 #[repr(i32)]
+#[rustfmt::skip]
 pub enum RecordsError {
     // Caution: when creating a new error, you must ensure its code isn't
     // in conflict with another one in `game_api::RecordsErrorKind`.
 
+    // --------
     // --- Internal server errors
+    // --------
+
     /// An error that happened when interacting with the MySQL/MariaDB database.
     #[error(transparent)]
     MySql(#[from] sqlx::Error) = 102,
@@ -33,7 +37,10 @@ pub enum RecordsError {
     #[error(transparent)]
     PoolError(#[from] PoolError) = 108,
 
+    // --------
     // --- Logical errors
+    // --------
+
     /// The player with the provided login was not found.
     #[error("player not found in database: `{0}`")]
     PlayerNotFound(

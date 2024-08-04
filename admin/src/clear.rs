@@ -19,12 +19,6 @@ pub async fn clear_content(
         .execute(&mut *db)
         .await?;
 
-    sqlx::query("delete from event_edition_maps_medals where event_id = ? and edition_id = ?")
-        .bind(event_id)
-        .bind(edition_id)
-        .execute(&mut *db)
-        .await?;
-
     Ok(())
 }
 

@@ -91,10 +91,14 @@ struct Map {
     main_author: PlayerInfoNetBody,
     name: String,
     map_uid: String,
-    bronze_time: i32,
-    silver_time: i32,
-    gold_time: i32,
-    champion_time: i32,
+    #[serde(serialize_with = "opt_ser")]
+    bronze_time: Option<MpDefaultI32>,
+    #[serde(serialize_with = "opt_ser")]
+    silver_time: Option<MpDefaultI32>,
+    #[serde(serialize_with = "opt_ser")]
+    gold_time: Option<MpDefaultI32>,
+    #[serde(serialize_with = "opt_ser")]
+    champion_time: Option<MpDefaultI32>,
     #[serde(serialize_with = "opt_ser")]
     personal_best: Option<MpDefaultI32>,
     next_opponent: NextOpponent,
@@ -350,10 +354,10 @@ async fn edition(
                 main_author,
                 name: map.name,
                 map_uid: map.game_id,
-                bronze_time: medal_times.bronze_time,
-                silver_time: medal_times.silver_time,
-                gold_time: medal_times.gold_time,
-                champion_time: medal_times.champion_time,
+                bronze_time: medal_times.map(|m| m.bronze_time.into()),
+                silver_time: medal_times.map(|m| m.silver_time.into()),
+                gold_time: medal_times.map(|m| m.gold_time.into()),
+                champion_time: medal_times.map(|m| m.champion_time.into()),
                 personal_best,
                 next_opponent: next_opponent.unwrap_or_default(),
             });

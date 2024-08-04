@@ -263,7 +263,7 @@ impl EventEditionMapExt<'_> {
         Ok(last_rank)
     }
 
-    async fn medal_times(&self, ctx: &Context<'_>) -> async_graphql::Result<MedalTimes> {
+    async fn medal_times(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<MedalTimes>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let medal_times = event::get_medal_times_of(
             db,

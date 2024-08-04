@@ -7,8 +7,7 @@ use itertools::Itertools as _;
 use records_lib::{
     event, map,
     mappack::{self, AnyMappackId},
-    models::{self, Medal},
-    must,
+    models, must,
     redis_key::mappack_key,
     Database, DatabaseConnection, MySqlPool,
 };
@@ -36,12 +35,12 @@ enum PopulateKind {
     },
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug, Clone, Copy)]
 struct MedalTimes {
-    champion_time: i64,
-    gold_time: i64,
-    silver_time: i64,
-    bronze_time: i64,
+    champion_time: i32,
+    gold_time: i32,
+    silver_time: i32,
+    bronze_time: i32,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -360,9 +359,27 @@ pub async fn populate(
             .and_then(|s| categories.iter().find(|c| c.handle == s))
             .map(|c| c.id);
 
+        let bronze_time = times.map(|m| m.bronze_time);
+        let silver_time = times.map(|m| m.silver_time);
+        let gold_time = times.map(|m| m.gold_time);
+        let author_time = times.map(|m| m.champion_time);
+
         sqlx::query(
-            "replace into event_edition_maps (event_id, edition_id, map_id, category_id, mx_id, `order`, original_map_id, original_mx_id, transitive_save) \
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "replace into event_edition_maps (
+                event_id,
+                edition_id,
+                map_id,
+                category_id,
+                mx_id,
+                `order`,
+                original_map_id,
+                original_mx_id,
+                transitive_save,
+                bronze_time,
+                silver_time,
+                gold_time,
+                author_time
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(event.id)
         .bind(edition.id)
@@ -373,47 +390,10 @@ pub async fn populate(
         .bind(original_map.as_ref().map(|m| m.id))
         .bind(original_mx_id)
         .bind(transitive_save.unwrap_or(default_transitive_save))
-        .execute(&mut *conn.mysql_conn)
-        .await?;
-
-        let Some(MedalTimes {
-            bronze_time,
-            silver_time,
-            gold_time,
-            champion_time,
-        }) = times
-        else {
-            continue;
-        };
-
-        sqlx::query(
-            "replace into event_edition_maps_medals
-            (event_id, edition_id, map_id, medal_id, time)
-            values (?, ?, ?, ?, ?),
-                   (?, ?, ?, ?, ?),
-                   (?, ?, ?, ?, ?),
-                   (?, ?, ?, ?, ?)",
-        )
-        .bind(event.id)
-        .bind(edition.id)
-        .bind(map.id)
-        .bind(Medal::Bronze as u8)
         .bind(bronze_time)
-        .bind(event.id)
-        .bind(edition.id)
-        .bind(map.id)
-        .bind(Medal::Silver as u8)
         .bind(silver_time)
-        .bind(event.id)
-        .bind(edition.id)
-        .bind(map.id)
-        .bind(Medal::Gold as u8)
         .bind(gold_time)
-        .bind(event.id)
-        .bind(edition.id)
-        .bind(map.id)
-        .bind(Medal::Champion as u8)
-        .bind(champion_time)
+        .bind(author_time)
         .execute(&mut *conn.mysql_conn)
         .await?;
 

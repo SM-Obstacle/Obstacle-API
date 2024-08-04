@@ -101,8 +101,6 @@ pub enum RecordsErrorKind {
 
     #[error("unknown role with id `{0}` and name `{1}`")]
     UnknownRole(u8, String) = 305,
-    #[error("unknown medal with id `{0}` and name `{1}`")]
-    UnknownMedal(u8, String) = 306,
     #[error("unknown rating kind with id `{0}` and name `{1}`")]
     UnknownRatingKind(u8, String) = 307,
     #[error("no rating found to update for player with login: `{0}` and map with uid: `{1}`")]
@@ -228,7 +226,6 @@ impl actix_web::ResponseError for RecordsError {
             R::EndpointNotFound => HttpResponse::NotFound().json(self.to_err_res()),
             R::PlayerNotBanned(_) => HttpResponse::BadRequest().json(self.to_err_res()),
             R::UnknownRole(..) => HttpResponse::InternalServerError().json(self.to_err_res()),
-            R::UnknownMedal(..) => HttpResponse::InternalServerError().json(self.to_err_res()),
             R::UnknownRatingKind(..) => HttpResponse::InternalServerError().json(self.to_err_res()),
             R::NoRatingFound(..) => HttpResponse::BadRequest().json(self.to_err_res()),
             R::InvalidRates => HttpResponse::BadRequest().json(self.to_err_res()),
