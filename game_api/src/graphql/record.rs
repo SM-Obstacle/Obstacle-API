@@ -96,7 +96,7 @@ impl RankedRecord {
         .bind(self.inner.record.map_id)
         .fetch_one(db)
         .await?;
-        Ok(sum.map(|m| m).unwrap_or(1))
+        Ok(sum.unwrap_or(1))
     }
 
     async fn record_date(&self) -> chrono::DateTime<chrono::Utc> {
