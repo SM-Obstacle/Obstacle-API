@@ -145,9 +145,13 @@ stopobs() {
         echo "Warning: the Obstacle API (PID: $__api_pid) is not running" >&2
     fi
 
+    until __is_pid_stopped $__api_pid; do sleep 1; done
+
     if [[ -n $__website_pid && $(! kill $__website_pid >/dev/null 2>&1) ]]; then
         echo "Warning: the Obstacle website (PID: $__website_pid) is not running" >&2
     fi
+
+    until __is_pid_stopped $__website_pid; do sleep 1; done
 
     rm ./etc/*_out >/dev/null 2>&1
 
