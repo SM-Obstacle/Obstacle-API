@@ -135,12 +135,13 @@ struct EventHandleEditionResponse {
     subtitle: String,
     /// The ManiaPlanet nicknames of the authors.
     authors: Vec<String>,
-    /// The formatted start date of the edition, in the format dd/mm/YYYY HH:MM.
-    start_date: String,
-    /// The formatted end date of the edition, in the format dd/mm/YYYY HH:MM.
+    /// The UTC timestamp of the edition start date.
+    start_date: i32,
+    /// The UTC timestamp of the edition end date.
     ///
-    /// This is empty if the edition doesn't expire.
-    end_date: String,
+    /// It is `None` if the edition never ends.
+    #[serde(serialize_with = "opt_ser")]
+    end_date: Option<MpDefaultI32>,
     /// The URL to the banner image of the edition, used in the Titlepack menu.
     banner_img_url: String,
     /// The URL to the small banner image of the edition, used in game in the Campaign mode.
@@ -397,8 +398,7 @@ async fn edition(
         expired: edition.has_expired(),
         end_date: edition
             .expire_date()
-            .map(|d| d.format("%d/%m/%Y %H:%M").to_string())
-            .unwrap_or_default(),
+            .map(|d| d.and_utc().timestamp().into()),
         id: edition.id,
         name: edition.name,
         subtitle: edition.subtitle.unwrap_or_default(),
@@ -408,7 +408,7 @@ async fn edition(
             .await
             .with_api_err()
             .fit(req_id)?,
-        start_date: edition.start_date.format("%d/%m/%Y %H:%M").to_string(),
+        start_date: edition.start_date.and_utc().timestamp() as _,
         banner_img_url: edition.banner_img_url.unwrap_or_default(),
         banner2_img_url: edition.banner2_img_url.unwrap_or_default(),
         mx_id: edition.mx_id.map(|id| MpDefaultI32(id as _)),

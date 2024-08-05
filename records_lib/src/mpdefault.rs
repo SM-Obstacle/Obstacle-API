@@ -43,12 +43,18 @@ where
     }
 }
 
-impl<const DEFAULT: i32> From<i32> for MpDefaultI32<DEFAULT> {
-    #[inline]
-    fn from(value: i32) -> Self {
-        Self(value)
-    }
+macro_rules! from_impls {
+    ($($t:ty)*) => {$(
+        impl<const DEFAULT: i32> From<$t> for MpDefaultI32<DEFAULT> {
+            #[inline]
+            fn from(value: $t) -> Self {
+                Self(value as _)
+            }
+        }
+    )*};
 }
+
+from_impls!(u8 u16 u32 u64 u128 i8 i16 i32 i64 i128);
 
 impl<const DEFAULT: i32> MpDefault for MpDefaultI32<DEFAULT> {
     #[inline]
