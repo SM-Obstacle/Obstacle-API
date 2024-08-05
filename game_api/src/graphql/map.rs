@@ -133,6 +133,11 @@ impl Map {
 #[derive(async_graphql::SimpleObject)]
 struct RelatedEdition<'a> {
     map: Map,
+    /// Tells the website to redirect to the event map page instead of the regular map page.
+    ///
+    /// This avoids to have access to the `/map/X_benchmark` page for example, because a Benchmark
+    /// map won't have any record in this context. Thus, it should be redirected to
+    /// `/event/benchmark/2/map/X_benchmark`.
     redirect_to_event: bool,
     edition: EventEdition<'a>,
 }
@@ -199,7 +204,10 @@ impl Map {
                     .load_one(edition.map_id)
                     .await?
                     .expect("unknown map id"),
-                redirect_to_event: edition.edition.save_non_event_record,
+                // We want to redirect to the event map page if the edition doesn't have
+                // any original map like campaign, or if the map isn't the original one.
+                redirect_to_event: edition.edition.non_original_maps
+                    || self.inner.id == edition.map_id,
                 edition: EventEdition::from_inner(edition.edition, mysql_pool).await?,
             });
         }
