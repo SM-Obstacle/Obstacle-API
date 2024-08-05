@@ -133,6 +133,7 @@ impl Map {
 #[derive(async_graphql::SimpleObject)]
 struct RelatedEdition<'a> {
     map: Map,
+    redirect_to_event: bool,
     edition: EventEdition<'a>,
 }
 
@@ -198,6 +199,7 @@ impl Map {
                     .load_one(edition.map_id)
                     .await?
                     .expect("unknown map id"),
+                redirect_to_event: edition.edition.save_non_event_record,
                 edition: EventEdition::from_inner(edition.edition, mysql_pool).await?,
             });
         }
