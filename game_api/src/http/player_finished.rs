@@ -142,7 +142,6 @@ pub async fn finished(
     db: &mut DatabaseConnection,
     params: FinishedParams<'_>,
     event: OptEvent<'_, '_>,
-    event_record_id: Option<u32>,
     at: chrono::NaiveDateTime,
 ) -> RecordsResult<FinishedOutput> {
     // First, we retrieve all what we need to save the record
@@ -206,7 +205,7 @@ pub async fn finished(
         player_id,
         params.rest.clone(),
         event,
-        event_record_id,
+        None,
         at,
     )
     .await?;
@@ -215,8 +214,7 @@ pub async fn finished(
 
     // If the record isn't in an event context, save the record to the events that have the map
     // and allow records saving without an event context.
-    // If `event_record_id` is filled, then this record is simply a clone of the event record.
-    if event.0.is_none() && event_record_id.is_none() {
+    if event.0.is_none() {
         let editions = records_lib::event::get_editions_which_contain(&mut db.mysql_conn, *map_id)
             .try_collect::<Vec<_>>()
             .await

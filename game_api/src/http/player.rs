@@ -207,7 +207,6 @@ pub async fn finished_at(
         &mut conn,
         body.into_params(None),
         Default::default(),
-        None,
         at,
     )
     .await

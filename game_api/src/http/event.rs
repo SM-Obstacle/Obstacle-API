@@ -508,7 +508,7 @@ pub async fn edition_finished_at(
     let rest = params.rest.clone();
 
     // Then we insert the record for the global records
-    let res = pf::finished(login.clone(), &mut conn, params, opt_event, None, at)
+    let res = pf::finished(login.clone(), &mut conn, params, opt_event, at)
         .await
         .fit(req_id)?;
 
