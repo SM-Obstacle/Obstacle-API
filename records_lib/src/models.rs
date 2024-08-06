@@ -120,7 +120,9 @@ pub struct Banishment {
     /// The UTC date of the ban.
     pub date_ban: chrono::NaiveDateTime,
     /// The duration, in seconds, of the ban.
-    pub duration: i64,
+    ///
+    /// If it's null, the ban is permanent.
+    pub duration: Option<i64>,
     /// The reason of the ban.
     pub reason: String,
     /// The ID of the banned player.
@@ -133,15 +135,24 @@ pub struct Banishment {
 
 impl fmt::Display for Banishment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct FmtDuration(Option<i64>);
+
+        impl fmt::Display for FmtDuration {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                if let Some(s) = self.0 {
+                    write!(f, "{s} seconds")?;
+                } else {
+                    write!(f, "forever")?;
+                }
+                Ok(())
+            }
+        }
+
         write!(
             f,
             "at: {:?}, duration: {}, reason: `{}`",
             self.date_ban,
-            if self.duration == -1 {
-                "forever".to_owned()
-            } else {
-                format!("{} seconds", self.duration)
-            },
+            FmtDuration(self.duration),
             if self.reason.is_empty() {
                 "none"
             } else {

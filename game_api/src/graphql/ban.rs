@@ -26,7 +26,7 @@ impl Banishment {
         self.inner.date_ban
     }
 
-    async fn duration(&self) -> i64 {
+    async fn duration(&self) -> Option<i64> {
         self.inner.duration
     }
 
