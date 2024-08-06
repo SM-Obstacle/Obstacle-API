@@ -42,13 +42,13 @@ pub enum RecordsError {
     // --------
 
     /// The player with the provided login was not found.
-    #[error("player not found in database: `{0}`")]
+    #[error("player with login `{0}` not found in database")]
     PlayerNotFound(
         /// The player login.
         String,
     ) = 302,
     /// The map with the provided UID was not found.
-    #[error("map not found in database")]
+    #[error("map with uid `{0}` not found in database")]
     MapNotFound(
         /// The map UID.
         String,

@@ -145,18 +145,20 @@ impl AnyMappackId<'_> {
 /// * `mappack`: the mappack.
 /// * `mysql_conn`: a connection to the MySQL/MariaDB database, to fetch the records.
 /// * `redis_conn`: a connection to the Redis database, to store the scores.
-#[cfg_attr(feature = "tracing", tracing::instrument(skip(db), err, ret))]
+#[cfg_attr(feature = "tracing", tracing::instrument(skip(db), err))]
 pub async fn update_mappack(
     mappack: AnyMappackId<'_>,
     db: &mut DatabaseConnection,
-) -> RecordsResult<()> {
+) -> RecordsResult<usize> {
     // Calculate the scores
     let scores = calc_scores(mappack, db).await?;
 
     // Early return if the mappack has expired
     let Some(scores) = scores else {
-        return Ok(());
+        return Ok(0);
     };
+
+    let total_scores = scores.scores.len();
 
     // Then save them to the Redis database for cache-handling
     save(mappack, scores, &mut db.redis_conn).await?;
@@ -170,7 +172,7 @@ pub async fn update_mappack(
             .await?;
     }
 
-    Ok(())
+    Ok(total_scores)
 }
 
 #[cfg_attr(feature = "tracing", tracing::instrument(skip(scores, redis_conn)))]
