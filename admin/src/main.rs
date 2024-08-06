@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
     match cmd {
         Command::Event(event) => match event {
             EventCommand::Populate(cmd) => populate::populate(client, db, cmd).await?,
-            EventCommand::Clear(cmd) => clear::clear(db.mysql_pool, cmd).await?,
+            EventCommand::Clear(cmd) => clear::clear(db, cmd).await?,
         },
     }
 

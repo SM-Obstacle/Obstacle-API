@@ -1,5 +1,7 @@
-use records_lib::{must, MySqlPool};
-use sqlx::MySqlConnection;
+use deadpool_redis::redis::AsyncCommands;
+use records_lib::{
+    mappack::AnyMappackId, models, must, redis_key::mappack_key, Database, DatabaseConnection,
+};
 
 #[derive(clap::Args)]
 pub struct ClearCommand {
@@ -9,32 +11,36 @@ pub struct ClearCommand {
 
 #[tracing::instrument(skip(db))]
 pub async fn clear_content(
-    db: &mut MySqlConnection,
-    event_id: u32,
-    edition_id: u32,
+    db: &mut DatabaseConnection,
+    event: &models::Event,
+    edition: &models::EventEdition,
 ) -> anyhow::Result<()> {
+    db.redis_conn
+        .del(mappack_key(AnyMappackId::Event(&event, &edition)))
+        .await?;
+
     sqlx::query("delete from event_edition_maps where event_id = ? and edition_id = ?")
-        .bind(event_id)
-        .bind(edition_id)
-        .execute(&mut *db)
+        .bind(event.id)
+        .bind(edition.id)
+        .execute(&mut *db.mysql_conn)
         .await?;
 
     Ok(())
 }
 
 pub async fn clear(
-    db: MySqlPool,
+    db: Database,
     ClearCommand {
         event_handle,
         event_edition,
     }: ClearCommand,
 ) -> anyhow::Result<()> {
-    let mysql_conn = &mut db.acquire().await?;
+    let mut conn = db.acquire().await?;
 
     let (event, edition) =
-        must::have_event_edition(mysql_conn, &event_handle, event_edition).await?;
+        must::have_event_edition(&mut conn.mysql_conn, &event_handle, event_edition).await?;
 
-    clear_content(mysql_conn, event.id, edition.id).await?;
+    clear_content(&mut conn, &event, &edition).await?;
 
     Ok(())
 }

@@ -225,7 +225,9 @@ pub async fn populate(
 
     tracing::info!("Clearing old content...");
 
-    clear::clear_content(&mut conn.mysql_conn, event.id, edition.id).await?;
+    let mappack = AnyMappackId::Event(&event, &edition);
+
+    clear::clear_content(&mut conn, &event, &edition).await?;
 
     let (csv_file, default_transitive_save) = match kind {
         PopulateKind::CsvFile {
@@ -314,8 +316,6 @@ pub async fn populate(
     };
 
     tracing::info!("Inserting new content...");
-
-    let mappack = AnyMappackId::Event(&event, &edition);
 
     for (
         Row {
