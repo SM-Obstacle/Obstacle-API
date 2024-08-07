@@ -3,10 +3,10 @@ use deadpool_redis::redis::AsyncCommands;
 use futures::TryStreamExt;
 use records_lib::{
     event::OptEvent,
-    models,
+    models, opt_ser,
     redis_key::map_key,
-    update_ranks::{get_rank, update_leaderboard},
-    DatabaseConnection,
+    update_ranks::{get_rank, get_rank_opt, update_leaderboard},
+    DatabaseConnection, MpDefaultI32,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Connection;
@@ -47,13 +47,15 @@ impl HasFinishedBody {
 
 pub type PlayerFinishedBody = Json<HasFinishedBody>;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 pub struct HasFinishedResponse {
     has_improved: bool,
     login: String,
     old: i32,
     new: i32,
     current_rank: i32,
+    #[serde(serialize_with = "opt_ser")]
+    old_rank: Option<MpDefaultI32>,
 }
 
 async fn send_query(
@@ -198,6 +200,8 @@ pub async fn finished(
         (params.rest.time, params.rest.time, true)
     };
 
+    let old_rank = get_rank_opt(&mut db.redis_conn, &map_key(map.id, event), old).await?;
+
     // We insert the record (whether it is the new personal best or not)
     let record_id =
         insert_record(db, map.id, player_id, params.rest.clone(), event, None, at).await?;
@@ -241,6 +245,7 @@ pub async fn finished(
             old,
             new,
             current_rank,
+            old_rank: old_rank.map(From::from),
         },
     })
 }

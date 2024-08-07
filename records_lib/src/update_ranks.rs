@@ -72,43 +72,48 @@ pub async fn update_leaderboard(
     Ok(mysql_count)
 }
 
+/// Gets the rank of a time in a map, or None if not found.
+///
+/// The ranking type is the standard competition ranking (1224).
+pub async fn get_rank_opt(
+    redis_conn: &mut RedisConnection,
+    key: &MapKey<'_>,
+    time: i32,
+) -> RecordsResult<Option<i32>> {
+    let player_id: Vec<u32> = redis_conn
+        .zrangebyscore_limit(key, time, time, 0, 1)
+        .await?;
+
+    match player_id.first() {
+        Some(id) => {
+            let rank: i32 = redis_conn.zrank(key, id).await?;
+            Ok(Some(rank + 1))
+        }
+        None => Ok(None),
+    }
+}
+
 /// Gets the rank of a time in a map, or fully updates its leaderboard if not found.
 ///
 /// The full update means a delete of the Redis key then a reinsertion of all the records.
 /// This may be called when the SQL and Redis databases had the same amount of records on a map,
 /// but the times were not corresponding. It generally happens after a database migration.
+///
+/// The ranking type is the standard competition ranking (1224).
 pub async fn get_rank(
     db: &mut DatabaseConnection,
     map_id: u32,
     time: i32,
     event: OptEvent<'_, '_>,
 ) -> RecordsResult<i32> {
-    async fn get_rank_(
-        redis_conn: &mut RedisConnection,
-        key: &MapKey<'_>,
-        time: i32,
-    ) -> RecordsResult<Option<i32>> {
-        let player_id: Vec<u32> = redis_conn
-            .zrangebyscore_limit(key, time, time, 0, 1)
-            .await?;
-
-        match player_id.first() {
-            Some(id) => {
-                let rank: i32 = redis_conn.zrank(key, id).await?;
-                Ok(Some(rank + 1))
-            }
-            None => Ok(None),
-        }
-    }
-
     let key = &map_key(map_id, event);
 
-    match get_rank_(&mut db.redis_conn, key, time).await? {
+    match get_rank_opt(&mut db.redis_conn, key, time).await? {
         Some(rank) => Ok(rank),
         None => {
             db.redis_conn.del(key).await?;
             update_leaderboard(db, map_id, event).await?;
-            let rank = get_rank_(&mut db.redis_conn, key, time)
+            let rank = get_rank_opt(&mut db.redis_conn, key, time)
                 .await?
                 .unwrap_or_else(|| {
                     // TODO: make a more clear message showing diff
