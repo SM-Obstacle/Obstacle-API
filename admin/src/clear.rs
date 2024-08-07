@@ -16,7 +16,7 @@ pub async fn clear_content(
     edition: &models::EventEdition,
 ) -> anyhow::Result<()> {
     db.redis_conn
-        .del(mappack_key(AnyMappackId::Event(&event, &edition)))
+        .del(mappack_key(AnyMappackId::Event(event, edition)))
         .await?;
 
     sqlx::query("delete from event_edition_maps where event_id = ? and edition_id = ?")

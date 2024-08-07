@@ -199,16 +199,8 @@ pub async fn finished(
     };
 
     // We insert the record (whether it is the new personal best or not)
-    let record_id = insert_record(
-        db,
-        map.id,
-        player_id,
-        params.rest.clone(),
-        event,
-        None,
-        at,
-    )
-    .await?;
+    let record_id =
+        insert_record(db, map.id, player_id, params.rest.clone(), event, None, at).await?;
 
     let current_rank = get_rank(db, map.id, old.min(new), event).await?;
 
