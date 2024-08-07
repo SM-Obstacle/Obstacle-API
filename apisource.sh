@@ -37,6 +37,8 @@ startapi() {
     local dir="$__wd/$__dir"
     cd $dir
 
+    trap 'cd $firstwd' 2
+
     if [[ $1 == "gql" ]]; then
         local output_gql_arg="-F gql_schema"
     fi
@@ -64,6 +66,8 @@ attachobs() {
     local firstwd=$(pwd)
     local dir="$__wd/$__dir"
     cd $dir
+
+    trap 'cd $firstwd; return 2' 2
 
     local code=0
 
