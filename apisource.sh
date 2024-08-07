@@ -21,30 +21,18 @@ __wait_for_fork() {
     echo $cpid
 }
 
-update_gql() {
+startwebsite() {
     local firstwd=$(pwd)
     local dir="$__wd/$__dir"
     cd $dir
 
-    cargo run --bin game-api -F gql_schema > ./etc/api_out 2>&1 &
-
-    until [[ -f ./etc/api_last_gql_schema ]]; do
-        sleep 1
-    done
-
-    local last_schema=$(cat ./etc/api_last_gql_schema)
-    local schema_file="schemas/$last_schema"
-    cp $schema_file website/schema.graphql
-    rm $schema_file
-    rm ./etc/api_last_gql_schema
     cd website
-    yarn compile
-    cd ..
+    yarn dev > ../etc/web_out 2>&1 &
 
     cd $firstwd
 }
 
-startobs() {
+startapi() {
     local firstwd=$(pwd)
     local dir="$__wd/$__dir"
     cd $dir
@@ -68,9 +56,6 @@ startobs() {
         yarn compile
         cd ..
     fi
-
-    cd website
-    yarn dev > ../etc/web_out 2>&1 &
 
     cd $firstwd
 }
