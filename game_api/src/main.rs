@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(debug_assertions)]
         let cors = cors.allow_any_origin();
         #[cfg(not(debug_assertions))]
-        let cors = cors.allowed_origin(&game_api::env().host);
+        let cors = cors.allowed_origin(&game_api_lib::env().host);
 
         App::new()
             .wrap(cors)
