@@ -12,6 +12,7 @@ use sqlx::{pool::PoolConnection, MySql};
 const PROCESS_DURATION_SECS: u64 = 3600 * 24; // Every day
 pub const PROCESS_DURATION: Duration = Duration::from_secs(PROCESS_DURATION_SECS);
 
+#[tracing::instrument(skip(conn))]
 async fn update_mappack(
     conn: &mut DatabaseConnection,
     mappack: AnyMappackId<'_>,
