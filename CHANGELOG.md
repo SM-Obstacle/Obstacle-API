@@ -2,6 +2,98 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2024-08-07
+
+### Bug fixes
+
+- Avoid showing not yet released events
+- Not retrieving non-pb records for an event
+- Removed escaped names from the api
+- Fix doc test errors
+
+- Fix tiny wrong fmt
+
+- Return record date in utc format
+- Fix non waiting for process kill
+
+
+### Documentation
+
+- Enhanced the overall documentation
+- Api source file for bash
+
+### Features
+
+- Fields `authors` and `end_date` for edition
+- Enhanced internal documentation
+- Allow save of non-event records to event
+- Record saving in non-event ctx
+- Add transitive save flag
+- Try count on record
+
+### Miscellaneous Tasks
+
+- Create ci.yml
+- Update ci.yml
+- Merge pull request #19 from Obstacle-Reborn/test-ci
+
+
+- Merge pull request #20 from Obstacle-Reborn/docs-ci
+
+Create docs.yml
+
+### Refactor
+
+- Remove reversed leaderboards feature
+- Better mappack/events scores management
+- Using new opt event type
+- Mpdefault module and default consts
+
+## [0.2.7] - 2024-05-11
+
+### Features
+
+- /player/ac route
+- Using `mkenv` crate for env init
+- Ttl for events
+- Populate event with mappack mx id
+- Sort event maps records
+- Staggered requests
+
+## [0.2.6] - 2024-04-15
+
+### Bug fixes
+
+- Db returning null for events without category
+- Usernames not escaped
+- Add ttl for mappack related keys
+- Fix updating wrong event editions scores
+
+- Wrong last/worst rank when calculating scores
+- Map last rank set at 0 on empty records
+- Persist event mappack in redis after populate
+- Temporary hardcode for benchmark 2
+- Using wrong mappack id for events
+- Overflow when calculating remaining time
+
+### Features
+
+- Returning medal times for each map for `/event/<handle>/<edition_id>` route
+- Filling rest of response with empty categories
+- Allowing retrieving mappack from event
+- Retrieve event edition admins
+- Add relations between maps and events
+- Info of leaderboard row in event player info
+- Unfinished maps for player in event
+- `latestnews_image` route
+- Next update of mappack scores in graphql
+- Next opponent in campaign page
+
+### Refactor
+
+- Refactor code
+
+
 ## [0.2.5] - 2023-11-10
 
 ### Bug fixes
