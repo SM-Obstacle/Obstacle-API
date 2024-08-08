@@ -508,6 +508,10 @@ impl EventEditionPlayer<'_> {
 
 #[async_graphql::ComplexObject]
 impl EventEditionMap<'_> {
+    async fn link_to_original(&self) -> bool {
+        !(self.edition.inner.save_non_event_record && self.edition.inner.non_original_maps)
+    }
+
     async fn original_map(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<Map>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
