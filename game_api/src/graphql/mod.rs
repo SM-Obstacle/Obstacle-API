@@ -109,7 +109,12 @@ impl QueryRoot {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Option<Article>> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        let article = sqlx::query_as("select * from article order by article_date desc limit 1")
+        let article = sqlx::query_as(
+            "select * from article
+            where hide is null or hide = 0
+            order by article_date desc
+            limit 1"
+        )
             .fetch_optional(db)
             .await?;
         Ok(article.map(From::<models::Article>::from))
@@ -121,7 +126,10 @@ impl QueryRoot {
         slug: String,
     ) -> async_graphql::Result<Option<Article>> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        let article = sqlx::query_as("select * from article where slug = ?")
+        let article = sqlx::query_as(
+            "select * from article
+            where (hide is null or hide = 0) and slug = ?"
+        )
             .bind(slug)
             .fetch_optional(db)
             .await?;

@@ -442,4 +442,6 @@ pub struct Article {
     pub path: String,
     /// The date of the article.
     pub article_date: chrono::DateTime<chrono::Utc>,
+    /// Whether to hide the article on the website or not.
+    pub hide: Option<bool>,
 }
