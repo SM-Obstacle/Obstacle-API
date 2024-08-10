@@ -41,7 +41,7 @@ pub async fn get_api_status(db: &Database) -> RecordsResult<ApiStatus> {
         "SELECT a.*, sh1.status_history_date as `at`
         FROM api_status_history sh1
         INNER JOIN api_status a ON a.status_id = sh1.status_id
-        ORDER BY sh1.status_history_id
+        ORDER BY sh1.status_history_id DESC
         LIMIT 1",
     )
     .fetch_one(&db.mysql_pool)
