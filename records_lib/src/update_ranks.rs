@@ -3,7 +3,7 @@
 //!
 //! See the [`update_leaderboard`] and [`get_rank`] functions for more information.
 
-use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::redis::{self, AsyncCommands};
 use sqlx::MySqlConnection;
 
 use crate::{
@@ -62,11 +62,16 @@ pub async fn update_leaderboard(
 
         let all_map_records: Vec<(u32, i32)> = query.fetch_all(&mut *db.mysql_conn).await?;
 
-        let _removed_count: i64 = db.redis_conn.del(&key).await?;
+        let mut pipe = redis::pipe();
+        let pipe = pipe.atomic();
+
+        pipe.del(&key);
 
         for record in all_map_records {
-            let _: i64 = db.redis_conn.zadd(&key, record.0, record.1).await?;
+            pipe.zadd(&key, record.0, record.1);
         }
+
+        pipe.query_async(&mut db.redis_conn).await?;
     }
 
     Ok(mysql_count)
