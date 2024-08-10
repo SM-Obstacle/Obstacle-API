@@ -140,6 +140,7 @@ pub fn env() -> &'static LibEnv {
 /// Creates and returns the MySQL/MariaDB pool with the provided URL.
 pub async fn get_mysql_pool(url: String) -> anyhow::Result<MySqlPool> {
     let mysql_pool = sqlx::mysql::MySqlPoolOptions::new()
+        .max_connections(50)
         .acquire_timeout(Duration::from_secs(10))
         .connect(&url)
         .await?;
