@@ -498,7 +498,9 @@ pub async fn edition_finished_at(
     .await
     .fit(req_id)?;
 
-    if edition.has_expired() {
+    if edition.has_expired()
+        && !(edition.start_date <= at && edition.expire_date().filter(|date| at > *date).is_none())
+    {
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
