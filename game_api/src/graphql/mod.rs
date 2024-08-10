@@ -61,10 +61,73 @@ enum Node {
     Player(Player),
 }
 
+#[repr(transparent)]
+struct Article {
+    inner: models::Article,
+}
+
+impl From<models::Article> for Article {
+    fn from(inner: models::Article) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_graphql::Object]
+impl Article {
+    async fn date(&self) -> chrono::DateTime<chrono::Utc> {
+        self.inner.article_date
+    }
+
+    async fn authors(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<Player>> {
+        let db = ctx.data_unchecked::<MySqlPool>();
+        let players = sqlx::query_as(
+            "select p.* from players p
+            inner join article_authors aa on aa.author_id = p.id
+            where aa.article_id = ?",
+        )
+        .bind(self.inner.id)
+        .fetch_all(db)
+        .await?;
+        Ok(players)
+    }
+
+    async fn content(&self) -> async_graphql::Result<String> {
+        let content = tokio::fs::read_to_string(&self.inner.path).await?;
+        Ok(content)
+    }
+}
+
 struct QueryRoot;
 
 #[async_graphql::Object]
 impl QueryRoot {
+    async fn latest_news(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<Article>> {
+        let db = ctx.data_unchecked::<MySqlPool>();
+        let article = sqlx::query_as("select * from article order by article_date desc limit 1")
+            .fetch_optional(db)
+            .await?;
+        Ok(article.map(From::<models::Article>::from))
+    }
+
+    async fn article(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        slug: String,
+    ) -> async_graphql::Result<Option<Article>> {
+        let db = ctx.data_unchecked::<MySqlPool>();
+        let article = sqlx::query_as("select * from article where slug = ?")
+            .bind(slug)
+            .fetch_optional(db)
+            .await?;
+        Ok(article.map(From::<models::Article>::from))
+    }
+
     async fn resources_content(
         &self,
         ctx: &async_graphql::Context<'_>,

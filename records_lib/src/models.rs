@@ -430,3 +430,16 @@ pub struct ResourcesContent {
     /// The UTC date of the last edit of the page.
     pub last_modified: chrono::NaiveDateTime,
 }
+
+/// An article on the website.
+#[derive(Serialize, FromRow, Clone, Debug)]
+pub struct Article {
+    /// The ID of the article.
+    pub id: u32,
+    /// The slug of the article, meaning the end part in the URL.
+    pub slug: String,
+    /// The path to the file containing the content of the article.
+    pub path: String,
+    /// The date of the article.
+    pub article_date: chrono::DateTime<chrono::Utc>,
+}
