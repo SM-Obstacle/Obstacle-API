@@ -2,7 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.3.0] - 2024-08-07
+## [0.3.1] - 2024-08-11
+
+### Bug fixes
+
+- Unsynchronized leaderboards state
+
+### Miscellaneous Tasks
+
+- Update ci.yml
+
+## [0.3.0] - 2024-08-10
 
 ### Bug fixes
 
@@ -15,6 +25,8 @@ All notable changes to this project will be documented in this file.
 
 - Return record date in utc format
 - Fix non waiting for process kill
+
+- Fix wrong lib name import
 
 
 ### Documentation
@@ -30,6 +42,8 @@ All notable changes to this project will be documented in this file.
 - Record saving in non-event ctx
 - Add transitive save flag
 - Try count on record
+- Return old rank on player finish
+- Allow many articles for the website
 
 ### Miscellaneous Tasks
 
