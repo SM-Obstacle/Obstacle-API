@@ -1,6 +1,9 @@
+use std::iter;
+
 use actix_web::{web::Query, Responder};
 use deadpool_redis::redis::AsyncCommands;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
+use itertools::Itertools;
 use records_lib::{
     event::OptEvent,
     models, must,
@@ -82,11 +85,7 @@ async fn get_range(
         return Ok(Vec::new());
     }
 
-    let params = ids
-        .iter()
-        .map(|_| "?".to_string())
-        .collect::<Vec<String>>()
-        .join(",");
+    let params = iter::repeat("?").take(ids.len()).join(",");
 
     let query = format!(
         "SELECT CAST(0 AS UNSIGNED) AS rank,
