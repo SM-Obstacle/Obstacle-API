@@ -13,7 +13,7 @@ use once_cell::sync::OnceCell;
 use sqlx::{pool::PoolConnection, MySql, Pool};
 use std::time::Duration;
 
-mod mpdefault;
+mod mptypes;
 
 pub mod error;
 pub mod mappack;
@@ -33,7 +33,7 @@ pub type RedisPool = deadpool_redis::Pool;
 /// The type of a Redis connection.
 pub type RedisConnection = deadpool_redis::Connection;
 
-pub use mpdefault::*;
+pub use mptypes::*;
 
 use self::error::RecordsResult;
 

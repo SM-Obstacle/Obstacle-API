@@ -7,7 +7,7 @@ use itertools::Itertools;
 use records_lib::{
     error::RecordsError,
     event::{self, EventMap, OptEvent},
-    models, opt_ser, Database, MpDefaultI32,
+    models, Database, NullableInteger, NullableText,
 };
 use serde::Serialize;
 use sqlx::{FromRow, MySqlConnection};
@@ -86,21 +86,15 @@ struct EventHandleResponse {
 
 #[derive(Serialize)]
 struct Map {
-    #[serde(serialize_with = "opt_ser")]
-    mx_id: Option<MpDefaultI32<0>>,
+    mx_id: NullableInteger<0>,
     main_author: PlayerInfoNetBody,
     name: String,
     map_uid: String,
-    #[serde(serialize_with = "opt_ser")]
-    bronze_time: Option<MpDefaultI32>,
-    #[serde(serialize_with = "opt_ser")]
-    silver_time: Option<MpDefaultI32>,
-    #[serde(serialize_with = "opt_ser")]
-    gold_time: Option<MpDefaultI32>,
-    #[serde(serialize_with = "opt_ser")]
-    champion_time: Option<MpDefaultI32>,
-    #[serde(serialize_with = "opt_ser")]
-    personal_best: Option<MpDefaultI32>,
+    bronze_time: NullableInteger,
+    silver_time: NullableInteger,
+    gold_time: NullableInteger,
+    champion_time: NullableInteger,
+    personal_best: NullableInteger,
     next_opponent: NextOpponent,
 }
 
@@ -140,15 +134,13 @@ struct EventHandleEditionResponse {
     /// The UTC timestamp of the edition end date.
     ///
     /// It is `None` if the edition never ends.
-    #[serde(serialize_with = "opt_ser")]
-    end_date: Option<MpDefaultI32>,
+    end_date: NullableInteger,
     /// The URL to the banner image of the edition, used in the Titlepack menu.
     banner_img_url: String,
     /// The URL to the small banner image of the edition, used in game in the Campaign mode.
     banner2_img_url: String,
     /// The MX ID of the related mappack.
-    #[serde(serialize_with = "opt_ser")]
-    mx_id: Option<MpDefaultI32>,
+    mx_id: NullableInteger,
     /// Whether the edition has expired or not.
     expired: bool,
     original_map_uids: Vec<String>,
@@ -209,19 +201,16 @@ async fn event_editions(
 
 #[derive(FromRow, Serialize, Default)]
 struct NextOpponent {
-    #[serde(serialize_with = "opt_ser")]
-    login: Option<String>,
-    #[serde(serialize_with = "opt_ser")]
-    name: Option<String>,
-    #[serde(serialize_with = "opt_ser")]
-    time: Option<MpDefaultI32>,
+    login: NullableText,
+    name: NullableText,
+    time: NullableInteger,
 }
 
 struct AuthorWithPlayerTime {
     /// The author of the map
     main_author: PlayerInfoNetBody,
     /// The time of the player (not the same player as the author)
-    personal_best: Option<MpDefaultI32>,
+    personal_best: NullableInteger,
     /// The next opponent of the player
     next_opponent: Option<NextOpponent>,
 }
@@ -339,7 +328,7 @@ async fn edition(
                         .await
                         .with_api_err()
                         .fit(req_id)?,
-                    personal_best: None,
+                    personal_best: None.into(),
                     next_opponent: None,
                 }
             };
@@ -351,14 +340,14 @@ async fn edition(
                     .fit(req_id)?;
 
             maps.push(Map {
-                mx_id: mx_id.map(|id| MpDefaultI32(id as _)),
+                mx_id: mx_id.map(|id| id as _).into(),
                 main_author,
                 name: map.name,
                 map_uid: map.game_id,
-                bronze_time: medal_times.map(|m| m.bronze_time.into()),
-                silver_time: medal_times.map(|m| m.silver_time.into()),
-                gold_time: medal_times.map(|m| m.gold_time.into()),
-                champion_time: medal_times.map(|m| m.champion_time.into()),
+                bronze_time: medal_times.map(|m| m.bronze_time).into(),
+                silver_time: medal_times.map(|m| m.silver_time).into(),
+                gold_time: medal_times.map(|m| m.gold_time).into(),
+                champion_time: medal_times.map(|m| m.champion_time).into(),
                 personal_best,
                 next_opponent: next_opponent.unwrap_or_default(),
             });
@@ -398,7 +387,8 @@ async fn edition(
         expired: edition.has_expired(),
         end_date: edition
             .expire_date()
-            .map(|d| d.and_utc().timestamp().into()),
+            .map(|d| d.and_utc().timestamp() as _)
+            .into(),
         id: edition.id,
         name: edition.name,
         subtitle: edition.subtitle.unwrap_or_default(),
@@ -411,7 +401,7 @@ async fn edition(
         start_date: edition.start_date.and_utc().timestamp() as _,
         banner_img_url: edition.banner_img_url.unwrap_or_default(),
         banner2_img_url: edition.banner2_img_url.unwrap_or_default(),
-        mx_id: edition.mx_id.map(|id| MpDefaultI32(id as _)),
+        mx_id: edition.mx_id.map(|id| id as _).into(),
         original_map_uids,
         categories,
     })

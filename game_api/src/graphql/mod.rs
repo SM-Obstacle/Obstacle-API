@@ -113,10 +113,10 @@ impl QueryRoot {
             "select * from article
             where hide is null or hide = 0
             order by article_date desc
-            limit 1"
+            limit 1",
         )
-            .fetch_optional(db)
-            .await?;
+        .fetch_optional(db)
+        .await?;
         Ok(article.map(From::<models::Article>::from))
     }
 
@@ -128,11 +128,11 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<MySqlPool>();
         let article = sqlx::query_as(
             "select * from article
-            where (hide is null or hide = 0) and slug = ?"
+            where (hide is null or hide = 0) and slug = ?",
         )
-            .bind(slug)
-            .fetch_optional(db)
-            .await?;
+        .bind(slug)
+        .fetch_optional(db)
+        .await?;
         Ok(article.map(From::<models::Article>::from))
     }
 
