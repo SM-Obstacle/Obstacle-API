@@ -21,6 +21,7 @@ use crate::{
         self, privilege, ApiAvailable, AuthHeader, AuthState, MPAuthGuard, Message, WebToken,
         TIMEOUT, WEB_TOKEN_SESS_KEY,
     },
+    discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
     utils::json,
     AccessTokenErr, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult,
     RecordsResultExt, Res,
@@ -451,30 +452,6 @@ struct ReportErrorBody {
     err_msg: String,
     time: i32,
     respawn_count: i32,
-}
-
-#[derive(Serialize)]
-struct WebhookBodyEmbedField {
-    name: String,
-    value: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    inline: Option<bool>,
-}
-
-#[derive(Serialize)]
-struct WebhookBodyEmbed {
-    title: String,
-    description: Option<String>,
-    color: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    url: Option<String>,
-    fields: Option<Vec<WebhookBodyEmbedField>>,
-}
-
-#[derive(Serialize)]
-struct WebhookBody {
-    content: String,
-    embeds: Vec<WebhookBodyEmbed>,
 }
 
 async fn report_error(

@@ -1,15 +1,18 @@
 //! Module used to serve the routes mainly used by the Obstacle gamemode. Each submodule is
 //! specific for a route segment.
 
+use std::fmt;
+
 use actix_web::web::{JsonConfig, Query};
-use actix_web::{web, Scope};
+use actix_web::{web, HttpResponse, Scope};
 
 use records_lib::Database;
 use serde::Serialize;
 use tracing_actix_web::RequestId;
 
+use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 use crate::utils::{get_api_status, json, ApiStatus};
-use crate::{FitRequestId, RecordsResponse, RecordsResultExt, Res};
+use crate::{FitRequestId, ModeVersion, RecordsResponse, RecordsResultExt, Res};
 use actix_web::Responder;
 
 use self::admin::admin_scope;
@@ -36,11 +39,98 @@ pub fn api_route() -> Scope {
         .route("/latestnews_image", web::get().to(latestnews_image))
         .route("/info", web::get().to(info))
         .route("/overview", web::get().to(overview))
+        .route("/report", web::post().to(report_error))
         .service(staggered_scope())
         .service(player_scope())
         .service(map_scope())
         .service(admin_scope())
         .service(event_scope())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum HttpMethod {
+    Get,
+    Post,
+}
+
+impl fmt::Display for HttpMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HttpMethod::Get => f.write_str("GET"),
+            HttpMethod::Post => f.write_str("POST"),
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ReportErrorBody {
+    method: HttpMethod,
+    route: String,
+    body: String,
+    player_login: String,
+    error: String,
+}
+
+async fn report_error(
+    Res(client): Res<reqwest::Client>,
+    req_id: RequestId,
+    web::Json(body): web::Json<ReportErrorBody>,
+    mode_vers: ModeVersion,
+) -> RecordsResponse<impl Responder> {
+    let mut fields = vec![
+        WebhookBodyEmbedField {
+            name: "HTTP method".to_owned(),
+            value: body.method.to_string(),
+            inline: None,
+        },
+        WebhookBodyEmbedField {
+            name: "API route".to_owned(),
+            value: format!("`{}`", body.route),
+            inline: None,
+        },
+        WebhookBodyEmbedField {
+            name: "Player login".to_owned(),
+            value: format!("`{}`", body.player_login),
+            inline: None,
+        },
+    ];
+
+    if !body.body.is_empty() {
+        fields.push(WebhookBodyEmbedField {
+            name: "Request body".to_owned(),
+            value: format!("```{}```", body.body),
+            inline: None,
+        });
+    }
+
+    client
+        .post(&crate::env().wh_report_url)
+        .json(&WebhookBody {
+            content: format!("Error reported (mode version: {mode_vers})"),
+            embeds: vec![
+                WebhookBodyEmbed {
+                    title: "Error".to_owned(),
+                    description: Some(format!("```{}```", body.error)),
+                    color: 5814783,
+                    fields: None,
+                    url: None,
+                },
+                WebhookBodyEmbed {
+                    title: "Context".to_owned(),
+                    description: None,
+                    color: 5814783,
+                    fields: Some(fields),
+                    url: None,
+                },
+            ],
+        })
+        .send()
+        .await
+        .with_api_err()
+        .fit(req_id)?;
+
+    Ok(HttpResponse::Ok().finish())
 }
 
 #[derive(Serialize, sqlx::FromRow)]
