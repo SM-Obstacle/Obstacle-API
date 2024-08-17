@@ -69,6 +69,7 @@ struct ReportErrorBody {
     route: String,
     body: String,
     player_login: String,
+    status_code: i32,
     error: String,
 }
 
@@ -89,12 +90,15 @@ async fn report_error(
             value: format!("`{}`", body.route),
             inline: None,
         },
-        WebhookBodyEmbedField {
+    ];
+
+    if !body.player_login.is_empty() {
+        fields.push(WebhookBodyEmbedField {
             name: "Player login".to_owned(),
             value: format!("`{}`", body.player_login),
             inline: None,
-        },
-    ];
+        });
+    }
 
     if !body.body.is_empty() {
         fields.push(WebhookBodyEmbedField {
@@ -113,7 +117,11 @@ async fn report_error(
                     title: "Error".to_owned(),
                     description: Some(format!("```{}```", body.error)),
                     color: 5814783,
-                    fields: None,
+                    fields: Some(vec![WebhookBodyEmbedField {
+                        name: "Status code".to_owned(),
+                        value: body.status_code.to_string(),
+                        inline: None,
+                    }]),
                     url: None,
                 },
                 WebhookBodyEmbed {
