@@ -347,12 +347,12 @@ pub async fn check_auth_for(
     inner_check_auth_for(db, login, token, required, key).await
 }
 
-struct ExtAuthHeaders {
-    player_login: Option<String>,
-    authorization: Option<String>,
+pub struct ExtAuthHeaders {
+    pub player_login: Option<String>,
+    pub authorization: Option<String>,
 }
 
-fn ext_auth_headers(req: &HttpRequest) -> ExtAuthHeaders {
+pub fn ext_auth_headers(req: &HttpRequest) -> ExtAuthHeaders {
     fn ext_header(req: &HttpRequest, header: &str) -> Option<String> {
         req.headers()
             .get(header)
@@ -377,33 +377,43 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
         async fn check<const ROLE: privilege::Flags>(
             request_id: RequestId,
-            db: Res<Database>,
+            #[cfg(not(test))] db: Res<Database>,
             login: Option<String>,
-            token: Option<String>,
+            #[cfg(not(test))] token: Option<String>,
         ) -> RecordsResponse<MPAuthGuard<ROLE>> {
-            let (Some(login), Some(token)) = (login, token) else {
-                return Err(RecordsError {
-                    request_id,
-                    kind: RecordsErrorKind::Unauthorized,
-                });
+            let Some(login) = login else {
+                return Err(RecordsErrorKind::Unauthorized).fit(request_id);
             };
 
-            check_auth_for(&db, &login, &token, ROLE)
-                .await
-                .fit(request_id)?;
+            #[cfg(not(test))]
+            {
+                let Some(token) = token else {
+                    return Err(RecordsErrorKind::Unauthorized).fit(request_id);
+                };
+
+                check_auth_for(&db, &login, &token, ROLE)
+                    .await
+                    .fit(request_id)?;
+            }
 
             Ok(MPAuthGuard { login })
         }
 
         let ExtAuthHeaders {
             player_login,
+            #[cfg(not(test))]
             authorization,
+            ..
         } = ext_auth_headers(req);
 
         let req_id = must::have_request_id(req);
-        let db = must::have_db(req);
-
-        Box::pin(check(req_id, db, player_login, authorization))
+        #[cfg(not(test))]
+        {
+            let db = must::have_db(req);
+            Box::pin(check(req_id, db, player_login, authorization))
+        }
+        #[cfg(test)]
+        Box::pin(check(req_id, player_login))
     }
 }
 

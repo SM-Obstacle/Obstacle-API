@@ -23,7 +23,7 @@ pub fn any_repeated<T: PartialEq>(slice: &[T]) -> bool {
 /// Returns a randomly-generated token with the `len` length. It contains alphanumeric characters.
 pub fn generate_token(len: usize) -> String {
     rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
+        .sample_iter(rand::distributions::Alphanumeric)
         .map(char::from)
         .take(len)
         .collect()

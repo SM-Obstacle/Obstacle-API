@@ -18,6 +18,9 @@ use tracing_actix_web::RequestId;
 
 use super::player::{self, PlayerInfoNetBody};
 
+#[cfg(test)]
+pub mod tests;
+
 pub fn map_scope() -> Scope {
     web::scope("/map")
         .route("/insert", web::post().to(insert))
@@ -43,6 +46,7 @@ impl<'a> MapParam<'a> {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
 struct UpdateMapBody {
     name: String,
     map_uid: String,

@@ -16,6 +16,7 @@ use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 use super::{event, map::MapParam};
 
 #[derive(Deserialize, Debug, Clone)]
+#[cfg_attr(test, derive(Serialize))]
 pub struct InsertRecordParams {
     pub time: i32,
     pub respawn_count: i32,
@@ -29,6 +30,7 @@ pub struct FinishedParams<'a> {
 }
 
 #[derive(Deserialize, Debug)]
+#[cfg_attr(test, derive(Serialize))]
 pub struct HasFinishedBody {
     pub map_uid: String,
     #[serde(flatten)]
@@ -199,13 +201,13 @@ pub async fn finished(
         (params.rest.time, params.rest.time, true)
     };
 
-    let old_rank = get_rank_opt(&mut db.redis_conn, &map_key(map.id, event), old).await?;
+    let old_rank = get_rank_opt(&mut db.redis_conn, &map_key(map.id, event), player_id).await?;
 
     // We insert the record (whether it is the new personal best or not)
     let record_id =
         insert_record(db, map.id, player_id, params.rest.clone(), event, None, at).await?;
 
-    let current_rank = get_rank(db, map.id, old.min(new), event).await?;
+    let current_rank = get_rank(db, map.id, player_id, event).await?;
 
     // If the record isn't in an event context, save the record to the events that have the map
     // and allow records saving without an event context.

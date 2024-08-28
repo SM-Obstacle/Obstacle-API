@@ -1,6 +1,6 @@
 [package]
 name = "game-api"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 
 [lib]
@@ -43,6 +43,9 @@ itertools = { workspace = true }
 once_cell = { workspace = true }
 records-lib = { workspace = true, features = ["tracing", "reqwest"] }
 mkenv = { workspace = true }
+
+[dev-dependencies]
+tracing-test = "0.2.5"
 
 [features]
 default = []

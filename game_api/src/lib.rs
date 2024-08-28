@@ -28,6 +28,9 @@ mod http;
 pub(crate) mod must;
 mod utils;
 
+#[cfg(test)]
+mod tests;
+
 pub use auth::AuthState;
 pub use graphql::graphql_route;
 pub use http::api_route;

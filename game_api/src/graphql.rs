@@ -379,7 +379,13 @@ impl QueryRoot {
         };
 
         Ok(models::RankedRecord {
-            rank: get_rank(&mut conn, record.map_id, record.time, Default::default()).await?,
+            rank: get_rank(
+                &mut conn,
+                record.map_id,
+                record.record_player_id,
+                Default::default(),
+            )
+            .await?,
             record,
         }
         .into())
@@ -432,7 +438,13 @@ impl QueryRoot {
         while let Some(record) = records.next().await {
             let record = record?;
 
-            let rank = get_rank(&mut conn, record.map_id, record.time, Default::default()).await?;
+            let rank = get_rank(
+                &mut conn,
+                record.map_id,
+                record.record_player_id,
+                Default::default(),
+            )
+            .await?;
 
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }

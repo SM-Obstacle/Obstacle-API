@@ -46,6 +46,7 @@ pub type OverviewReq = Query<OverviewQuery>;
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct RecordQueryRow {
     pub login: String,
+    pub player_id: u32,
     pub nickname: String,
     pub time: i32,
     #[sqlx(flatten)]
@@ -89,6 +90,7 @@ async fn get_range(
 
     let query = format!(
         "SELECT CAST(0 AS UNSIGNED) AS rank,
+            p.id AS player_id,
             p.login AS login,
             p.name AS nickname,
             min(time) as time,
@@ -119,13 +121,14 @@ async fn get_range(
     while let Some(record) = records.next().await {
         let RecordQueryRow {
             login,
+            player_id,
             nickname,
             time,
             map,
         } = record.with_api_err()?;
 
         out.push(RankedRecord {
-            rank: get_rank(conn, map.id, time, event).await? as _,
+            rank: get_rank(conn, map.id, player_id, event).await? as _,
             login,
             nickname,
             time,

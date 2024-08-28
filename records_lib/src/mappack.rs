@@ -397,7 +397,7 @@ async fn calc_scores(
             }
 
             let record = RankedRecordRow {
-                rank: get_rank(db, map.id, record.record.time, event).await?,
+                rank: get_rank(db, map.id, record.record.record_player_id, event).await?,
                 record,
             };
             records.push(record);
