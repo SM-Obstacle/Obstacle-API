@@ -4,6 +4,7 @@
 //! as a main dependency.
 
 use actix_cors::Cors;
+use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_session::{
     config::{CookieContentSecurity, PersistentSession},
     storage::CookieSessionStore,
@@ -56,6 +57,8 @@ async fn main() -> anyhow::Result<()> {
     let sess_key = Key::from(env.used_once.sess_key.as_bytes());
     drop(env.used_once.sess_key);
 
+    let governor_conf = GovernorConfigBuilder::default().finish().unwrap();
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .supports_credentials()
@@ -68,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
         let cors = cors.allowed_origin(&game_api_lib::env().host);
 
         App::new()
+            .wrap(Governor::new(&governor_conf))
             .wrap(cors)
             .wrap(TracingLogger::default())
             .wrap(
