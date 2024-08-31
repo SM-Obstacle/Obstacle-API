@@ -15,17 +15,15 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        mariadb: [11.0.2, 10.6.19]
+        mariadb: [11.4, 10.6]
         redis: [7.0.11, 7.2.5]
 
     steps:
       - name: Setup MariaDB
-        uses: getong/mariadb-action@v1.11
+        uses: ankane/setup-mariadb@v1
         with:
-          mysql database: obs_records
-          mariadb version: ${{ matrix.mariadb }}
-          mysql user: api
-          mysql password: ${{ secrets.MARIADB_PW }}
+          database: obs_records
+          mariadb-version: ${{ matrix.mariadb }}
 
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1
