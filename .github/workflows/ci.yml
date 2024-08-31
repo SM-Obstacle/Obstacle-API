@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        mariadb: [11.1, 10.6.19]
+        mariadb: [10.3]
 
     steps:
       - name: Checkout repository
