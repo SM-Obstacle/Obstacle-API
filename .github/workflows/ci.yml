@@ -25,9 +25,6 @@ jobs:
           mariadb-version: ${{ matrix.mariadb }}
           database: obs_records
 
-      - name: Initialize MariaDB
-        run: mariadb -D obs_records < assets/last_dump.sql
-
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1
         with:
@@ -35,6 +32,9 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Initialize MariaDB
+        run: mariadb -D obs_records < assets/last_dump.sql
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
