@@ -28,18 +28,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install MariaDB
-        run: sudo apt-get update
-          sudo apt-get install software-properties-common devscripts equivs
-          sudo apt-key adv --recv-keys --keyserver hkp://keyserver.ubuntu.com:80 0xF1656F24C74CD1D8
-          sudo add-apt-repository --update --yes --enable-source 'deb [arch=amd64] http://nyc2.mirrors.digitalocean.com/mariadb/repo/${{ matrix.mariadb }}/ubuntu '$(lsb_release -sc)' main'
+        run: sudo apt-get update;
+          sudo apt-get install software-properties-common devscripts equivs;
+          sudo apt-key adv --recv-keys --keyserver hkp://keyserver.ubuntu.com:80 0xF1656F24C74CD1D8;
+          sudo add-apt-repository --update --yes --enable-source 'deb [arch=amd64] http://nyc2.mirrors.digitalocean.com/mariadb/repo/${{ matrix.mariadb }}/ubuntu '$(lsb_release -sc)' main';
 
-          sudo apt-get build-dep mariadb-${{ matrix.mariadb }}
+          sudo apt-get build-dep mariadb-${{ matrix.mariadb }};
 
-          git clone https://github.com/MariaDB/server.git --branch mariadb-${{ matrix.mariadb }} mariadb-${{ matrix.mariadb }}
-          pushd mariadb-${{ matrix.mariadb }}
-          ./debian/autobake-deb.sh
-          sudo systemctl start mariadb.service
-          popd
+          git clone https://github.com/MariaDB/server.git --branch mariadb-${{ matrix.mariadb }} mariadb-${{ matrix.mariadb }};
+          pushd mariadb-${{ matrix.mariadb }};
+          ./debian/autobake-deb.sh;
+          sudo systemctl start mariadb.service;
+          popd;
 
       - name: Run tests
         run: cargo test
