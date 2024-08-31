@@ -6,7 +6,7 @@ use records_lib::{models, redis_key::map_key, Database};
 
 use crate::utils::generate_token;
 
-pub async fn with_map_uid<F, Fut, R>(db: Database, f: F) -> anyhow::Result<R>
+pub async fn with_map<F, Fut, R>(db: Database, f: F) -> anyhow::Result<R>
 where
     F: FnOnce(models::Map) -> Fut,
     Fut: Future<Output = anyhow::Result<R>>,
