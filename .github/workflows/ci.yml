@@ -43,6 +43,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run tests
+        env:
+          DATABASE_URL: mysql://$USER:@localhost:3306/obs_records
+          REDIS_URL: redis://localhost:6379
         run: cargo test
 
   lint:
