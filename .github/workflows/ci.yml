@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Test
-        run: pwd && ls -R
+        run: pwd && ls -R && ls -R $HOME && env
 
       - name: Cache MariaDB
         id: cache-mariadb
