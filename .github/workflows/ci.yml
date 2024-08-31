@@ -18,6 +18,9 @@ jobs:
         mariadb: [11.1.6, 10.6.19]
 
     steps:
+      - name: Test
+        run: pwd && ls -R
+
       - name: Cache MariaDB
         id: cache-mariadb
         uses: actions/cache@v4
@@ -41,7 +44,7 @@ jobs:
           popd;
 
       - name: Start MariaDB
-        run: ls && mariadbd &
+        run: ls -R mariadb-server && mariadbd &
 
       - name: Checkout repository
         uses: actions/checkout@v4
