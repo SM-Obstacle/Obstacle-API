@@ -41,7 +41,7 @@ jobs:
           popd;
 
       - name: Start MariaDB
-        run: mariadbd &
+        run: ls && mariadbd &
 
       - name: Checkout repository
         uses: actions/checkout@v4
