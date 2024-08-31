@@ -30,7 +30,7 @@ use crate::{
 use super::{pb, player_finished as pf};
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 pub fn player_scope() -> Scope {
     web::scope("/player")
