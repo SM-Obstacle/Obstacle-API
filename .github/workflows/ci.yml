@@ -35,8 +35,8 @@ jobs:
 
           sudo apt-get build-dep mariadb-server;
 
-          git clone https://github.com/MariaDB/server.git --branch mariadb-${{ matrix.mariadb }}
-          pushd server
+          git clone https://github.com/MariaDB/server.git --branch mariadb-${{ matrix.mariadb }};
+          pushd server;
           ./debian/autobake-deb.sh;
           sudo systemctl start mariadb.service;
           popd;
