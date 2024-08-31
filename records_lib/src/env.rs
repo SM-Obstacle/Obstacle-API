@@ -48,6 +48,8 @@ mkenv::make_env! {
     ]:
 }
 
+const DEFAULT_MAPPACK_TTL: i64 = 604_800;
+
 mkenv::make_env! {
 /// The environment used by this crate.
 pub LibEnv:
@@ -57,6 +59,7 @@ pub LibEnv:
         kind: parse,
         var: "RECORDS_API_MAPPACK_TTL",
         desc: "The TTL (time-to-live) of the mappacks stored in Redis",
+        default: DEFAULT_MAPPACK_TTL,
     }
 }
 

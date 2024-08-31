@@ -2,12 +2,25 @@ use mkenv::{Env as _, EnvSplitIncluded as _};
 use once_cell::sync::OnceCell;
 use records_lib::{DbEnv, LibEnv};
 
+#[cfg(test)]
+const DEFAULT_SESSION_KEY: &str = "";
+
 mkenv::make_env! {pub ApiEnvUsedOnce:
+    #[cfg(not(test))]
     sess_key: {
         id: SessKey(String),
         kind: file,
         var: "RECORDS_API_SESSION_KEY_FILE",
         desc: "The path to the file containing the session key used by the API",
+    },
+
+    #[cfg(test)]
+    sess_key: {
+        id: SessKey(String),
+        kind: normal,
+        var: "RECORDS_API_SESSION_KEY",
+        desc: "The session key used by the API",
+        default: DEFAULT_SESSION_KEY,
     }
 }
 
