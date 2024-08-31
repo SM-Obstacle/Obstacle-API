@@ -15,33 +15,23 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        mariadb: [11.1.6, 10.6.19]
+        mariadb: [11.4, 10.6]
+        redis: [7.0.11, 7.2.5]
 
     steps:
-      - name: Cache MariaDB
-        id: cache-mariadb
-        uses: actions/cache@v4
+      - name: Setup MariaDB
+        uses: ankane/setup-mariadb@v1
         with:
-          path: |
-            ~/mariadb-server
-          key: ${{ runner.os }}-mariadb-${{ matrix.mariadb }}
+          mariadb-version: ${{ matrix.mariadb }}
+          database: obs_records
 
-      - name: Install MariaDB
-        if: steps.cache-mariadb.outputs.cache-hit != 'true'
-        run: sudo apt-get update;
-          sudo apt-get install software-properties-common devscripts equivs;
-          sudo apt-key adv --recv-keys --keyserver hkp://keyserver.ubuntu.com:80 0xF1656F24C74CD1D8;
-          sudo add-apt-repository --update --yes --enable-source 'deb [arch=amd64] http://nyc2.mirrors.digitalocean.com/mariadb/repo/${{ matrix.mariadb }}/ubuntu '$(lsb_release -sc)' main';
+      - name: Initialize MariaDB
+        run: mariadb -D obs_records < assets/last_dump.sql
 
-          sudo apt-get build-dep mariadb-server;
-
-          git clone https://github.com/MariaDB/server.git --branch mariadb-${{ matrix.mariadb }} ~/mariadb-server;
-          pushd ~/mariadb-server;
-          ./debian/autobake-deb.sh;
-          popd;
-
-      - name: Start MariaDB
-        run: ls -R ~/mariadb-server && mariadbd &
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1
+        with:
+          redis-version: ${{ matrix.redis }}
 
       - name: Checkout repository
         uses: actions/checkout@v4
