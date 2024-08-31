@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,22 +13,47 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        mariadb: [11.0.2, 10.6.19]
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-    - name: Configure cache
-      uses: Swatinem/rust-cache@v2
-    - name: Run tests
-      run: cargo test
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Configure cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install MariaDB
+        run: sudo apt-get update
+          sudo apt-get install software-properties-common devscripts equivs
+          sudo apt-key adv --recv-keys --keyserver hkp://keyserver.ubuntu.com:80 0xF1656F24C74CD1D8
+          sudo add-apt-repository --update --yes --enable-source 'deb [arch=amd64] http://nyc2.mirrors.digitalocean.com/mariadb/repo/${{ matrix.mariadb }}/ubuntu '$(lsb_release -sc)' main'
+
+          sudo apt-get build-dep mariadb-${{ matrix.mariadb }}
+
+          git clone https://github.com/MariaDB/server.git --branch mariadb-${{ matrix.mariadb }} mariadb-${{ matrix.mariadb }}
+          pushd mariadb-${{ matrix.mariadb }}
+          ./debian/autobake-deb.sh
+          sudo systemctl start mariadb.service
+          popd
+
+      - name: Run tests
+        run: cargo test
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-    - name: Run clippy
-      run: cargo clippy -- -D warnings
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
