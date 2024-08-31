@@ -35,11 +35,11 @@ jobs:
 
       - name: Initialize MariaDB
         run: |
-          mariadb -e "DROP USER '$USER'@'localhost'";
-          mariadb -e "CREATE USER 'api'@'localhost' IDENTIFIED BY '${{ secrets.MARIADB_PW }}'";
-          mariadb -e "GRANT ALL PRIVILEGES ON obs_records.* TO 'api'@'localhost'";
-          mariadb -e "FLUSH PRIVILEGES";
-          mariadb -D obs_records < assets/last_dump.sql;
+          sudo mariadb -e "DROP USER '$USER'@'localhost'";
+          sudo mariadb -e "CREATE USER 'api'@'localhost' IDENTIFIED BY '${{ secrets.MARIADB_PW }}'";
+          sudo mariadb -e "GRANT ALL PRIVILEGES ON obs_records.* TO 'api'@'localhost'";
+          sudo mariadb -e "FLUSH PRIVILEGES";
+          sudo mariadb -D obs_records < assets/last_dump.sql;
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
