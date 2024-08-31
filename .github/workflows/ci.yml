@@ -34,7 +34,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Initialize MariaDB
-        run: mariadb -D obs_records < assets/last_dump.sql
+        run: |
+          mariadb -e "DROP USER '$USER'@'localhost'";
+          mariadb -e "CREATE USER 'api'@'localhost' IDENTIFIED BY '${{ secrets.MARIADB_PW }}'";
+          mariadb -e "GRANT ALL PRIVILEGES ON obs_records.* TO 'api'@'localhost'";
+          mariadb -e "FLUSH PRIVILEGES";
+          mariadb -D obs_records < assets/last_dump.sql;
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
