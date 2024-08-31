@@ -33,7 +33,7 @@ where
         join_date: Some(chrono::Utc::now().naive_utc()),
         zone_path: None,
         admins_note: None,
-        role: 1,
+        role: 0,
     };
 
     let id = sqlx::query_scalar(
