@@ -148,6 +148,7 @@ pub async fn get_rank(
                 if let Some(rank) = get_rank_opt(&mut db.redis_conn, key, player_id).await? {
                     return Ok(rank);
                 }
+                tokio::task::yield_now().await;
             }
         }
     }
