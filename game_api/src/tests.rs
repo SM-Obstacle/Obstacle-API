@@ -1,3 +1,5 @@
+use std::sync::Once;
+
 use crate::init_env;
 use records_lib::{get_mysql_pool, get_redis_pool, Database};
 

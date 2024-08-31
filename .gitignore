@@ -10,3 +10,5 @@ Cargo.lock
 *.csv
 etc/*
 gen_doc.sh
+
+website*

@@ -1,4 +1,10 @@
-use actix_web::HttpResponse;
+use std::{
+    convert::Infallible,
+    future::{ready, Ready},
+    ops::{Deref, DerefMut},
+};
+
+use actix_web::{dev::Payload, FromRequest, HttpRequest, HttpResponse};
 use rand::Rng;
 use records_lib::{models, Database};
 use serde::Serialize;
@@ -49,4 +55,59 @@ pub async fn get_api_status(db: &Database) -> RecordsResult<ApiStatus> {
     .with_api_err()?;
 
     Ok(result)
+}
+
+/// A resource handler, like [`Data`][d].
+///
+/// The difference with [`Data`][d] is that it doesn't use an [`Arc`](std::sync::Arc)
+/// internally, but the [`Clone`] implementation of the inner type to implement [`FromRequest`].
+///
+/// [d]: actix_web::web::Data
+#[derive(Clone)]
+pub struct Res<T>(pub T);
+
+impl<T> From<T> for Res<T> {
+    fn from(value: T) -> Self {
+        Self(value)
+    }
+}
+
+impl<T> AsRef<T> for Res<T> {
+    fn as_ref(&self) -> &T {
+        self
+    }
+}
+
+impl<T> AsMut<T> for Res<T> {
+    fn as_mut(&mut self) -> &mut T {
+        &mut *self
+    }
+}
+
+impl<T> Deref for Res<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for Res<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T: Clone + 'static> FromRequest for Res<T> {
+    type Error = Infallible;
+
+    type Future = Ready<Result<Self, Infallible>>;
+
+    fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
+        let client = req
+            .app_data::<T>()
+            .unwrap_or_else(|| panic!("{} should be present", std::any::type_name::<T>()))
+            .clone();
+        ready(Ok(Self(client)))
+    }
 }

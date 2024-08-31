@@ -180,7 +180,13 @@ impl Player {
         while let Some(record) = records.next().await {
             let record = record?;
 
-            let rank = get_rank(&mut conn, record.map_id, record.record_player_id, Default::default()).await?;
+            let rank = get_rank(
+                &mut conn,
+                record.map_id,
+                record.record_player_id,
+                Default::default(),
+            )
+            .await?;
 
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }
