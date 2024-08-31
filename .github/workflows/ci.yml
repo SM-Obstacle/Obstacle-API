@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        mariadb: [11.1, 10.6.19]
+        mariadb: [11.0.2, 10.6.19]
 
     steps:
       - name: Checkout repository
@@ -35,8 +35,8 @@ jobs:
 
           sudo apt-get build-dep mariadb-server;
 
-          git clone https://github.com/MariaDB/server.git --branch mariadb-${{ matrix.mariadb }} mariadb-${{ matrix.mariadb }};
-          pushd mariadb-${{ matrix.mariadb }};
+          git clone https://github.com/MariaDB/server.git --branch mariadb-${{ matrix.mariadb }}
+          pushd server
           ./debian/autobake-deb.sh;
           sudo systemctl start mariadb.service;
           popd;
