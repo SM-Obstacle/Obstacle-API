@@ -23,7 +23,7 @@ use crate::{
     },
     discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
     utils::json,
-    AccessTokenErr, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult,
+    AccessTokenErr, FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult,
     RecordsResultExt, Res,
 };
 

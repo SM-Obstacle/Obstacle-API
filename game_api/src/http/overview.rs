@@ -152,7 +152,7 @@ pub async fn overview(
             .with_api_err()
             .fit(req_id)?,
     };
-    let player_id = records_lib::must::have_player(&mut conn.mysql_conn, &params.login)
+    let player_id = must::have_player(&mut conn.mysql_conn, &params.login)
         .await
         .fit(req_id)?
         .id;

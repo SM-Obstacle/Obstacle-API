@@ -105,22 +105,6 @@ impl RecordsErrorKind {
     }
 }
 
-/// Converts a `Result<T, E>` in which `E` is convertible to [`records_lib::error::RecordsError`]
-/// into a [`RecordsResult<T>`].
-pub trait RecordsResultExt<T> {
-    fn with_api_err(self) -> RecordsResult<T>;
-}
-
-impl<T, E> RecordsResultExt<T> for Result<T, E>
-where
-    records_lib::error::RecordsError: From<E>,
-{
-    fn with_api_err(self) -> RecordsResult<T> {
-        self.map_err(records_lib::error::RecordsError::from)
-            .map_err(Into::into)
-    }
-}
-
 impl<T> From<SendError<T>> for RecordsErrorKind {
     fn from(value: SendError<T>) -> Self {
         Self::Unknown(format!("send error: {value:?}"))
@@ -214,7 +198,8 @@ impl actix_web::ResponseError for RecordsError {
             // --- From the library
 
             R::Lib(e) => match e {
-                // Internal server errors
+                // --- Internal server errors
+
                 LR::MySql(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
                 LR::Redis(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
                 LR::ExternalRequest(_) => {
@@ -222,7 +207,8 @@ impl actix_web::ResponseError for RecordsError {
                 }
                 LR::PoolError(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
 
-                // Logical errors
+                // --- Logical errors
+
                 LR::PlayerNotFound(_) => HttpResponse::BadRequest().json(self.to_err_res()),
                 LR::MapNotFound(_) => HttpResponse::BadRequest().json(self.to_err_res()),
                 LR::EventNotFound(_) => HttpResponse::BadRequest().json(self.to_err_res()),
@@ -250,5 +236,21 @@ where
             request_id,
             kind: e.into(),
         })
+    }
+}
+
+/// Converts a `Result<T, E>` in which `E` is convertible to [`records_lib::error::RecordsError`]
+/// into a [`RecordsResult<T>`].
+pub trait RecordsResultExt<T> {
+    fn with_api_err(self) -> RecordsResult<T>;
+}
+
+impl<T, E> RecordsResultExt<T> for Result<T, E>
+where
+    records_lib::error::RecordsError: From<E>,
+{
+    fn with_api_err(self) -> RecordsResult<T> {
+        self.map_err(records_lib::error::RecordsError::from)
+            .map_err(Into::into)
     }
 }

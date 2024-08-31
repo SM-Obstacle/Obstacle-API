@@ -12,7 +12,7 @@ use tracing_actix_web::RequestId;
 
 use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 use crate::utils::{get_api_status, json, ApiStatus};
-use crate::{FitRequestId, ModeVersion, RecordsResponse, RecordsResultExt, Res};
+use crate::{FitRequestId as _, ModeVersion, RecordsResponse, RecordsResultExt, Res};
 use actix_web::Responder;
 
 use self::admin::admin_scope;
@@ -181,7 +181,7 @@ async fn overview(
     db: Res<Database>,
     Query(query): overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
+    let mut conn = db.acquire().await.fit(req_id)?;
     overview::overview(
         req_id,
         &db.mysql_pool,
