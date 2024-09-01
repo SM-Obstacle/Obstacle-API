@@ -23,7 +23,7 @@ enum LbSource {
 
 #[derive(clap::Args)]
 #[clap(name = "full")]
-struct FullCmd {
+pub struct FullCmd {
     /// The source of the leaderboard.
     #[arg(value_enum, long, short, default_value_t)]
     source: LbSource,
