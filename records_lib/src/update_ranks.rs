@@ -22,7 +22,7 @@ async fn count_records_map(
 
     let q = &format!(
         "SELECT COUNT(*)
-        FROM (SELECT * FROM records r {join_event}
+        FROM (SELECT r.* FROM records r {join_event}
         WHERE map_id = ? {and_event}
         GROUP BY record_player_id) r",
     );
