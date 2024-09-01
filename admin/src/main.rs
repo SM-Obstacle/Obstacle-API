@@ -2,15 +2,18 @@ use clap::Parser;
 use mkenv::Env as _;
 use records_lib::{get_mysql_pool, get_redis_pool, Database, DbEnv, LibEnv};
 
-use self::{clear::ClearCommand, populate::PopulateCommand};
+use self::{clear::ClearCommand, leaderboard::LbCommand, populate::PopulateCommand};
 
 mod clear;
+mod leaderboard;
 mod populate;
 
 #[derive(clap::Parser)]
 enum Command {
     #[clap(subcommand)]
     Event(EventCommand),
+    #[clap(subcommand)]
+    Leaderboard(LbCommand),
 }
 
 #[derive(clap::Subcommand)]
@@ -42,10 +45,9 @@ async fn main() -> anyhow::Result<()> {
 
     match cmd {
         Command::Event(event) => match event {
-            EventCommand::Populate(cmd) => populate::populate(client, db, cmd).await?,
-            EventCommand::Clear(cmd) => clear::clear(db, cmd).await?,
+            EventCommand::Populate(cmd) => populate::populate(client, db, cmd).await,
+            EventCommand::Clear(cmd) => clear::clear(db, cmd).await,
         },
+        Command::Leaderboard(cmd) => leaderboard::leaderboard(db, cmd).await,
     }
-
-    Ok(())
 }

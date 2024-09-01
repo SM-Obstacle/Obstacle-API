@@ -6,6 +6,14 @@ use sqlx::MySqlConnection;
 
 use crate::{error::RecordsResult, models::Map};
 
+pub async fn get_map_from_id(db: &mut MySqlConnection, map_id: u32) -> RecordsResult<Map> {
+    let r = sqlx::query_as("select * from maps where id = ?")
+        .bind(map_id)
+        .fetch_one(db)
+        .await?;
+    Ok(r)
+}
+
 /// Returns the optional map from its UID.
 pub async fn get_map_from_uid(
     db: &mut MySqlConnection,

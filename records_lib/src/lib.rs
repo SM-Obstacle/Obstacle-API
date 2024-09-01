@@ -15,15 +15,15 @@ mod modeversion;
 mod mptypes;
 
 pub mod error;
+pub mod event;
+pub mod map;
 pub mod mappack;
 pub mod models;
 pub mod must;
-pub mod redis_key;
-pub mod update_ranks;
-
-pub mod event;
-pub mod map;
 pub mod player;
+pub mod redis_key;
+pub mod time;
+pub mod update_ranks;
 
 /// The MySQL/MariaDB pool type.
 pub type MySqlPool = Pool<MySql>;
