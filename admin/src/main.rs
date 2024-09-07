@@ -7,7 +7,7 @@ use self::{clear::ClearCommand, leaderboard::LbCommand, populate::PopulateComman
 mod clear;
 mod leaderboard;
 mod populate;
-mod clear_redis_mappack;
+mod clear_redis_mappacks;
 
 #[derive(clap::Parser)]
 enum Command {
@@ -51,6 +51,6 @@ async fn main() -> anyhow::Result<()> {
             EventCommand::Clear(cmd) => clear::clear(db, cmd).await,
         },
         Command::Leaderboard(cmd) => leaderboard::leaderboard(db, cmd).await,
-        Command::ClearRedisMappacks => clear_redis_mappack::clear(db).await,
+        Command::ClearRedisMappacks => clear_redis_mappacks::clear(db).await,
     }
 }
