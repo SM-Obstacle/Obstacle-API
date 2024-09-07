@@ -15,7 +15,7 @@ enum Command {
     Event(EventCommand),
     #[clap(subcommand)]
     Leaderboard(LbCommand),
-    ClearRedisMappack,
+    ClearRedisMappacks,
 }
 
 #[derive(clap::Subcommand)]
@@ -51,6 +51,6 @@ async fn main() -> anyhow::Result<()> {
             EventCommand::Clear(cmd) => clear::clear(db, cmd).await,
         },
         Command::Leaderboard(cmd) => leaderboard::leaderboard(db, cmd).await,
-        Command::ClearRedisMappack => clear_redis_mappack::clear(db).await,
+        Command::ClearRedisMappacks => clear_redis_mappack::clear(db).await,
     }
 }
