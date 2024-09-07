@@ -66,9 +66,10 @@ pub LibEnv:
 static ENV: OnceCell<LibEnv> = OnceCell::new();
 
 /// Initializes the provided library environment as global.
+///
+/// If this function has already been called, the provided environment will be ignored.
 pub fn init_env(env: LibEnv) {
-    ENV.set(env)
-        .unwrap_or_else(|_| panic!("lib env already set"));
+    let _ = ENV.set(env);
 }
 
 /// Returns a static reference to the global library environment.

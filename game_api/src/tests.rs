@@ -4,10 +4,9 @@ use records_lib::{get_mysql_pool, get_redis_pool, Database};
 
 pub async fn init_db() -> anyhow::Result<Database> {
     match dotenvy::dotenv() {
-        Ok(_) => (),
-        Err(err) if err.not_found() => (),
-        Err(other) => return Err(other).context("retrieving .env files"),
-    }
+        Err(err) if !err.not_found() => return Err(err).context("retrieving .env files"),
+        _ => (),
+    };
 
     let env = init_env()?;
 

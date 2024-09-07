@@ -16,6 +16,7 @@ mod mptypes;
 
 pub mod error;
 pub mod event;
+pub mod leaderboard;
 pub mod map;
 pub mod mappack;
 pub mod models;

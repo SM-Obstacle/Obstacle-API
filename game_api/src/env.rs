@@ -136,8 +136,7 @@ pub fn init_env() -> anyhow::Result<InitEnvOut> {
     let env = ApiEnv::try_get()?;
     let (included, rest) = env.split();
     records_lib::init_env(included.lib_env);
-    ENV.set(rest)
-        .unwrap_or_else(|_| panic!("api env already set"));
+    let _ = ENV.set(rest);
 
     Ok(InitEnvOut {
         db_env: included.db_env,

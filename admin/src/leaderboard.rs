@@ -119,6 +119,7 @@ async fn mariadb_lb(
         ]);
     }
 
+    println!("Source: MariaDB");
     println!("{table}");
 
     Ok(())
@@ -159,6 +160,7 @@ async fn redis_lb(
         ]);
     }
 
+    println!("Source: Redis");
     println!("{table}");
 
     Ok(())
