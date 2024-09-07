@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = { workspace = true }
-async-graphql = { workspace = true }
+async-graphql = { workspace = true, features = ["chrono"] }
 chrono = { workspace = true }
 deadpool-redis = { workspace = true }
 once_cell = { workspace = true }
