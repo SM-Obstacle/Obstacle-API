@@ -63,7 +63,7 @@ pub async fn remove_map(db: Database, map_id: u32, debug_msg: bool) -> anyhow::R
         .execute(&db.mysql_pool)
         .await?;
 
-    db.redis_pool
+    let _: () = db.redis_pool
         .get()
         .await?
         .del(map_key(map_id, Default::default()))
