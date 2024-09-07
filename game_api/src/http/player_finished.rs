@@ -66,7 +66,7 @@ async fn send_query(
     body: InsertRecordParams,
     event_record_id: Option<u32>,
     at: chrono::NaiveDateTime,
-) -> records_lib::error::RecordsResult<u32> {
+) -> sqlx::Result<u32> {
     let record_id: u32 = sqlx::query_scalar(
         "INSERT INTO records (record_player_id, map_id, time, respawn_count, record_date, flags, event_record_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING record_id",
@@ -117,19 +117,29 @@ pub(super) async fn insert_record(
         let _count = update_leaderboard(db, map_id, event).await?;
     }
 
-    let record_id = db
-        .mysql_conn
-        .transaction(|txn| {
-            Box::pin(send_query(
-                txn,
-                map_id,
-                player_id,
-                body,
-                event_record_id,
-                at,
-            ))
-        })
-        .await?;
+    let record_id = loop {
+        match db
+            .mysql_conn
+            .transaction(|txn| {
+                Box::pin(send_query(
+                    txn,
+                    map_id,
+                    player_id,
+                    body.clone(),
+                    event_record_id,
+                    at,
+                ))
+            })
+            .await
+        {
+            Ok(id) => break id,
+            Err(e) => match e.as_database_error() {
+                // Retry if the transaction failed with a deadlock error
+                Some(e) if e.code().filter(|c| c == "40001").is_some() => (),
+                _ => return Err(RecordsErrorKind::Lib(e.into())),
+            },
+        }
+    };
 
     Ok(record_id)
 }
