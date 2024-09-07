@@ -34,12 +34,13 @@ async fn update_event_mappacks(conn: &mut DatabaseConnection) -> anyhow::Result<
 
             let mappack = AnyMappackId::Event(&event.event, &edition);
 
-            conn.redis_conn.del(mappack_key(mappack)).await?;
+            let _: () = conn.redis_conn.del(mappack_key(mappack)).await?;
 
             for map in event::event_edition_maps(&mut conn.mysql_conn, edition.event_id, edition.id)
                 .await?
             {
-                conn.redis_conn
+                let _: () = conn
+                    .redis_conn
                     .sadd(mappack_key(mappack), map.game_id)
                     .await?;
             }

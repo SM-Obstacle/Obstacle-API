@@ -15,7 +15,7 @@ pub async fn clear_content(
     event: &models::Event,
     edition: &models::EventEdition,
 ) -> anyhow::Result<()> {
-    db.redis_conn
+    let _: () = db.redis_conn
         .del(mappack_key(AnyMappackId::Event(event, edition)))
         .await?;
 

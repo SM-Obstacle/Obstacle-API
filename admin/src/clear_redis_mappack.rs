@@ -9,7 +9,7 @@ pub async fn clear(db: Database) -> anyhow::Result<()> {
     let n = keys.len();
 
     for key in keys {
-        redis_conn.del(key).await?;
+        let _: () = redis_conn.del(key).await?;
     }
 
     tracing::info!("Removed {n} key{}", if n > 0 { "s" } else { "" });

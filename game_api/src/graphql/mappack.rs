@@ -58,7 +58,8 @@ async fn fill_mappack(
     for mx_map in maps {
         // We check that the map exists in our database
         let _ = must::have_map(&mut conn.mysql_conn, &mx_map.TrackUID).await?;
-        conn.redis_conn
+        let _: () = conn
+            .redis_conn
             .sadd(mappack_key(mappack), mx_map.TrackUID)
             .await
             .with_api_err()?;
@@ -68,17 +69,20 @@ async fn fill_mappack(
     // These keys would probably be null for some mappacks, because they would belong
     // to an event edition, so these info would be retrieved from our information system.
 
-    conn.redis_conn
+    let _: () = conn
+        .redis_conn
         .set(mappack_mx_username_key(mappack), info.Username)
         .await
         .with_api_err()?;
 
-    conn.redis_conn
+    let _: () = conn
+        .redis_conn
         .set(mappack_mx_name_key(mappack), info.Name)
         .await
         .with_api_err()?;
 
-    conn.redis_conn
+    let _: () = conn
+        .redis_conn
         .set(mappack_mx_created_key(mappack), info.Created)
         .await
         .with_api_err()?;

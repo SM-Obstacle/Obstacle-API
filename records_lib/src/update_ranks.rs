@@ -93,7 +93,7 @@ async fn force_update(
         pipe.zadd(key, record.0, record.1);
     }
 
-    pipe.query_async(&mut db.redis_conn).await?;
+    let _: () = pipe.query_async(&mut db.redis_conn).await?;
     Ok(())
 }
 
@@ -141,7 +141,7 @@ pub async fn get_rank(
     match get_rank_opt(&mut db.redis_conn, key, player_id).await? {
         Some(rank) => Ok(rank),
         None => {
-            db.redis_conn.del(key).await?;
+            let _: () = db.redis_conn.del(key).await?;
             force_update(map_id, event, db, key).await?;
 
             loop {

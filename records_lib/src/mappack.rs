@@ -167,7 +167,7 @@ pub async fn update_mappack(
     if mappack.has_ttl() {
         // The mappack has a TTL, so its member will be removed from the set when
         // attempting to retrieve its maps.
-        db.redis_conn
+        let _: () = db.redis_conn
             .sadd(mappacks_key(), mappack.mappack_id())
             .await?;
     }
@@ -188,13 +188,13 @@ async fn save(
     let set_options = match mappack.get_ttl() {
         Some(ex) => {
             // Update expiration time of the mappack's maps set by the way
-            redis_conn.expire(mappack_key(mappack), ex).await?;
+            let _: () = redis_conn.expire(mappack_key(mappack), ex).await?;
 
             set_options.with_expiration(SetExpiry::EX(ex as _))
         }
         None => {
             // Persist the mappack's maps set by the way
-            redis_conn.persist(mappack_key(mappack)).await?;
+            let _: () = redis_conn.persist(mappack_key(mappack)).await?;
 
             set_options
         }
@@ -202,14 +202,14 @@ async fn save(
 
     // --- Save the number of maps of the campaign
 
-    redis_conn
+    let _: () = redis_conn
         .set_options(mappack_nb_map_key(mappack), scores.maps.len(), set_options)
         .await?;
 
     for map in &scores.maps {
         // --- Save the last rank on each map
 
-        redis_conn
+        let _: () = redis_conn
             .set_options(
                 mappack_map_last_rank(mappack, &map.map_id),
                 map.last_rank,
@@ -218,16 +218,16 @@ async fn save(
             .await?;
 
         if !mappack.has_ttl() {
-            redis_conn
+            let _: () = redis_conn
                 .persist(mappack_map_last_rank(mappack, &map.map_id))
                 .await?;
         }
     }
 
-    redis_conn.del(mappack_lb_key(mappack)).await?;
+    let _: () = redis_conn.del(mappack_lb_key(mappack)).await?;
 
     for score in scores.scores {
-        redis_conn
+        let _: () = redis_conn
             .zadd(mappack_lb_key(mappack), score.player_id, score.rank)
             .await?;
 
@@ -235,7 +235,7 @@ async fn save(
 
         let rank_avg = ((score.score + f64::EPSILON) * 100.).round() / 100.;
 
-        redis_conn
+        let _: () = redis_conn
             .set_options(
                 mappack_player_rank_avg_key(mappack, score.player_id),
                 rank_avg,
@@ -245,7 +245,7 @@ async fn save(
 
         // --- Save the amount of finished map
 
-        redis_conn
+        let _: () = redis_conn
             .set_options(
                 mappack_player_map_finished_key(mappack, score.player_id),
                 score.maps_finished,
@@ -255,7 +255,7 @@ async fn save(
 
         // --- Save their worst rank
 
-        redis_conn
+        let _: () = redis_conn
             .set_options(
                 mappack_player_worst_rank_key(mappack, score.player_id),
                 score.worst.rank,
@@ -263,7 +263,7 @@ async fn save(
             )
             .await?;
 
-        redis_conn
+        let _: () = redis_conn
             .del(mappack_player_ranks_key(mappack, score.player_id))
             .await?;
 
@@ -274,7 +274,7 @@ async fn save(
         {
             // --- Save their rank on each map
 
-            redis_conn
+            let _: () = redis_conn
                 .zadd(
                     mappack_player_ranks_key(mappack, score.player_id),
                     game_id,
@@ -284,20 +284,20 @@ async fn save(
         }
 
         if let Some(ttl) = mappack.get_ttl() {
-            redis_conn
+            let _: () = redis_conn
                 .expire(mappack_player_ranks_key(mappack, score.player_id), ttl)
                 .await?;
         } else {
-            redis_conn
+            let _: () = redis_conn
                 .persist(mappack_player_ranks_key(mappack, score.player_id))
                 .await?;
-            redis_conn
+            let _: () = redis_conn
                 .persist(mappack_player_rank_avg_key(mappack, score.player_id))
                 .await?;
-            redis_conn
+            let _: () = redis_conn
                 .persist(mappack_player_map_finished_key(mappack, score.player_id))
                 .await?;
-            redis_conn
+            let _: () = redis_conn
                 .persist(mappack_player_worst_rank_key(mappack, score.player_id))
                 .await?;
         }
@@ -305,19 +305,19 @@ async fn save(
 
     // Set the time of the update
     if let Ok(time) = SystemTime::UNIX_EPOCH.elapsed() {
-        redis_conn
+        let _: () = redis_conn
             .set(mappack_time_key(mappack), time.as_secs())
             .await?;
     }
 
     // Update the expiration time of the global keys
     if let Some(ttl) = mappack.get_ttl() {
-        redis_conn.expire(mappack_time_key(mappack), ttl).await?;
-        redis_conn.expire(mappack_lb_key(mappack), ttl).await?;
+        let _: () = redis_conn.expire(mappack_time_key(mappack), ttl).await?;
+        let _: () = redis_conn.expire(mappack_lb_key(mappack), ttl).await?;
     } else {
-        redis_conn.persist(mappack_time_key(mappack)).await?;
-        redis_conn.persist(mappack_lb_key(mappack)).await?;
-        redis_conn.persist(mappack_nb_map_key(mappack)).await?;
+        let _: () = redis_conn.persist(mappack_time_key(mappack)).await?;
+        let _: () = redis_conn.persist(mappack_lb_key(mappack)).await?;
+        let _: () = redis_conn.persist(mappack_nb_map_key(mappack)).await?;
     }
 
     Ok(())

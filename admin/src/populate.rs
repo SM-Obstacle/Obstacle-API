@@ -403,7 +403,8 @@ pub async fn populate(
         .execute(&mut *conn.mysql_conn)
         .await?;
 
-        conn.redis_conn
+        let _: () = conn
+            .redis_conn
             .sadd(mappack_key(mappack), map.game_id)
             .await?;
     }

@@ -261,11 +261,11 @@ pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String,
     let mp_token_hash = digest(&*mp_token);
     let web_token_hash = digest(&*web_token);
 
-    connection
+    let _: () = connection
         .set_ex(mp_key, mp_token_hash, ex)
         .await
         .with_api_err()?;
-    connection
+    let _: () = connection
         .set_ex(web_key, web_token_hash, ex)
         .await
         .with_api_err()?;
