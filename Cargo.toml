@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["game_api", "records_lib", "socc", "admin", "clear_redis_mappacks"]
+members = ["game_api", "records_lib", "socc", "admin"]
 
 [workspace.dependencies]
 thiserror = "1.0.40"
