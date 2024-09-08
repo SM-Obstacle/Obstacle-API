@@ -84,7 +84,7 @@ impl Event {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
 
-        let q = event::event_editions_list(&mut *mysql_conn, &self.inner.handle).await?;
+        let q = event::event_editions_list(&mut mysql_conn, &self.inner.handle).await?;
 
         mysql_conn.close().await?;
 
@@ -123,7 +123,7 @@ impl Event {
     ) -> async_graphql::Result<Option<EventEdition>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
-        let edition = event::get_edition_by_id(&mut *mysql_conn, self.inner.id, edition_id).await?;
+        let edition = event::get_edition_by_id(&mut mysql_conn, self.inner.id, edition_id).await?;
         mysql_conn.close().await?;
 
         Ok(edition.map(|inner| EventEdition {
@@ -458,7 +458,7 @@ impl EventEditionPlayer<'_> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
         let categories = event::get_categories_by_edition_id(
-            &mut *mysql_conn,
+            &mut mysql_conn,
             self.edition.inner.event_id,
             self.edition.inner.id,
         )

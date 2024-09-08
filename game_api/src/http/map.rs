@@ -134,11 +134,11 @@ pub async fn player_rating(
     Json(body): Json<PlayerRatingBody>,
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
-    let player_id = records_lib::must::have_player(&mut *mysql_conn, &login)
+    let player_id = records_lib::must::have_player(&mut mysql_conn, &login)
         .await
         .fit(req_id)?
         .id;
-    let map_id = records_lib::must::have_map(&mut *mysql_conn, &body.map_uid)
+    let map_id = records_lib::must::have_map(&mut mysql_conn, &body.map_uid)
         .await
         .fit(req_id)?
         .id;
@@ -224,10 +224,10 @@ pub async fn ratings(
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let player = records_lib::must::have_player(&mut *mysql_conn, &login)
+    let player = records_lib::must::have_player(&mut mysql_conn, &login)
         .await
         .fit(req_id)?;
-    let map = records_lib::must::have_map(&mut *mysql_conn, &body.map_id)
+    let map = records_lib::must::have_map(&mut mysql_conn, &body.map_id)
         .await
         .fit(req_id)?;
 
@@ -387,7 +387,7 @@ pub async fn rate(
         id: player_id,
         login: player_login,
         ..
-    } = records_lib::must::have_player(&mut *mysql_conn, &login)
+    } = records_lib::must::have_player(&mut mysql_conn, &login)
         .await
         .fit(req_id)?;
 
@@ -396,7 +396,7 @@ pub async fn rate(
         name: map_name,
         player_id: author_id,
         ..
-    } = records_lib::must::have_map(&mut *mysql_conn, &body.map_id)
+    } = records_lib::must::have_map(&mut mysql_conn, &body.map_id)
         .await
         .fit(req_id)?;
 

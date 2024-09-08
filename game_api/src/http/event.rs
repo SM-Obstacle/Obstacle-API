@@ -14,7 +14,8 @@ use sqlx::{FromRow, MySqlConnection};
 use tracing_actix_web::RequestId;
 
 use crate::{
-    auth::MPAuthGuard, utils::json, FinishLocker, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res
+    auth::MPAuthGuard, utils::json, FinishLocker, FitRequestId, RecordsErrorKind, RecordsResponse,
+    RecordsResult, RecordsResultExt, Res,
 };
 
 use super::{overview, pb, player::PlayerInfoNetBody, player_finished as pf};
@@ -153,7 +154,7 @@ struct EventHandleEditionResponse {
 async fn event_list(req_id: RequestId, db: Res<Database>) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let out = event::event_list(&mut *mysql_conn)
+    let out = event::event_list(&mut mysql_conn)
         .await
         .with_api_err()
         .fit(req_id)?;
@@ -172,7 +173,7 @@ async fn event_editions(
 
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let id = records_lib::must::have_event_handle(&mut *mysql_conn, &event_handle)
+    let id = records_lib::must::have_event_handle(&mut mysql_conn, &event_handle)
         .await
         .fit(req_id)?
         .id;
@@ -229,7 +230,7 @@ async fn edition(
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
     let (models::Event { id: event_id, .. }, edition) =
-        records_lib::must::have_event_edition(&mut *mysql_conn, &event_handle, edition_id)
+        records_lib::must::have_event_edition(&mut mysql_conn, &event_handle, edition_id)
             .await
             .fit(req_id)?;
 
@@ -249,7 +250,7 @@ async fn edition(
 
     mysql_conn.close().await.with_api_err().fit(req_id)?;
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
-    let mut cat = event::get_categories_by_edition_id(&mut *mysql_conn, event_id, edition.id)
+    let mut cat = event::get_categories_by_edition_id(&mut mysql_conn, event_id, edition.id)
         .await
         .fit(req_id)?;
 

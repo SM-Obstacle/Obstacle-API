@@ -203,7 +203,7 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<MySqlPool>();
 
         let mut conn = db.acquire().await?;
-        let event = must::have_event_handle(&mut *conn, &handle).await?;
+        let event = must::have_event_handle(&mut conn, &handle).await?;
         conn.close().await?;
 
         Ok(event.into())
