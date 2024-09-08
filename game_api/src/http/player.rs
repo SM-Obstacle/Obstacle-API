@@ -1,9 +1,12 @@
+use std::iter;
+
 use actix_session::Session;
 use actix_web::{
     web::{self, Data, Json, Query},
     HttpResponse, Responder, Scope,
 };
 use futures::TryStreamExt;
+use itertools::Itertools as _;
 use records_lib::{
     event::{self, OptEvent},
     models::Banishment,
@@ -23,8 +26,8 @@ use crate::{
     },
     discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
     utils::json,
-    AccessTokenErr, FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult,
-    RecordsResultExt, Res,
+    AccessTokenErr, FinishLocker, FitRequestId as _, RecordsErrorKind, RecordsResponse,
+    RecordsResult, RecordsResultExt, Res,
 };
 
 use super::{pb, player_finished as pf};
@@ -199,6 +202,7 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
 }
 
 pub async fn finished_at(
+    locker: FinishLocker,
     req_id: RequestId,
     login: String,
     db: Res<Database>,
@@ -206,7 +210,9 @@ pub async fn finished_at(
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
     let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
+
     let res = pf::finished(
+        &locker,
         login,
         &mut conn,
         body.into_params(None),
@@ -214,20 +220,32 @@ pub async fn finished_at(
         at,
     )
     .await
-    .fit(req_id)?
-    .res;
-    json(res)
+    .fit(req_id)?;
+
+    locker.release(res.map_id).await;
+    conn.close().await.with_api_err().fit(req_id)?;
+
+    json(res.res)
 }
 
 #[inline(always)]
 async fn finished(
     _: ApiAvailable,
     req_id: RequestId,
+    locker: FinishLocker,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
-    finished_at(req_id, login, db, body.0, chrono::Utc::now().naive_utc()).await
+    finished_at(
+        locker,
+        req_id,
+        login,
+        db,
+        body.0,
+        chrono::Utc::now().naive_utc(),
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -344,7 +362,7 @@ async fn pb(
 
     drop(editions);
 
-    match edition {
+    let out = match edition {
         Some((event_id, edition_id, _)) if single_edition => {
             let (event, edition) =
                 must::have_event_edition_from_ids(&mut mysql_conn, event_id, edition_id)
@@ -354,7 +372,11 @@ async fn pb(
             pb::pb(login, req_id, db, body, OptEvent::new(&event, &edition)).await
         }
         _ => pb::pb(login, req_id, db, body, Default::default()).await,
-    }
+    };
+
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
+
+    out
 }
 
 #[derive(Deserialize)]
@@ -386,11 +408,7 @@ async fn times(
         INNER JOIN records r ON r.map_id = m.id
         WHERE r.record_player_id = ? AND m.game_id IN ({})
         GROUP BY m.id",
-        body.maps_uids
-            .iter()
-            .map(|_| "?".to_owned())
-            .collect::<Vec<_>>()
-            .join(",")
+        iter::repeat("?").take(body.maps_uids.len()).join(",")
     );
 
     let mut query = sqlx::query_as::<_, TimesResponseItem>(&query).bind(player.id);
@@ -404,6 +422,9 @@ async fn times(
         .await
         .with_api_err()
         .fit(req_id)?;
+
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
+
     json(result)
 }
 

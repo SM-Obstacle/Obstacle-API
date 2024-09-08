@@ -126,6 +126,8 @@ impl Map {
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }
 
+        conn.close().await?;
+
         Ok(ranked_records)
     }
 }
@@ -185,7 +187,7 @@ impl Map {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
         let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
 
-        let mysql_conn = &mut mysql_pool.acquire().await?;
+        let mut mysql_conn = mysql_pool.acquire().await?;
 
         let mut raw_editions = sqlx::query_as::<_, RawRelatedEdition>(
             "select ee.*, eem.map_id from event_edition ee
@@ -193,7 +195,7 @@ impl Map {
             where ? in (eem.map_id, eem.original_map_id)
             order by ee.start_date desc")
         .bind(self.inner.id)
-        .fetch(&mut **mysql_conn);
+        .fetch(&mut *mysql_conn);
 
         let mut out = Vec::with_capacity(raw_editions.size_hint().0);
 
@@ -212,6 +214,9 @@ impl Map {
                 edition: EventEdition::from_inner(edition.edition, mysql_pool).await?,
             });
         }
+
+        drop(raw_editions);
+        mysql_conn.close().await?;
 
         Ok(out)
     }

@@ -14,8 +14,7 @@ use sqlx::{FromRow, MySqlConnection};
 use tracing_actix_web::RequestId;
 
 use crate::{
-    auth::MPAuthGuard, utils::json, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult,
-    RecordsResultExt, Res,
+    auth::MPAuthGuard, utils::json, FinishLocker, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res
 };
 
 use super::{overview, pb, player::PlayerInfoNetBody, player_finished as pf};
@@ -152,12 +151,14 @@ struct EventHandleEditionResponse {
 }
 
 async fn event_list(req_id: RequestId, db: Res<Database>) -> RecordsResponse<impl Responder> {
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let out = event::event_list(mysql_conn)
+    let out = event::event_list(&mut *mysql_conn)
         .await
         .with_api_err()
         .fit(req_id)?;
+
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     json(out)
 }
@@ -169,9 +170,9 @@ async fn event_editions(
 ) -> RecordsResponse<impl Responder> {
     let event_handle = event_handle.into_inner();
 
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let id = records_lib::must::have_event_handle(mysql_conn, &event_handle)
+    let id = records_lib::must::have_event_handle(&mut *mysql_conn, &event_handle)
         .await
         .fit(req_id)?
         .id;
@@ -184,10 +185,12 @@ async fn event_editions(
         ) order by ee.id desc",
     )
     .bind(id)
-    .fetch_all(&mut **mysql_conn)
+    .fetch_all(&mut *mysql_conn)
     .await
     .with_api_err()
     .fit(req_id)?;
+
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     json(
         res.into_iter()
@@ -223,10 +226,10 @@ async fn edition(
 ) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
 
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
     let (models::Event { id: event_id, .. }, edition) =
-        records_lib::must::have_event_edition(mysql_conn, &event_handle, edition_id)
+        records_lib::must::have_event_edition(&mut *mysql_conn, &event_handle, edition_id)
             .await
             .fit(req_id)?;
 
@@ -244,8 +247,9 @@ async fn edition(
         .chunk_by(|m| m.category_id);
     let maps = maps.into_iter();
 
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
-    let mut cat = event::get_categories_by_edition_id(mysql_conn, event_id, edition.id)
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
+    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let mut cat = event::get_categories_by_edition_id(&mut *mysql_conn, event_id, edition.id)
         .await
         .fit(req_id)?;
 
@@ -383,7 +387,7 @@ async fn edition(
     .with_api_err()
     .fit(req_id)?;
 
-    json(EventHandleEditionResponse {
+    let res = EventHandleEditionResponse {
         expired: edition.has_expired(),
         end_date: edition
             .expire_date()
@@ -392,7 +396,7 @@ async fn edition(
         id: edition.id,
         name: edition.name,
         subtitle: edition.subtitle.unwrap_or_default(),
-        authors: event::get_admins_of(mysql_conn, edition.event_id, edition.id)
+        authors: event::get_admins_of(&mut mysql_conn, edition.event_id, edition.id)
             .map_ok(|p| p.name)
             .try_collect()
             .await
@@ -404,7 +408,11 @@ async fn edition(
         mx_id: edition.mx_id.map(|id| id as _).into(),
         original_map_uids,
         categories,
-    })
+    };
+
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
+
+    json(res)
 }
 
 async fn edition_overview(
@@ -429,25 +437,31 @@ async fn edition_overview(
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    overview::overview(
+    let out = overview::overview(
         req_id,
         &db.mysql_pool,
         &mut conn,
         query.0.into_params(Some(&map)),
         OptEvent::new(&event, &edition),
     )
-    .await
+    .await;
+
+    conn.close().await.with_api_err().fit(req_id)?;
+
+    out
 }
 
 #[inline(always)]
 async fn edition_finished(
     MPAuthGuard { login }: MPAuthGuard,
+    locker: FinishLocker,
     req_id: RequestId,
     db: Res<Database>,
     path: Path<(String, u32)>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
     edition_finished_at(
+        locker,
         login,
         req_id,
         db,
@@ -459,6 +473,7 @@ async fn edition_finished(
 }
 
 pub async fn edition_finished_at(
+    locker: FinishLocker,
     login: String,
     req_id: RequestId,
     db: Res<Database>,
@@ -500,7 +515,7 @@ pub async fn edition_finished_at(
     let rest = params.rest.clone();
 
     // Then we insert the record for the global records
-    let res = pf::finished(login.clone(), &mut conn, params, opt_event, at)
+    let res = pf::finished(&locker, login.clone(), &mut conn, params, opt_event, at)
         .await
         .fit(req_id)?;
 
@@ -525,6 +540,9 @@ pub async fn edition_finished_at(
     insert_event_record(&mut conn.mysql_conn, res.record_id, event.id, edition.id)
         .await
         .fit(req_id)?;
+
+    locker.release(res.map_id).await;
+    conn.close().await.with_api_err().fit(req_id)?;
 
     json(res.res)
 }

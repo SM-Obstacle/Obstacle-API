@@ -1,13 +1,12 @@
 use std::time::Duration;
 
-use deadpool_redis::{redis::AsyncCommands, Connection};
+use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
     event,
     mappack::{self, AnyMappackId},
     redis_key::{mappack_key, mappacks_key},
     DatabaseConnection,
 };
-use sqlx::{pool::PoolConnection, MySql};
 
 const PROCESS_DURATION_SECS: u64 = 3600 * 24; // Every day
 pub const PROCESS_DURATION: Duration = Duration::from_secs(PROCESS_DURATION_SECS);
@@ -52,15 +51,7 @@ async fn update_event_mappacks(conn: &mut DatabaseConnection) -> anyhow::Result<
     Ok(())
 }
 
-pub async fn update(
-    mysql_conn: PoolConnection<MySql>,
-    redis_conn: Connection,
-) -> anyhow::Result<()> {
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-
+pub async fn update(mut conn: DatabaseConnection) -> anyhow::Result<()> {
     update_event_mappacks(&mut conn).await?;
 
     let mappacks: Vec<String> = conn.redis_conn.smembers(mappacks_key()).await?;

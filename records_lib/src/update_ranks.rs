@@ -4,7 +4,9 @@
 //! See the [`update_leaderboard`] and [`get_rank`] functions for more information.
 
 use deadpool_redis::redis::{self, AsyncCommands};
-use sqlx::MySqlConnection;
+use futures::{Stream, TryStreamExt};
+use itertools::{EitherOrBoth, Itertools};
+use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
 
 use crate::{
     error::RecordsResult,
@@ -60,15 +62,10 @@ pub async fn update_leaderboard(
     Ok(mysql_count)
 }
 
-async fn force_update(
-    map_id: u32,
-    event: OptEvent<'_, '_>,
-    db: &mut DatabaseConnection,
-    key: &MapKey<'_>,
-) -> Result<(), crate::error::RecordsError> {
+fn get_mariadb_lb_query(event: OptEvent<'_, '_>) -> String {
     let (join_event, and_event) = event.get_join();
 
-    let query = format!(
+    format!(
         "SELECT record_player_id, min(time) AS time
             FROM records r
             {join_event}
@@ -76,22 +73,45 @@ async fn force_update(
                     {and_event}
                 GROUP BY record_player_id
                 ORDER BY time, record_date ASC",
-    );
+    )
+}
 
-    let mut query = sqlx::query_as(&query).bind(map_id);
+fn get_mariadb_lb<'a>(
+    db: &'a mut PoolConnection<MySql>,
+    event: OptEvent<'_, '_>,
+    map_id: u32,
+    query: &'a str,
+) -> impl Stream<Item = sqlx::Result<(u32, i32)>> + 'a {
+    let mut query = sqlx::query_as(query).bind(map_id);
     if let Some((event, edition)) = event.0 {
         query = query.bind(event.id).bind(edition.id);
     }
 
-    let all_map_records: Vec<(u32, i32)> = query.fetch_all(&mut *db.mysql_conn).await?;
+    query.fetch(&mut **db)
+}
+
+async fn force_update(
+    map_id: u32,
+    event: OptEvent<'_, '_>,
+    db: &mut DatabaseConnection,
+    key: &MapKey<'_>,
+) -> Result<(), crate::error::RecordsError> {
     let mut pipe = redis::pipe();
     let pipe = pipe.atomic();
 
     pipe.del(key);
 
-    for record in all_map_records {
-        pipe.zadd(key, record.0, record.1);
-    }
+    get_mariadb_lb(
+        &mut db.mysql_conn,
+        event,
+        map_id,
+        &get_mariadb_lb_query(event),
+    )
+    .map_ok(|(player_id, time): (u32, i32)| {
+        pipe.zadd(key, player_id, time);
+    })
+    .try_collect::<()>()
+    .await?;
 
     let _: () = pipe.query_async(&mut db.redis_conn).await?;
     Ok(())
@@ -144,11 +164,104 @@ pub async fn get_rank(
             let _: () = db.redis_conn.del(key).await?;
             force_update(map_id, event, db, key).await?;
 
-            loop {
-                if let Some(rank) = get_rank_opt(&mut db.redis_conn, key, player_id).await? {
-                    return Ok(rank);
+            match get_rank_opt(&mut db.redis_conn, key, player_id).await? {
+                Some(rank) => Ok(rank),
+                None => {
+                    let redis_lb: Vec<i64> = db.redis_conn.zrange_withscores(key, 0, -1).await?;
+                    let mariadb_lb = get_mariadb_lb(
+                        &mut db.mysql_conn,
+                        event,
+                        map_id,
+                        &get_mariadb_lb_query(event),
+                    )
+                    .try_collect::<Vec<_>>()
+                    .await?;
+
+                    let lb = redis_lb
+                        .chunks_exact(2)
+                        .map(|chunk| (chunk[0] as u32, chunk[1] as i32))
+                        .zip_longest(mariadb_lb)
+                        .collect::<Vec<_>>();
+
+                    fn num_digits<N>(n: N) -> usize
+                    where
+                        f64: From<N>,
+                    {
+                        (f64::from(n).log10() + 1.) as _
+                    }
+
+                    let width = lb
+                        .iter()
+                        .map(|e| match e {
+                            EitherOrBoth::Both((rpid, rtime), (mpid, mtime)) => {
+                                num_digits(*rpid)
+                                    + num_digits(*rtime)
+                                    + num_digits(*mpid)
+                                    + num_digits(*mtime)
+                            }
+                            EitherOrBoth::Left((rpid, rtime)) => {
+                                num_digits(*rpid) + num_digits(*rtime)
+                            }
+                            EitherOrBoth::Right((mpid, mtime)) => {
+                                num_digits(*mpid) + num_digits(*mtime)
+                            }
+                        })
+                        .max()
+                        .unwrap_or_default()
+                        .max(
+                            "player".len() * 2 + "time".len() * 2 + 1
+                        );
+
+                    let w4 = width / 4;
+
+                    let mut msg = format!(
+                        "{:w2$} || {:w2$}\n{empty:-<w$}\n{player:w4$} | {time:w4$} || {player:w4$} | {time:w4$}\n",
+                        "redis",
+                        "mariadb",
+                        player = "player",
+                        time = "time",
+                        w2 = width / 2 + 3,
+                        w = width + 10,
+                        empty = "",
+                    );
+
+                    use std::fmt::Write as _;
+
+                    for row in lb {
+                        match row {
+                            EitherOrBoth::Both((rpid, rtime), (mpid, mtime)) => {
+                                writeln!(
+                                    msg,
+                                    "{c}{rpid:w4$} | {rtime:w4$} || {mpid:w4$} | {mtime:w4$}{c_end}",
+                                    c = if rpid != mpid || rtime != mtime { "\x1b[93m" } else { "" },
+                                    c_end = if rpid != mpid || rtime != mtime { "\x1b[0m" } else { "" },
+                                )
+                                .unwrap();
+                            }
+                            EitherOrBoth::Left((rpid, rtime)) => {
+                                writeln!(
+                                    msg,
+                                    "\x1b[93m{rpid:w4$} | {rtime:w4$} || {empty:w4$} | {empty:w4$}\x1b[0m",
+                                    empty = ""
+                                )
+                                .unwrap();
+                            }
+                            EitherOrBoth::Right((mpid, mtime)) => {
+                                writeln!(
+                                    msg,
+                                    "\x1b[93m{empty:w4$} | {empty:w4$} || {mpid:w4$} | {mtime:w4$}\x1b[0m",
+                                    empty = ""
+                                )
+                                .unwrap();
+                            }
+                        }
+                    }
+
+                    let redis_lb2: Vec<i64> = db.redis_conn.zrange(key, 0, -1).await?;
+                    let redis_lb2 = redis_lb2.len();
+
+                    panic!("missing player rank ({player_id} on {map_id})\n2nd zrange count: {redis_lb2:?}\n{msg}");
                 }
-                tokio::task::yield_now().await;
             }
         }
     }

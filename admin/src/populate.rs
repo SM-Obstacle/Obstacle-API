@@ -87,14 +87,14 @@ async fn insert_mx_maps(
 ) -> anyhow::Result<Vec<(i64, models::Map)>> {
     let mut out = Vec::with_capacity(mx_maps.len());
 
-    let mysql_conn = &mut db.acquire().await?;
+    let mut mysql_conn = db.acquire().await?;
 
     let mut inserted_count = 0;
 
     for mx_map in mx_maps {
-        let author = must::have_player(mysql_conn, &mx_map.author_login).await?;
+        let author = must::have_player(&mut mysql_conn, &mx_map.author_login).await?;
         // Skip if we already know this map
-        if let Some(map) = map::get_map_from_uid(mysql_conn, &mx_map.map_uid).await? {
+        if let Some(map) = map::get_map_from_uid(&mut mysql_conn, &mx_map.map_uid).await? {
             out.push((mx_map.mx_id, map));
             continue;
         }
@@ -103,13 +103,13 @@ async fn insert_mx_maps(
             .bind(&mx_map.map_uid)
             .bind(author.id)
             .bind(&mx_map.name)
-            .execute(&mut **mysql_conn)
+            .execute(&mut *mysql_conn)
             .await?
             .last_insert_id();
 
         let map = sqlx::query_as("select * from maps where id = ?")
             .bind(id)
-            .fetch_one(&mut **mysql_conn)
+            .fetch_one(&mut *mysql_conn)
             .await?;
 
         out.push((mx_map.mx_id, map));
@@ -117,6 +117,8 @@ async fn insert_mx_maps(
     }
 
     tracing::info!("Inserted {inserted_count} new map(s) from MX");
+
+    mysql_conn.close().await?;
 
     Ok(out)
 }
@@ -414,6 +416,8 @@ pub async fn populate(
     mappack::update_mappack(mappack, &mut conn).await?;
 
     tracing::info!("Done");
+
+    conn.close().await?;
 
     Ok(())
 }

@@ -204,8 +204,11 @@ pub fn leaderboard<'a>(
         .fetch(&db.mysql_pool)
         .map_err(From::from)
         .and_then(move |row| async move {
+            let mut conn = db.acquire().await?;
+            let rank = get_rank(&mut conn, map_id, row.player_id, event).await?;
+            conn.close().await?;
             Ok(Row {
-                rank: get_rank(&mut db.acquire().await?, map_id, row.player_id, event).await?,
+                rank,
                 player: row.player,
                 time: row.time,
             })

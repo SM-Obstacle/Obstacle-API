@@ -187,13 +187,11 @@ impl MappackPlayer<'_> {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<MappackMap>> {
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
+        let db = ctx.data_unchecked::<Database>();
+        let mut conn = db.acquire().await?;
 
-        let redis_conn = &mut redis_pool.get().await?;
-        let mysql_conn = &mut mysql_pool.acquire().await?;
-
-        let maps_uids: Vec<String> = redis_conn
+        let maps_uids: Vec<String> = conn
+            .redis_conn
             .zrange_withscores(
                 mappack_player_ranks_key(
                     AnyMappackId::Id(&self.mappack.mappack_id),
@@ -212,13 +210,14 @@ impl MappackPlayer<'_> {
                 unreachable!("plz stabilize Iterator::array_chunks")
             };
             let rank = rank.parse()?;
-            let last_rank = redis_conn
+            let last_rank = conn
+                .redis_conn
                 .get(mappack_map_last_rank(
                     AnyMappackId::Id(&self.mappack.mappack_id),
                     game_id,
                 ))
                 .await?;
-            let map = must::have_map(mysql_conn, game_id).await?;
+            let map = must::have_map(&mut conn.mysql_conn, game_id).await?;
 
             out.push(MappackMap {
                 map: map.into(),
@@ -226,6 +225,8 @@ impl MappackPlayer<'_> {
                 last_rank,
             });
         }
+
+        conn.close().await?;
 
         Ok(out)
     }
@@ -309,25 +310,25 @@ impl Mappack {
         &'a self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<MappackPlayer<'a>>> {
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
+        let db = ctx.data_unchecked::<Database>();
+        let mut conn = db.acquire().await?;
 
-        let redis_conn = &mut redis_pool.get().await?;
-        let mysql_conn = &mut mysql_pool.acquire().await?;
-
-        let leaderboard: Vec<u32> = redis_conn
+        let leaderboard: Vec<u32> = conn
+            .redis_conn
             .zrange(mappack_lb_key(AnyMappackId::Id(&self.mappack_id)), 0, -1)
             .await?;
 
         let mut out = Vec::with_capacity(leaderboard.len());
 
         for id in leaderboard {
-            let player = player::get_player_from_id(&mut **mysql_conn, id).await?;
+            let player = player::get_player_from_id(&mut *conn.mysql_conn, id).await?;
             out.push(MappackPlayer {
                 inner: player.into(),
                 mappack: self,
             });
         }
+
+        conn.close().await?;
 
         Ok(out)
     }
@@ -340,6 +341,7 @@ impl Mappack {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = mysql_pool.acquire().await?;
         let player = must::have_player(&mut mysql_conn, &login).await?;
+        mysql_conn.close().await?;
 
         Ok(MappackPlayer {
             inner: player.into(),
@@ -399,6 +401,8 @@ pub async fn get_mappack(
             .await
             .with_api_err()?;
     }
+
+    conn.close().await?;
 
     Ok(From::from(mappack_id))
 }

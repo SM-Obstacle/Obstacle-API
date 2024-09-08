@@ -17,6 +17,7 @@ use tracing_test::traced_test;
 use crate::{
     http::{
         map::tests::with_map,
+        overview,
         player_finished::{HasFinishedBody, InsertRecordParams},
     },
     init_app,
@@ -222,49 +223,68 @@ async fn many_finishes_diff_players() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn generate_records<F, Fut>(
+    pool: &MySqlPool,
+    map: &models::Map,
+    amount: usize,
+    mut call_service: F,
+) -> anyhow::Result<Vec<(usize, models::Player, HasFinishedBody)>>
+where
+    F: FnMut(test::TestRequest) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let records = stream::repeat_with(|| async {
+        let player = new_player(pool, false).await?;
+        anyhow::Ok((player, get_finish_body(map)))
+    })
+    .take(amount)
+    .buffer_unordered(amount)
+    .collect::<Vec<_>>()
+    .await
+    .into_iter()
+    .sorted_unstable_by_key(|item| match item {
+        Ok((_, r)) => r.rest.time,
+        _ => -1,
+    })
+    .compet_rank_by_key(|i| match i {
+        Ok((_, r)) => r.rest.time,
+        _ => -1,
+    })
+    .map(|(i, r)| match r {
+        Ok((p, r)) => Ok((i, p, r)),
+        Err(e) => Err(e),
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+
+    stream::iter(records.iter())
+        .then(|(_, player, record)| {
+            let req = test::TestRequest::post()
+                .insert_header(("PlayerLogin", player.login.clone()))
+                .uri("/finished")
+                .set_json(record);
+
+            (call_service)(req)
+        })
+        .collect::<()>()
+        .await;
+    Ok(records)
+}
+
+#[traced_test]
 #[tokio::test]
 async fn sorted_finishes_diff_players() -> anyhow::Result<()> {
+    const FINISH_AMOUNT: usize = 50;
+
     let (app, db) = init_app!(
         .route("/finished", web::post().to(super::finished))
     );
 
     let (records, lb) = with_map(db.clone(), |map, _| async move {
         // Generate the records
-        let records = stream::repeat_with(|| async {
-            let player = new_player(&db.mysql_pool, false).await?;
-            anyhow::Ok((player, get_finish_body(&map)))
+        let records = generate_records(&db.mysql_pool, &map, FINISH_AMOUNT, |req| {
+            test::call_service(&app, req.to_request()).map(|_| ())
         })
-        .take(20)
-        .buffer_unordered(20)
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .sorted_unstable_by_key(|item| match item {
-            Ok((_, r)) => r.rest.time,
-            _ => -1,
-        })
-        .compet_rank_by_key(|i| match i {
-            Ok((_, r)) => r.rest.time,
-            _ => -1,
-        })
-        .map(|(i, r)| match r {
-            Ok((p, r)) => Ok((i, p, r)),
-            Err(e) => Err(e),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-        stream::iter(records.iter())
-            .then(|(_, player, record)| {
-                let req = test::TestRequest::post()
-                    .insert_header(("PlayerLogin", player.login.clone()))
-                    .uri("/finished")
-                    .set_json(record)
-                    .to_request();
-
-                test::call_service(&app, req).map(|_| ())
-            })
-            .collect::<()>()
-            .await;
+        .await?;
 
         let lb = leaderboard(
             &db,
@@ -289,6 +309,64 @@ async fn sorted_finishes_diff_players() -> anyhow::Result<()> {
         assert_eq!(row.player, player.login);
         assert_eq!(row.time, body.rest.time);
     }
+
+    Ok(())
+}
+
+#[traced_test]
+#[tokio::test]
+async fn overview_after_finishes() -> anyhow::Result<()> {
+    const FINISH_AMOUNT: usize = 100;
+
+    let (app, db) = init_app!(
+        .route("/finished", web::post().to(super::finished))
+        .route("/overview", web::get().to(crate::http::overview))
+    );
+
+    let (records, r1) = with_map(db.clone(), |map, _| async move {
+        // Generate the records
+        let records = generate_records(&db.mysql_pool, &map, FINISH_AMOUNT, |req| {
+            test::call_service(&app, req.to_request()).map(|_| ())
+        })
+        .await?;
+
+        let r1_login = records
+            .first()
+            .map(|(_, p, _)| p.login.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing r1"))?;
+
+        let req = test::TestRequest::get()
+            .uri(&format!(
+                "/overview?playerId={r1_login}&mapId={}",
+                map.game_id
+            ))
+            .to_request();
+
+        let body = test::call_service(&app, req).await;
+
+        // Remove the generated players
+        for (_, p, _) in &records {
+            remove_player(&db.mysql_pool, p.id, false).await?;
+        }
+
+        Ok((records, body))
+    })
+    .await?;
+
+    match r1.status() {
+        StatusCode::OK => (),
+        other => {
+            let txt = test::read_body(r1).await;
+            panic!("overview request failed: {other} {txt:?}");
+        }
+    }
+    let r1: overview::ResponseBody = test::read_body_json(r1).await;
+
+    let (_, r1_p, r1_b) = records.first().expect("missing first record");
+    let r1_r = r1.response.first().expect("missing first overview record");
+    assert_eq!(r1_r.rank, 1);
+    assert_eq!(r1_r.login, r1_p.login);
+    assert_eq!(r1_r.time, r1_b.rest.time);
 
     Ok(())
 }

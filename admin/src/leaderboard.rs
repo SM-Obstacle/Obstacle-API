@@ -182,6 +182,10 @@ pub async fn leaderboard(db: Database, cmd: LbCommand) -> anyhow::Result<()> {
     let mut conn = db.acquire().await?;
 
     match cmd {
-        LbCommand::Full(full_cmd) => full(&mut conn, full_cmd).await,
+        LbCommand::Full(full_cmd) => full(&mut conn, full_cmd).await?,
     }
+
+    conn.close().await?;
+
+    Ok(())
 }

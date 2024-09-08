@@ -201,7 +201,11 @@ impl QueryRoot {
         handle: String,
     ) -> async_graphql::Result<Event> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        let event = must::have_event_handle(&mut *db.acquire().await?, &handle).await?;
+
+        let mut conn = db.acquire().await?;
+        let event = must::have_event_handle(&mut *conn, &handle).await?;
+        conn.close().await?;
+
         Ok(event.into())
     }
 
@@ -378,7 +382,7 @@ impl QueryRoot {
             return Err(async_graphql::Error::new("Record not found."));
         };
 
-        Ok(models::RankedRecord {
+        let out = models::RankedRecord {
             rank: get_rank(
                 &mut conn,
                 record.map_id,
@@ -388,7 +392,11 @@ impl QueryRoot {
             .await?,
             record,
         }
-        .into())
+        .into();
+
+        conn.close().await?;
+
+        Ok(out)
     }
 
     async fn map(
@@ -398,10 +406,15 @@ impl QueryRoot {
     ) -> async_graphql::Result<Map> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut conn = db.acquire().await?;
-        records_lib::map::get_map_from_uid(&mut conn, &game_id)
+
+        let out = records_lib::map::get_map_from_uid(&mut conn, &game_id)
             .await?
             .ok_or_else(|| async_graphql::Error::new("Map not found."))
-            .map(Into::into)
+            .map(Into::into);
+
+        conn.close().await?;
+
+        out
     }
 
     async fn player(
@@ -449,6 +462,8 @@ impl QueryRoot {
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }
 
+        conn.close().await?;
+
         Ok(ranked_records)
     }
 }
@@ -470,15 +485,18 @@ impl MutationRoot {
         auth::website_check_auth_for(db, &web_token.login, &web_token.token, privilege::ADMIN)
             .await?;
 
-        let mysql_conn = &mut db.mysql_pool.acquire().await?;
+        let mut mysql_conn = db.mysql_pool.acquire().await?;
 
         sqlx::query("INSERT INTO resources_content (content, created_at) VALUES (?, SYSDATE())")
             .bind(text)
-            .execute(&mut **mysql_conn)
+            .execute(&mut *mysql_conn)
             .await?;
         let res = sqlx::query_as("SELECT * FROM resources_content")
-            .fetch_one(&mut **mysql_conn)
+            .fetch_one(&mut *mysql_conn)
             .await?;
+
+        mysql_conn.close().await?;
+
         Ok(res)
     }
 

@@ -11,7 +11,7 @@ use records_lib::{
 use serde::{Deserialize, Serialize};
 use sqlx::Connection;
 
-use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
+use crate::{FinishLocker, RecordsErrorKind, RecordsResult, RecordsResultExt};
 
 use super::{event, map::MapParam};
 
@@ -112,10 +112,12 @@ pub(super) async fn insert_record(
     at: chrono::NaiveDateTime,
 ) -> RecordsResult<u32> {
     let key = map_key(map_id, event);
-    let added: Option<i64> = db.redis_conn.zadd(key, player_id, body.time).await.ok();
-    if added.is_none() {
-        let _count = update_leaderboard(db, map_id, event).await?;
-    }
+    update_leaderboard(db, map_id, event).await?;
+    let _: () = db
+        .redis_conn
+        .zadd(key, player_id, body.time)
+        .await
+        .with_api_err()?;
 
     let record_id = loop {
         match db
@@ -147,10 +149,12 @@ pub(super) async fn insert_record(
 pub struct FinishedOutput {
     pub record_id: u32,
     pub player_id: u32,
+    pub map_id: u32,
     pub res: HasFinishedResponse,
 }
 
 pub async fn finished(
+    locker: &FinishLocker,
     login: String,
     db: &mut DatabaseConnection,
     params: FinishedParams<'_>,
@@ -169,6 +173,9 @@ pub async fn finished(
         MapParam::AlreadyQueried(map) => map,
         MapParam::Uid(uid) => &records_lib::must::have_map(&mut db.mysql_conn, &uid).await?,
     };
+
+    locker.wait_finishes_for(*map_id).await;
+    locker.pend(*map_id).await;
 
     let (join_event, and_event) = event.get_join();
 
@@ -250,6 +257,7 @@ pub async fn finished(
     Ok(FinishedOutput {
         record_id,
         player_id,
+        map_id: *map_id,
         res: HasFinishedResponse {
             has_improved,
             login,

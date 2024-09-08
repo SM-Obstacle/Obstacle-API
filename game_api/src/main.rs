@@ -17,7 +17,8 @@ use actix_web::{
 };
 use anyhow::Context;
 use game_api_lib::{
-    api_route, graphql_route, AuthState, FitRequestId, RecordsErrorKind, RecordsResponse,
+    api_route, graphql_route, AuthState, FinishLocker, FitRequestId, RecordsErrorKind,
+    RecordsResponse,
 };
 use records_lib::{get_mysql_pool, get_redis_pool, Database};
 use reqwest::Client;
@@ -86,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(auth_state.clone())
             .app_data(client.clone())
             .app_data(db.clone())
+            .app_data(FinishLocker::default())
             .service(graphql_route(db.clone(), client.clone()))
             .service(api_route())
             .default_service(web::to(not_found))

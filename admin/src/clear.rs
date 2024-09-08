@@ -15,7 +15,8 @@ pub async fn clear_content(
     event: &models::Event,
     edition: &models::EventEdition,
 ) -> anyhow::Result<()> {
-    let _: () = db.redis_conn
+    let _: () = db
+        .redis_conn
         .del(mappack_key(AnyMappackId::Event(event, edition)))
         .await?;
 
@@ -41,6 +42,8 @@ pub async fn clear(
         must::have_event_edition(&mut conn.mysql_conn, &event_handle, event_edition).await?;
 
     clear_content(&mut conn, &event, &edition).await?;
+
+    conn.close().await?;
 
     Ok(())
 }

@@ -279,16 +279,16 @@ async fn inner_check_auth_for(
     required: privilege::Flags,
     key: impl ToRedisArgs + std::marker::Sync + std::marker::Sync,
 ) -> RecordsResult<u32> {
-    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err()?;
-    let mut connection = db.redis_pool.get().await.with_api_err()?;
-    let stored_token: Option<String> = connection.get(&key).await.with_api_err()?;
+    let mut conn = db.acquire().await?;
+
+    let stored_token: Option<String> = conn.redis_conn.get(&key).await.with_api_err()?;
     if !matches!(stored_token, Some(t) if t == digest(token)) {
         return Err(RecordsErrorKind::Unauthorized);
     }
 
-    let player = records_lib::must::have_player(&mut mysql_conn, login).await?;
+    let player = records_lib::must::have_player(&mut conn.mysql_conn, login).await?;
 
-    if let Some(ban) = player::check_banned(&mut mysql_conn, player.id).await? {
+    if let Some(ban) = player::check_banned(&mut conn.mysql_conn, player.id).await? {
         return Err(RecordsErrorKind::BannedPlayer(ban));
     };
 
@@ -306,6 +306,8 @@ async fn inner_check_auth_for(
     if role & required != required {
         return Err(RecordsErrorKind::Forbidden);
     }
+
+    conn.close().await?;
 
     Ok(player.id)
 }

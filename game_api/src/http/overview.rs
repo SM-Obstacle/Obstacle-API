@@ -49,8 +49,7 @@ pub struct RecordQueryRow {
     pub player_id: u32,
     pub nickname: String,
     pub time: i32,
-    #[sqlx(flatten)]
-    pub map: models::Map,
+    pub map_id: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, sqlx::FromRow)]
@@ -94,16 +93,14 @@ async fn get_range(
             p.login AS login,
             p.name AS nickname,
             min(time) as time,
-            m.*
+            map_id
         FROM records r
         {join_event}
         INNER JOIN players p ON r.record_player_id = p.id
-        INNER JOIN maps m ON m.id = r.map_id
         WHERE map_id = ? AND record_player_id IN ({params})
             {and_event}
         GROUP BY record_player_id
         ORDER BY time, record_date ASC",
-        params = params,
     );
 
     let mut query = sqlx::query_as(&query).bind(map_id);
@@ -124,11 +121,11 @@ async fn get_range(
             player_id,
             nickname,
             time,
-            map,
+            map_id,
         } = record.with_api_err()?;
 
         out.push(RankedRecord {
-            rank: get_rank(conn, map.id, player_id, event).await? as _,
+            rank: get_rank(conn, map_id, player_id, event).await? as _,
             login,
             nickname,
             time,
@@ -136,6 +133,12 @@ async fn get_range(
     }
 
     Ok(out)
+}
+
+#[derive(Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
+pub struct ResponseBody {
+    pub response: Vec<RankedRecord>,
 }
 
 pub async fn overview(
@@ -232,11 +235,6 @@ pub async fn overview(
         }
     }
 
-    #[derive(Serialize)]
-    struct Response {
-        response: Vec<RankedRecord>,
-    }
-
     let response = ranked_records;
-    json(Response { response })
+    json(ResponseBody { response })
 }

@@ -182,12 +182,17 @@ async fn overview(
     Query(query): overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
     let mut conn = db.acquire().await.fit(req_id)?;
-    overview::overview(
+
+    let out = overview::overview(
         req_id,
         &db.mysql_pool,
         &mut conn,
         query.into_params(None),
         Default::default(),
     )
-    .await
+    .await;
+
+    conn.close().await.with_api_err().fit(req_id)?;
+
+    out
 }

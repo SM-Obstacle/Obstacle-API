@@ -97,6 +97,8 @@ async fn insert(
     .with_api_err()
     .fit(req_id)?;
 
+    conn.close().await.with_api_err().fit(req_id)?;
+
     Ok(HttpResponse::Ok().finish())
 }
 
@@ -131,12 +133,12 @@ pub async fn player_rating(
     db: Res<Database>,
     Json(body): Json<PlayerRatingBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
-    let player_id = records_lib::must::have_player(mysql_conn, &login)
+    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let player_id = records_lib::must::have_player(&mut *mysql_conn, &login)
         .await
         .fit(req_id)?
         .id;
-    let map_id = records_lib::must::have_map(mysql_conn, &body.map_uid)
+    let map_id = records_lib::must::have_map(&mut *mysql_conn, &body.map_uid)
         .await
         .fit(req_id)?
         .id;
@@ -146,7 +148,7 @@ pub async fn player_rating(
     )
     .bind(player_id)
     .bind(map_id)
-    .fetch_optional(&mut **mysql_conn)
+    .fetch_optional(&mut *mysql_conn)
     .await
     .with_api_err()
     .fit(req_id)?
@@ -160,7 +162,7 @@ pub async fn player_rating(
             )
             .bind(player_id)
             .bind(map_id)
-            .fetch_all(&mut **mysql_conn)
+            .fetch_all(&mut *mysql_conn)
             .await
             .with_api_err()
             .fit(req_id)?;
@@ -180,10 +182,12 @@ pub async fn player_rating(
         WHERE m.id = ?",
     )
     .bind(map_id)
-    .fetch_one(&mut **mysql_conn)
+    .fetch_one(&mut *mysql_conn)
     .await
     .with_api_err()
     .fit(req_id)?;
+
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     json(PlayerRatingResponse {
         player_login: login,
@@ -218,12 +222,12 @@ pub async fn ratings(
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<RatingsBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let player = records_lib::must::have_player(mysql_conn, &login)
+    let player = records_lib::must::have_player(&mut *mysql_conn, &login)
         .await
         .fit(req_id)?;
-    let map = records_lib::must::have_map(mysql_conn, &body.map_id)
+    let map = records_lib::must::have_map(&mut *mysql_conn, &body.map_id)
         .await
         .fit(req_id)?;
 
@@ -232,12 +236,14 @@ pub async fn ratings(
     } else {
         let login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
             .bind(map.player_id)
-            .fetch_one(&mut **mysql_conn)
+            .fetch_one(&mut *mysql_conn)
             .await
             .with_api_err()
             .fit(req_id)?;
         (privilege::ADMIN, login)
     };
+
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     auth::check_auth_for(&db, &login, &token, role)
         .await
@@ -375,13 +381,13 @@ pub async fn rate(
     db: Res<Database>,
     Json(body): Json<RateBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mysql_conn = &mut db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
     let Player {
         id: player_id,
         login: player_login,
         ..
-    } = records_lib::must::have_player(mysql_conn, &login)
+    } = records_lib::must::have_player(&mut *mysql_conn, &login)
         .await
         .fit(req_id)?;
 
@@ -390,19 +396,19 @@ pub async fn rate(
         name: map_name,
         player_id: author_id,
         ..
-    } = records_lib::must::have_map(mysql_conn, &body.map_id)
+    } = records_lib::must::have_map(&mut *mysql_conn, &body.map_id)
         .await
         .fit(req_id)?;
 
     let author_login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
         .bind(author_id)
-        .fetch_one(&db.mysql_pool)
+        .fetch_one(&mut *mysql_conn)
         .await
         .with_api_err()
         .fit(req_id)?;
 
     let rate_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rating_kind")
-        .fetch_one(&db.mysql_pool)
+        .fetch_one(&mut *mysql_conn)
         .await
         .with_api_err()
         .fit(req_id)?;
@@ -418,13 +424,15 @@ pub async fn rate(
             sqlx::query_scalar("SELECT rating_date FROM rating WHERE player_id = ? AND map_id = ?")
                 .bind(player_id)
                 .bind(map_id)
-                .fetch_optional(&db.mysql_pool)
+                .fetch_optional(&mut *mysql_conn)
                 .await
                 .with_api_err()
                 .fit(req_id)?
         else {
             return Err(RecordsErrorKind::NoRatingFound(login, body.map_id)).fit(req_id);
         };
+
+        mysql_conn.close().await.with_api_err().fit(req_id)?;
 
         return json(RateResponse {
             player_login,
@@ -440,7 +448,7 @@ pub async fn rate(
             sqlx::query_scalar("SELECT COUNT(*) FROM rating WHERE map_id = ? AND player_id = ?")
                 .bind(map_id)
                 .bind(player_id)
-                .fetch_one(&db.mysql_pool)
+                .fetch_one(&mut *mysql_conn)
                 .await
                 .with_api_err()
                 .fit(req_id)?;
@@ -451,7 +459,7 @@ pub async fn rate(
             )
             .bind(map_id)
             .bind(player_id)
-            .execute(&db.mysql_pool)
+            .execute(&mut *mysql_conn)
             .await
             .with_api_err()
             .fit(req_id)?;
@@ -459,7 +467,7 @@ pub async fn rate(
             sqlx::query_scalar("SELECT rating_date FROM rating WHERE map_id = ? AND player_id = ?")
                 .bind(map_id)
                 .bind(player_id)
-                .fetch_one(&db.mysql_pool)
+                .fetch_one(&mut *mysql_conn)
                 .await
                 .with_api_err()
                 .fit(req_id)?
@@ -470,7 +478,7 @@ pub async fn rate(
             )
             .bind(player_id)
             .bind(map_id)
-            .fetch_one(&db.mysql_pool)
+            .fetch_one(&mut *mysql_conn)
             .await
             .with_api_err()
             .fit(req_id)?
@@ -487,7 +495,7 @@ pub async fn rate(
         .bind(map_id)
         .bind(player_id)
         .bind(rate.kind)
-        .fetch_one(&db.mysql_pool)
+        .fetch_one(&mut *mysql_conn)
         .await
         .with_api_err()
         .fit(req_id)?;
@@ -501,7 +509,7 @@ pub async fn rate(
             .bind(map_id)
             .bind(player_id)
             .bind(rate.kind)
-            .execute(&db.mysql_pool)
+            .execute(&mut *mysql_conn)
             .await
             .with_api_err()
             .fit(req_id)?;
@@ -514,7 +522,7 @@ pub async fn rate(
             .bind(map_id)
             .bind(rate.kind)
             .bind(rate.rating)
-            .execute(&db.mysql_pool)
+            .execute(&mut *mysql_conn)
             .await
             .with_api_err()
             .fit(req_id)?;
@@ -529,13 +537,15 @@ pub async fn rate(
         .bind(map_id)
         .bind(player_id)
         .bind(rate.kind)
-        .fetch_one(&db.mysql_pool)
+        .fetch_one(&mut *mysql_conn)
         .await
         .with_api_err()
         .fit(req_id)?;
 
         ratings.push(rating);
     }
+
+    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     json(RateResponse {
         player_login,

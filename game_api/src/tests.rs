@@ -28,6 +28,7 @@ macro_rules! init_app {
                 actix_web::App::new()
                     .wrap(tracing_actix_web::TracingLogger::default())
                     .app_data(db.clone())
+                    .app_data($crate::FinishLocker::default())
                     $(.$func($($t)*))*
             )
             .await,

@@ -82,8 +82,12 @@ impl Event {
 
     async fn editions(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<EventEdition>> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        let mysql_conn = &mut db.acquire().await?;
-        let q = event::event_editions_list(mysql_conn, &self.inner.handle).await?;
+        let mut mysql_conn = db.acquire().await?;
+
+        let q = event::event_editions_list(&mut *mysql_conn, &self.inner.handle).await?;
+
+        mysql_conn.close().await?;
+
         Ok(q.into_iter()
             .map(|inner| EventEdition {
                 event: Cow::Borrowed(self),
@@ -118,8 +122,10 @@ impl Event {
         edition_id: u32,
     ) -> async_graphql::Result<Option<EventEdition>> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        let mysql_conn = &mut db.acquire().await?;
-        let edition = event::get_edition_by_id(mysql_conn, self.inner.id, edition_id).await?;
+        let mut mysql_conn = db.acquire().await?;
+        let edition = event::get_edition_by_id(&mut *mysql_conn, self.inner.id, edition_id).await?;
+        mysql_conn.close().await?;
+
         Ok(edition.map(|inner| EventEdition {
             event: Cow::Borrowed(self),
             inner,
@@ -304,6 +310,7 @@ impl EventEditionPlayerRank<'_> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
         let map = must::have_map(&mut mysql_conn, &self.map_game_id).await?;
+        mysql_conn.close().await?;
         Ok(EventEditionMapExt {
             inner: map.into(),
             edition_player: self.edition_player,
@@ -449,13 +456,15 @@ impl EventEditionPlayer<'_> {
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Vec<EventEditionPlayerCategorizedRank>> {
         let db = ctx.data_unchecked::<MySqlPool>();
-        let mysql_conn = &mut db.acquire().await?;
+        let mut mysql_conn = db.acquire().await?;
         let categories = event::get_categories_by_edition_id(
-            mysql_conn,
+            &mut *mysql_conn,
             self.edition.inner.event_id,
             self.edition.inner.id,
         )
         .await?;
+
+        mysql_conn.close().await?;
 
         let categories = if categories.is_empty() {
             vec![models::EventCategory {
@@ -527,7 +536,7 @@ impl EventEditionMap<'_> {
         .fetch_one(&mut *conn)
         .await?;
 
-        Ok(match original_map_id {
+        let map = match original_map_id {
             Some(id) => Some(
                 map_loader
                     .load_one(id)
@@ -535,7 +544,11 @@ impl EventEditionMap<'_> {
                     .expect("unknown original_map_id"),
             ),
             _ => None,
-        })
+        };
+
+        conn.close().await?;
+
+        Ok(map)
     }
 
     async fn records(
@@ -579,6 +592,7 @@ impl EventEdition<'_> {
             .map_ok(From::from)
             .try_collect()
             .await?;
+        db.close().await?;
         Ok(a)
     }
 
@@ -614,6 +628,7 @@ impl EventEdition<'_> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
         let player = must::have_player(&mut mysql_conn, &login).await?;
+        mysql_conn.close().await?;
         Ok(EventEditionPlayer {
             edition: self,
             player,
@@ -636,6 +651,8 @@ impl EventEdition<'_> {
         )
         .await?
         .ok_or_else(|| async_graphql::Error::new("Map not found in this edition"))?;
+
+        mysql_conn.close().await?;
 
         Ok(EventEditionMap {
             edition: self,

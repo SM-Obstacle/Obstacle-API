@@ -7,32 +7,24 @@
 use std::{future::Future, time::Duration};
 
 use anyhow::Context;
-use deadpool_redis::Connection;
 use mkenv::Env as _;
-use records_lib::{DbEnv, LibEnv, MySqlPool, RedisPool};
-use sqlx::{pool::PoolConnection, MySql};
+use records_lib::{Database, DatabaseConnection, DbEnv, LibEnv};
 use tokio::{task::JoinHandle, time};
 use tracing::info;
 
 mod campaign_scores;
 
-async fn handle<F, Fut>(
-    mysql_pool: MySqlPool,
-    redis_pool: RedisPool,
-    period: Duration,
-    f: F,
-) -> anyhow::Result<()>
+async fn handle<F, Fut>(db: Database, period: Duration, f: F) -> anyhow::Result<()>
 where
-    F: Fn(PoolConnection<MySql>, Connection) -> Fut,
+    F: Fn(DatabaseConnection) -> Fut,
     Fut: Future<Output = anyhow::Result<()>>,
 {
     let mut interval = time::interval(period);
 
     loop {
         interval.tick().await;
-        let mysql_conn = mysql_pool.acquire().await?;
-        let redis_conn = redis_pool.get().await?;
-        f(mysql_conn, redis_conn).await?;
+        let conn = db.acquire().await?;
+        f(conn).await?;
     }
 }
 
@@ -67,9 +59,13 @@ async fn main() -> anyhow::Result<()> {
     let redis_pool = records_lib::get_redis_pool(env.db_env.redis_url.redis_url)
         .context("When creating Redis pool")?;
 
+    let db = Database {
+        mysql_pool,
+        redis_pool,
+    };
+
     let res = tokio::spawn(handle(
-        mysql_pool.clone(),
-        redis_pool.clone(),
+        db.clone(),
         campaign_scores::PROCESS_DURATION,
         campaign_scores::update,
     ));
