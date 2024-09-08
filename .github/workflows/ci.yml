@@ -52,7 +52,7 @@ jobs:
         env:
           DATABASE_URL: mysql://api:${{ secrets.MARIADB_PW }}@localhost:3306/obs_records
           REDIS_URL: redis://localhost:6379
-        run: cargo test
+        run: RUST_BACKTRACE=1 cargo test -- --test-threads=1
 
   lint:
     name: Lint
