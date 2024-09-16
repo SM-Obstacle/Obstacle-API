@@ -32,9 +32,6 @@ use crate::{
 
 use super::{pb, player_finished as pf};
 
-#[cfg(test)]
-pub(super) mod tests;
-
 pub fn player_scope() -> Scope {
     web::scope("/player")
         .route("/update", web::post().to(update))

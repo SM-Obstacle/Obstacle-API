@@ -18,9 +18,6 @@ use tracing_actix_web::RequestId;
 
 use super::player::{self, PlayerInfoNetBody};
 
-#[cfg(test)]
-pub(super) mod tests;
-
 pub fn map_scope() -> Scope {
     web::scope("/map")
         .route("/insert", web::post().to(insert))
