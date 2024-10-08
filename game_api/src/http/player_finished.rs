@@ -113,6 +113,8 @@ pub(super) async fn insert_record(
 ) -> RecordsResult<u32> {
     let key = map_key(map_id, event);
     update_leaderboard(db, map_id, event).await?;
+
+    // FIXME: if the player already has a time in the LB, we should check if the new time is better
     let _: () = db
         .redis_conn
         .zadd(key, player_id, body.time)
@@ -218,13 +220,13 @@ pub async fn finished(
         (params.rest.time, params.rest.time, true)
     };
 
-    let old_rank = get_rank_opt(&mut db.redis_conn, &map_key(map.id, event), player_id).await?;
+    let old_rank = get_rank_opt(&mut db.redis_conn, map.id, player_id, event).await?;
 
     // We insert the record (whether it is the new personal best or not)
     let record_id =
         insert_record(db, map.id, player_id, params.rest.clone(), event, None, at).await?;
 
-    let current_rank = get_rank(db, map.id, player_id, event).await?;
+    let current_rank = get_rank(db, map.id, player_id, params.rest.time, event).await?;
 
     // If the record isn't in an event context, save the record to the events that have the map
     // and allow records saving without an event context.

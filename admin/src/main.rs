@@ -5,9 +5,9 @@ use records_lib::{get_mysql_pool, get_redis_pool, Database, DbEnv, LibEnv};
 use self::{clear::ClearCommand, leaderboard::LbCommand, populate::PopulateCommand};
 
 mod clear;
+mod clear_redis_mappacks;
 mod leaderboard;
 mod populate;
-mod clear_redis_mappacks;
 
 #[derive(clap::Parser)]
 enum Command {

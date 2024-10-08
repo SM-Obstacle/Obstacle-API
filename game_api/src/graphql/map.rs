@@ -121,7 +121,14 @@ impl Map {
 
         while let Some(record) = records.next().await {
             let record = record?;
-            let rank = get_rank(&mut conn, self.inner.id, record.record_player_id, event).await?;
+            let rank = get_rank(
+                &mut conn,
+                self.inner.id,
+                record.record_player_id,
+                record.time,
+                event,
+            )
+            .await?;
 
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }

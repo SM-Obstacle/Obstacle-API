@@ -167,7 +167,8 @@ pub async fn update_mappack(
     if mappack.has_ttl() {
         // The mappack has a TTL, so its member will be removed from the set when
         // attempting to retrieve its maps.
-        let _: () = db.redis_conn
+        let _: () = db
+            .redis_conn
             .sadd(mappacks_key(), mappack.mappack_id())
             .await?;
     }
@@ -397,7 +398,14 @@ async fn calc_scores(
             }
 
             let record = RankedRecordRow {
-                rank: get_rank(db, map.id, record.record.record_player_id, event).await?,
+                rank: get_rank(
+                    db,
+                    map.id,
+                    record.record.record_player_id,
+                    record.record.time,
+                    event,
+                )
+                .await?,
                 record,
             };
             records.push(record);

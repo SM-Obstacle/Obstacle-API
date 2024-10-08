@@ -184,6 +184,7 @@ impl Player {
                 &mut conn,
                 record.map_id,
                 record.record_player_id,
+                record.time,
                 Default::default(),
             )
             .await?;

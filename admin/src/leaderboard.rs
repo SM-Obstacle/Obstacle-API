@@ -150,7 +150,7 @@ async fn redis_lb(
         };
 
         let player = player::get_player_from_id(&mut *db.mysql_conn, player_id as _).await?;
-        let rank = get_rank(db, map_id, player_id as _, Default::default()).await?;
+        let rank = get_rank(db, map_id, player_id as _, time as _, Default::default()).await?;
 
         table.add_row(prettytable::row![
             i + offset.unwrap_or_default() as usize,

@@ -205,7 +205,7 @@ pub fn leaderboard<'a>(
         .map_err(From::from)
         .and_then(move |row| async move {
             let mut conn = db.acquire().await?;
-            let rank = get_rank(&mut conn, map_id, row.player_id, event).await?;
+            let rank = get_rank(&mut conn, map_id, row.player_id, row.time, event).await?;
             conn.close().await?;
             Ok(Row {
                 rank,
