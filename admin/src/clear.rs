@@ -43,7 +43,5 @@ pub async fn clear(
 
     clear_content(&mut conn, &event, &edition).await?;
 
-    conn.close().await?;
-
     Ok(())
 }

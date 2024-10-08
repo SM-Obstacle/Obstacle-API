@@ -159,8 +159,6 @@ async fn event_list(req_id: RequestId, db: Res<Database>) -> RecordsResponse<imp
         .with_api_err()
         .fit(req_id)?;
 
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
-
     json(out)
 }
 
@@ -190,8 +188,6 @@ async fn event_editions(
     .await
     .with_api_err()
     .fit(req_id)?;
-
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     json(
         res.into_iter()
@@ -248,8 +244,6 @@ async fn edition(
         .chunk_by(|m| m.category_id);
     let maps = maps.into_iter();
 
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
-    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
     let mut cat = event::get_categories_by_edition_id(&mut mysql_conn, event_id, edition.id)
         .await
         .fit(req_id)?;
@@ -411,8 +405,6 @@ async fn edition(
         categories,
     };
 
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
-
     json(res)
 }
 
@@ -438,18 +430,14 @@ async fn edition_overview(
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    let out = overview::overview(
+    overview::overview(
         req_id,
         &db.mysql_pool,
         &mut conn,
         query.0.into_params(Some(&map)),
         OptEvent::new(&event, &edition),
     )
-    .await;
-
-    conn.close().await.with_api_err().fit(req_id)?;
-
-    out
+    .await
 }
 
 #[inline(always)]
@@ -543,7 +531,6 @@ pub async fn edition_finished_at(
         .fit(req_id)?;
 
     locker.release(res.map_id).await;
-    conn.close().await.with_api_err().fit(req_id)?;
 
     json(res.res)
 }
@@ -587,8 +574,6 @@ async fn edition_pb(
     )
     .await
     .fit(req_id)?;
-
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     if edition.has_expired() {
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);

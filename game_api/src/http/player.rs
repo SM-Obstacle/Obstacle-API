@@ -220,7 +220,6 @@ pub async fn finished_at(
     .fit(req_id)?;
 
     locker.release(res.map_id).await;
-    conn.close().await.with_api_err().fit(req_id)?;
 
     json(res.res)
 }
@@ -359,7 +358,7 @@ async fn pb(
 
     drop(editions);
 
-    let out = match edition {
+    match edition {
         Some((event_id, edition_id, _)) if single_edition => {
             let (event, edition) =
                 must::have_event_edition_from_ids(&mut mysql_conn, event_id, edition_id)
@@ -369,11 +368,7 @@ async fn pb(
             pb::pb(login, req_id, db, body, OptEvent::new(&event, &edition)).await
         }
         _ => pb::pb(login, req_id, db, body, Default::default()).await,
-    };
-
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
-
-    out
+    }
 }
 
 #[derive(Deserialize)]
@@ -419,8 +414,6 @@ async fn times(
         .await
         .with_api_err()
         .fit(req_id)?;
-
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     json(result)
 }

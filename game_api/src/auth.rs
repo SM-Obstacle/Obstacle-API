@@ -307,8 +307,6 @@ async fn inner_check_auth_for(
         return Err(RecordsErrorKind::Forbidden);
     }
 
-    conn.close().await?;
-
     Ok(player.id)
 }
 

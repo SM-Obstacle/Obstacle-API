@@ -185,7 +185,5 @@ pub async fn leaderboard(db: Database, cmd: LbCommand) -> anyhow::Result<()> {
         LbCommand::Full(full_cmd) => full(&mut conn, full_cmd).await?,
     }
 
-    conn.close().await?;
-
     Ok(())
 }

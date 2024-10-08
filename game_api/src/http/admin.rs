@@ -156,8 +156,6 @@ pub async fn banishments(
     .with_api_err()
     .fit(req_id)?;
 
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
-
     json(BanishmentsResponse {
         player_login: body.player_login,
         banishments,
@@ -227,8 +225,6 @@ pub async fn ban(
     .fetch_one(&mut *mysql_conn)
     .await.with_api_err().fit(req_id)?;
 
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
-
     json(BanResponse {
         player_login: body.player_login,
         ban,
@@ -296,8 +292,6 @@ pub async fn unban(
         .with_api_err()
         .fit(req_id)?;
 
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
-
     json(UnbanResponse {
         player_login: body.player_login,
         ban,
@@ -327,8 +321,6 @@ pub async fn player_note(
         .await
         .fit(req_id)?
         .admins_note;
-
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     json(PlayerNoteResponse {
         player_login: body.player_login,

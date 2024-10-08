@@ -192,8 +192,6 @@ impl Player {
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }
 
-        conn.close().await?;
-
         Ok(ranked_records)
     }
 }

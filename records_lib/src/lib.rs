@@ -47,14 +47,6 @@ pub struct DatabaseConnection {
     pub redis_conn: RedisConnection,
 }
 
-impl DatabaseConnection {
-    /// Closes the connection to the databases.
-    pub async fn close(self) -> RecordsResult<()> {
-        self.mysql_conn.close().await?;
-        Ok(())
-    }
-}
-
 /// Represents the database of the API, meaning the MariaDB and Redis pools.
 #[derive(Clone)]
 pub struct Database {

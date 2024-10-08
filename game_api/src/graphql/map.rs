@@ -109,8 +109,6 @@ impl Map {
             query = query.bind(event.id).bind(edition.id);
         }
 
-        conn.mysql_conn.close().await?;
-
         let mut records = query.fetch(&db.mysql_pool);
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
@@ -132,8 +130,6 @@ impl Map {
 
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }
-
-        conn.close().await?;
 
         Ok(ranked_records)
     }
@@ -221,9 +217,6 @@ impl Map {
                 edition: EventEdition::from_inner(edition.edition, mysql_pool).await?,
             });
         }
-
-        drop(raw_editions);
-        mysql_conn.close().await?;
 
         Ok(out)
     }

@@ -204,7 +204,6 @@ impl QueryRoot {
 
         let mut conn = db.acquire().await?;
         let event = must::have_event_handle(&mut conn, &handle).await?;
-        conn.close().await?;
 
         Ok(event.into())
     }
@@ -395,8 +394,6 @@ impl QueryRoot {
         }
         .into();
 
-        conn.close().await?;
-
         Ok(out)
     }
 
@@ -408,14 +405,10 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut conn = db.acquire().await?;
 
-        let out = records_lib::map::get_map_from_uid(&mut conn, &game_id)
+        records_lib::map::get_map_from_uid(&mut conn, &game_id)
             .await?
             .ok_or_else(|| async_graphql::Error::new("Map not found."))
-            .map(Into::into);
-
-        conn.close().await?;
-
-        out
+            .map(Into::into)
     }
 
     async fn player(
@@ -464,8 +457,6 @@ impl QueryRoot {
             ranked_records.push(models::RankedRecord { rank, record }.into());
         }
 
-        conn.close().await?;
-
         Ok(ranked_records)
     }
 }
@@ -496,8 +487,6 @@ impl MutationRoot {
         let res = sqlx::query_as("SELECT * FROM resources_content")
             .fetch_one(&mut *mysql_conn)
             .await?;
-
-        mysql_conn.close().await?;
 
         Ok(res)
     }

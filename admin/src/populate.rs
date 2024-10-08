@@ -9,7 +9,7 @@ use records_lib::{
     mappack::{self, AnyMappackId},
     models, must,
     redis_key::mappack_key,
-    Database, DatabaseConnection, MySqlPool,
+    Database, MySqlPool,
 };
 
 use crate::clear;
@@ -117,8 +117,6 @@ async fn insert_mx_maps(
     }
 
     tracing::info!("Inserted {inserted_count} new map(s) from MX");
-
-    mysql_conn.close().await?;
 
     Ok(out)
 }
@@ -308,14 +306,7 @@ pub async fn populate(
         }
     }
 
-    conn.mysql_conn.close().await?;
-
     let mut mx_maps = populate_mx_maps(&client, &db.mysql_pool, &rows).await?;
-
-    let mut conn = DatabaseConnection {
-        mysql_conn: db.mysql_pool.acquire().await?,
-        ..conn
-    };
 
     tracing::info!("Inserting new content...");
 
@@ -416,8 +407,6 @@ pub async fn populate(
     mappack::update_mappack(mappack, &mut conn).await?;
 
     tracing::info!("Done");
-
-    conn.close().await?;
 
     Ok(())
 }

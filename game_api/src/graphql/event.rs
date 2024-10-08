@@ -86,8 +86,6 @@ impl Event {
 
         let q = event::event_editions_list(&mut mysql_conn, &self.inner.handle).await?;
 
-        mysql_conn.close().await?;
-
         Ok(q.into_iter()
             .map(|inner| EventEdition {
                 event: Cow::Borrowed(self),
@@ -124,7 +122,6 @@ impl Event {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
         let edition = event::get_edition_by_id(&mut mysql_conn, self.inner.id, edition_id).await?;
-        mysql_conn.close().await?;
 
         Ok(edition.map(|inner| EventEdition {
             event: Cow::Borrowed(self),
@@ -310,7 +307,6 @@ impl EventEditionPlayerRank<'_> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
         let map = must::have_map(&mut mysql_conn, &self.map_game_id).await?;
-        mysql_conn.close().await?;
         Ok(EventEditionMapExt {
             inner: map.into(),
             edition_player: self.edition_player,
@@ -464,8 +460,6 @@ impl EventEditionPlayer<'_> {
         )
         .await?;
 
-        mysql_conn.close().await?;
-
         let categories = if categories.is_empty() {
             vec![models::EventCategory {
                 name: "All maps".to_owned(),
@@ -546,8 +540,6 @@ impl EventEditionMap<'_> {
             _ => None,
         };
 
-        conn.close().await?;
-
         Ok(map)
     }
 
@@ -592,7 +584,6 @@ impl EventEdition<'_> {
             .map_ok(From::from)
             .try_collect()
             .await?;
-        db.close().await?;
         Ok(a)
     }
 
@@ -628,7 +619,6 @@ impl EventEdition<'_> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
         let player = must::have_player(&mut mysql_conn, &login).await?;
-        mysql_conn.close().await?;
         Ok(EventEditionPlayer {
             edition: self,
             player,
@@ -651,8 +641,6 @@ impl EventEdition<'_> {
         )
         .await?
         .ok_or_else(|| async_graphql::Error::new("Map not found in this edition"))?;
-
-        mysql_conn.close().await?;
 
         Ok(EventEditionMap {
             edition: self,

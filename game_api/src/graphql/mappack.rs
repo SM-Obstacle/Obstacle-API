@@ -226,8 +226,6 @@ impl MappackPlayer<'_> {
             });
         }
 
-        conn.close().await?;
-
         Ok(out)
     }
 
@@ -328,8 +326,6 @@ impl Mappack {
             });
         }
 
-        conn.close().await?;
-
         Ok(out)
     }
 
@@ -341,7 +337,6 @@ impl Mappack {
         let mysql_pool = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = mysql_pool.acquire().await?;
         let player = must::have_player(&mut mysql_conn, &login).await?;
-        mysql_conn.close().await?;
 
         Ok(MappackPlayer {
             inner: player.into(),
@@ -401,8 +396,6 @@ pub async fn get_mappack(
             .await
             .with_api_err()?;
     }
-
-    conn.close().await?;
 
     Ok(From::from(mappack_id))
 }

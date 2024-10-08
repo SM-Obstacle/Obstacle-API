@@ -94,8 +94,6 @@ async fn insert(
     .with_api_err()
     .fit(req_id)?;
 
-    conn.close().await.with_api_err().fit(req_id)?;
-
     Ok(HttpResponse::Ok().finish())
 }
 
@@ -184,8 +182,6 @@ pub async fn player_rating(
     .with_api_err()
     .fit(req_id)?;
 
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
-
     json(PlayerRatingResponse {
         player_login: login,
         map_name,
@@ -239,8 +235,6 @@ pub async fn ratings(
             .fit(req_id)?;
         (privilege::ADMIN, login)
     };
-
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     auth::check_auth_for(&db, &login, &token, role)
         .await
@@ -429,8 +423,6 @@ pub async fn rate(
             return Err(RecordsErrorKind::NoRatingFound(login, body.map_id)).fit(req_id);
         };
 
-        mysql_conn.close().await.with_api_err().fit(req_id)?;
-
         return json(RateResponse {
             player_login,
             map_name,
@@ -541,8 +533,6 @@ pub async fn rate(
 
         ratings.push(rating);
     }
-
-    mysql_conn.close().await.with_api_err().fit(req_id)?;
 
     json(RateResponse {
         player_login,
