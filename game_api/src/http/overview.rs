@@ -14,7 +14,9 @@ use records_lib::{
 use serde::{Deserialize, Serialize};
 use tracing_actix_web::RequestId;
 
-use crate::{utils::json, FitRequestId, RecordsResponse, RecordsResult, RecordsResultExt};
+use crate::{
+    utils::json, FinishLocker, FitRequestId, RecordsResponse, RecordsResult, RecordsResultExt,
+};
 
 use super::map::MapParam;
 
@@ -143,6 +145,7 @@ pub struct ResponseBody {
 
 pub async fn overview(
     req_id: RequestId,
+    locker: FinishLocker,
     db: &MySqlPool,
     conn: &mut DatabaseConnection,
     params: OverviewParams<'_>,
@@ -160,6 +163,8 @@ pub async fn overview(
         .fit(req_id)?
         .id;
     let map_id = linked_map.unwrap_or(*id);
+
+    locker.wait_finishes_for(map_id).await;
 
     // Update redis if needed
     let key = map_key(map_id, event);

@@ -410,6 +410,7 @@ async fn edition(
 
 async fn edition_overview(
     req_id: RequestId,
+    locker: FinishLocker,
     db: Res<Database>,
     path: Path<(String, u32)>,
     query: overview::OverviewReq,
@@ -432,6 +433,7 @@ async fn edition_overview(
 
     overview::overview(
         req_id,
+        locker,
         &db.mysql_pool,
         &mut conn,
         query.0.into_params(Some(&map)),
