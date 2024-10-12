@@ -58,7 +58,9 @@ async fn main() -> anyhow::Result<()> {
     let sess_key = Key::from(env.used_once.sess_key.as_bytes());
     drop(env.used_once.sess_key);
 
-    let governor_conf = GovernorConfigBuilder::default().finish().unwrap();
+    let governor_conf = GovernorConfigBuilder::default()
+        .const_burst_size(32)
+        .finish().unwrap();
 
     HttpServer::new(move || {
         let cors = Cors::default()
