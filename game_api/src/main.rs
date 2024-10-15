@@ -60,7 +60,8 @@ async fn main() -> anyhow::Result<()> {
 
     let governor_conf = GovernorConfigBuilder::default()
         .const_burst_size(32)
-        .finish().unwrap();
+        .finish()
+        .unwrap();
 
     HttpServer::new(move || {
         let cors = Cors::default()
