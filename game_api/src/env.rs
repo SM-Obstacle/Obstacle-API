@@ -33,6 +33,7 @@ const DEFAULT_MP_CLIENT_SECRET: &str = "";
 const DEFAULT_WH_REPORT_URL: &str = "";
 const DEFAULT_WH_AC_URL: &str = "";
 const DEFAULT_GQL_ENDPOINT: &str = "/graphql";
+const DEFAULT_POOLSIZEDISP_CHUNK: usize = 100;
 
 mkenv::make_env! {pub ApiEnv includes [
     DbEnv as db_env,
@@ -117,6 +118,14 @@ mkenv::make_env! {pub ApiEnv includes [
         var: "GQL_ENDPOINT",
         desc: "The route to the GraphQL endpoint (e.g. /graphql)",
         default: DEFAULT_GQL_ENDPOINT,
+    },
+
+    poolsizedisp_chunksize: {
+        id: PoolSizeDispChunkSize(usize),
+        kind: parse,
+        var: "POOLSIZEDISP_CHUNKSIZE",
+        desc: "The amount of requests that separates the displays of the database pool size",
+        default: DEFAULT_POOLSIZEDISP_CHUNK,
     }
 }
 

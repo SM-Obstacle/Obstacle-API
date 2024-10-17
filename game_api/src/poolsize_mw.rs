@@ -9,8 +9,6 @@ use std::{
 use actix_web::dev::{forward_ready, Service, ServiceRequest, Transform};
 use records_lib::Database;
 
-const REQ_CHUNK_SIZE: usize = 3;
-
 #[derive(Default)]
 pub struct ShowPoolSize {
     req_count: Arc<AtomicUsize>,
@@ -59,7 +57,7 @@ where
         let chunk_idx = self
             .count
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
-                Some((x + 1) % REQ_CHUNK_SIZE)
+                Some((x + 1) % crate::env().poolsizedisp_chunksize)
             })
             .unwrap();
 
