@@ -17,8 +17,7 @@ use actix_web::{
 };
 use anyhow::Context;
 use game_api_lib::{
-    api_route, graphql_route, AuthState, FinishLocker, FitRequestId, RecordsErrorKind,
-    RecordsResponse,
+    api_route, graphql_route, poolsize_mw::ShowPoolSize, AuthState, FinishLocker, FitRequestId, RecordsErrorKind, RecordsResponse
 };
 use records_lib::{get_mysql_pool, get_redis_pool, Database};
 use reqwest::Client;
@@ -53,6 +52,11 @@ async fn main() -> anyhow::Result<()> {
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
+    tracing::info!(
+        "Using max connections: {}",
+        db.mysql_pool.options().get_max_connections()
+    );
+
     let auth_state = Data::new(AuthState::default());
 
     let sess_key = Key::from(env.used_once.sess_key.as_bytes());
@@ -78,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
             .wrap(Governor::new(&governor_conf))
             .wrap(cors)
             .wrap(TracingLogger::default())
+            .wrap(ShowPoolSize::default())
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), sess_key.clone())
                     .cookie_secure(cfg!(not(debug_assertions)))

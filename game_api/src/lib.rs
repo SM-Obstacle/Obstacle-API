@@ -5,6 +5,8 @@
 pub use deadpool_redis::Pool as RedisPool;
 pub use sqlx::MySqlPool;
 
+pub mod poolsize_mw;
+
 mod auth;
 mod discord_webhook;
 mod env;
