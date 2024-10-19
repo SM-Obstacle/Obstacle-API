@@ -206,6 +206,7 @@ impl actix_web::ResponseError for RecordsError {
                     HttpResponse::InternalServerError().json(self.to_err_res())
                 }
                 LR::PoolError(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
+                LR::Internal => HttpResponse::InternalServerError().json(self.to_err_res()),
 
                 // --- Logical errors
 

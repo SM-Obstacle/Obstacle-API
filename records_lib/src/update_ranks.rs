@@ -11,7 +11,7 @@
 //! - Redis that failed to update the score of a player on a map
 //! - The associated Redis key has been deleted
 //! - etc.
-//! 
+//!
 //! We mainly use the Redis leaderboard to get the rank of a player on a map. Thus, we should take
 //! care in each operation and update it if anything goes wrong.
 //!
@@ -59,7 +59,7 @@ use itertools::{EitherOrBoth, Itertools};
 use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
 
 use crate::{
-    error::RecordsResult,
+    error::{RecordsError, RecordsResult},
     event::OptEvent,
     redis_key::{map_key, MapKey},
     DatabaseConnection, RedisConnection,
@@ -240,7 +240,7 @@ pub async fn get_rank(
 
     match get_rank_impl(&mut db.redis_conn, &key, time).await? {
         Some(r) => Ok(r),
-        None => get_rank_failed(db, player_id, event, map_id).await?,
+        None => Err(get_rank_failed(db, player_id, event, map_id).await?),
     }
 }
 
@@ -248,12 +248,12 @@ pub async fn get_rank(
 ///
 /// The `O` generic parameter is used to return the same type as the [`get_rank`] function.
 #[cold]
-async fn get_rank_failed<O>(
+async fn get_rank_failed(
     db: &mut DatabaseConnection,
     player_id: u32,
     event: OptEvent<'_, '_>,
     map_id: u32,
-) -> Result<O, crate::error::RecordsError> {
+) -> RecordsResult<crate::error::RecordsError> {
     use std::fmt::Write as _;
 
     fn num_digits<N>(n: N) -> usize
@@ -344,5 +344,7 @@ async fn get_rank_failed<O>(
         }
     }
 
-    panic!("missing player rank ({player_id} on {map_id})\n{msg}")
+    tracing::error!("missing player rank ({player_id} on {map_id})\n{msg}");
+
+    Ok(RecordsError::Internal)
 }

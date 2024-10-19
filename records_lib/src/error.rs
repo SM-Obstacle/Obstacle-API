@@ -36,6 +36,10 @@ pub enum RecordsError {
     /// An error that happened when using the Redis pool.
     #[error(transparent)]
     PoolError(#[from] PoolError) = 108,
+    // FIXME: this is here because of the `update_ranks` module malfunctioning sometimes.
+    /// An unknown internal error.
+    #[error("unknown internal error")]
+    Internal = 109,
 
     // --------
     // --- Logical errors
