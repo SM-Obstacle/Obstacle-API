@@ -17,12 +17,33 @@ use actix_web::{
 };
 use anyhow::Context;
 use game_api_lib::{
-    api_route, graphql_route, poolsize_mw::ShowPoolSize, AuthState, FinishLocker, FitRequestId, RecordsErrorKind, RecordsResponse
+    api_route, graphql_route, AuthState, FinishLocker, FitRequestId, RecordsErrorKind,
+    RecordsResponse,
 };
 use records_lib::{get_mysql_pool, get_redis_pool, Database};
 use reqwest::Client;
-use tracing_actix_web::{RequestId, TracingLogger};
+use tracing_actix_web::{DefaultRootSpanBuilder, RequestId, RootSpanBuilder, TracingLogger};
 use tracing_subscriber::fmt::format::FmtSpan;
+
+struct CustomRootSpanBuilder;
+
+impl RootSpanBuilder for CustomRootSpanBuilder {
+    fn on_request_start(request: &actix_web::dev::ServiceRequest) -> tracing::Span {
+        let db = request.app_data::<Database>().unwrap();
+        tracing_actix_web::root_span!(
+            request,
+            pool_size = db.mysql_pool.size(),
+            pool_num_idle = db.mysql_pool.num_idle()
+        )
+    }
+
+    fn on_request_end<B: actix_web::body::MessageBody>(
+        span: tracing::Span,
+        outcome: &Result<actix_web::dev::ServiceResponse<B>, actix_web::Error>,
+    ) {
+        DefaultRootSpanBuilder::on_request_end(span, outcome);
+    }
+}
 
 /// The actix route handler for the Not Found response.
 async fn not_found(req_id: RequestId) -> RecordsResponse<impl Responder> {
@@ -81,8 +102,7 @@ async fn main() -> anyhow::Result<()> {
         App::new()
             .wrap(Governor::new(&governor_conf))
             .wrap(cors)
-            .wrap(TracingLogger::default())
-            .wrap(ShowPoolSize::default())
+            .wrap(TracingLogger::<CustomRootSpanBuilder>::new())
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), sess_key.clone())
                     .cookie_secure(cfg!(not(debug_assertions)))
