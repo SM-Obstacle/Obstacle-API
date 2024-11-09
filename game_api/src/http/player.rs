@@ -26,8 +26,8 @@ use crate::{
     },
     discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
     utils::json,
-    AccessTokenErr, FinishLocker, FitRequestId as _, RecordsErrorKind, RecordsResponse,
-    RecordsResult, RecordsResultExt, Res,
+    AccessTokenErr, FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult,
+    RecordsResultExt, Res,
 };
 
 use super::{pb, player_finished as pf};
@@ -199,7 +199,6 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
 }
 
 pub async fn finished_at(
-    locker: FinishLocker,
     req_id: RequestId,
     login: String,
     db: Res<Database>,
@@ -209,7 +208,6 @@ pub async fn finished_at(
     let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
 
     let res = pf::finished(
-        &locker,
         login,
         &mut conn,
         body.into_params(None),
@@ -219,8 +217,6 @@ pub async fn finished_at(
     .await
     .fit(req_id)?;
 
-    locker.release(res.map_id).await;
-
     json(res.res)
 }
 
@@ -228,20 +224,11 @@ pub async fn finished_at(
 async fn finished(
     _: ApiAvailable,
     req_id: RequestId,
-    locker: FinishLocker,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
-    finished_at(
-        locker,
-        req_id,
-        login,
-        db,
-        body.0,
-        chrono::Utc::now().naive_utc(),
-    )
-    .await
+    finished_at(req_id, login, db, body.0, chrono::Utc::now().naive_utc()).await
 }
 
 #[derive(Deserialize)]

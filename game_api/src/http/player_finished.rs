@@ -11,7 +11,7 @@ use records_lib::{
 use serde::{Deserialize, Serialize};
 use sqlx::Connection;
 
-use crate::{FinishLocker, RecordsErrorKind, RecordsResult, RecordsResultExt};
+use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 
 use super::{event, map::MapParam};
 
@@ -121,29 +121,21 @@ pub(super) async fn insert_record(
         .await
         .with_api_err()?;
 
-    let record_id = loop {
-        match db
-            .mysql_conn
-            .transaction(|txn| {
-                Box::pin(send_query(
-                    txn,
-                    map_id,
-                    player_id,
-                    body.clone(),
-                    event_record_id,
-                    at,
-                ))
-            })
-            .await
-        {
-            Ok(id) => break id,
-            Err(e) => match e.as_database_error() {
-                // Retry if the transaction failed with a deadlock error
-                Some(e) if e.code().filter(|c| c == "40001").is_some() => (),
-                _ => return Err(RecordsErrorKind::Lib(e.into())),
-            },
-        }
-    };
+    // FIXME: find a way to retry deadlock errors **without loops**
+    let record_id = db
+        .mysql_conn
+        .transaction(|txn| {
+            Box::pin(send_query(
+                txn,
+                map_id,
+                player_id,
+                body.clone(),
+                event_record_id,
+                at,
+            ))
+        })
+        .await
+        .with_api_err()?;
 
     Ok(record_id)
 }
@@ -156,7 +148,6 @@ pub struct FinishedOutput {
 }
 
 pub async fn finished(
-    locker: &FinishLocker,
     login: String,
     db: &mut DatabaseConnection,
     params: FinishedParams<'_>,
@@ -175,9 +166,6 @@ pub async fn finished(
         MapParam::AlreadyQueried(map) => map,
         MapParam::Uid(uid) => &records_lib::must::have_map(&mut db.mysql_conn, &uid).await?,
     };
-
-    locker.wait_finishes_for(*map_id).await;
-    locker.pend(*map_id).await;
 
     let (join_event, and_event) = event.get_join();
 

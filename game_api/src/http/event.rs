@@ -14,8 +14,8 @@ use sqlx::{FromRow, MySqlConnection};
 use tracing_actix_web::RequestId;
 
 use crate::{
-    auth::MPAuthGuard, utils::json, FinishLocker, FitRequestId, RecordsErrorKind, RecordsResponse,
-    RecordsResult, RecordsResultExt, Res,
+    auth::MPAuthGuard, utils::json, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult,
+    RecordsResultExt, Res,
 };
 
 use super::{overview, pb, player::PlayerInfoNetBody, player_finished as pf};
@@ -410,7 +410,6 @@ async fn edition(
 
 async fn edition_overview(
     req_id: RequestId,
-    locker: FinishLocker,
     db: Res<Database>,
     path: Path<(String, u32)>,
     query: overview::OverviewReq,
@@ -433,7 +432,6 @@ async fn edition_overview(
 
     overview::overview(
         req_id,
-        locker,
         &db.mysql_pool,
         &mut conn,
         query.0.into_params(Some(&map)),
@@ -445,14 +443,12 @@ async fn edition_overview(
 #[inline(always)]
 async fn edition_finished(
     MPAuthGuard { login }: MPAuthGuard,
-    locker: FinishLocker,
     req_id: RequestId,
     db: Res<Database>,
     path: Path<(String, u32)>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
     edition_finished_at(
-        locker,
         login,
         req_id,
         db,
@@ -464,7 +460,6 @@ async fn edition_finished(
 }
 
 pub async fn edition_finished_at(
-    locker: FinishLocker,
     login: String,
     req_id: RequestId,
     db: Res<Database>,
@@ -506,7 +501,7 @@ pub async fn edition_finished_at(
     let rest = params.rest.clone();
 
     // Then we insert the record for the global records
-    let res = pf::finished(&locker, login.clone(), &mut conn, params, opt_event, at)
+    let res = pf::finished(login.clone(), &mut conn, params, opt_event, at)
         .await
         .fit(req_id)?;
 
@@ -531,8 +526,6 @@ pub async fn edition_finished_at(
     insert_event_record(&mut conn.mysql_conn, res.record_id, event.id, edition.id)
         .await
         .fit(req_id)?;
-
-    locker.release(res.map_id).await;
 
     json(res.res)
 }

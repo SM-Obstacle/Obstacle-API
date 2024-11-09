@@ -4,7 +4,8 @@ use records_lib::Database;
 use tracing_actix_web::RequestId;
 
 use crate::{
-    auth::{ApiAvailable, MPAuthGuard}, FinishLocker, RecordsResponse, Res
+    auth::{ApiAvailable, MPAuthGuard},
+    RecordsResponse, Res,
 };
 
 use super::{event, player, player_finished as pf};
@@ -38,19 +39,17 @@ type StaggeredBody<B> = web::Json<Staggered<B>>;
 #[inline(always)]
 async fn staggered_finished(
     _: ApiAvailable,
-    locker: FinishLocker,
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     body: StaggeredBody<pf::HasFinishedBody>,
 ) -> RecordsResponse<impl Responder> {
     let time = body.get_time();
-    player::finished_at(locker, req_id, login, db, body.0.body, time).await
+    player::finished_at(req_id, login, db, body.0.body, time).await
 }
 
 #[inline(always)]
 async fn staggered_edition_finished(
-    locker: FinishLocker,
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
@@ -58,5 +57,5 @@ async fn staggered_edition_finished(
     body: StaggeredBody<pf::HasFinishedBody>,
 ) -> RecordsResponse<impl Responder> {
     let time = body.get_time();
-    event::edition_finished_at(locker, login, req_id, db, path, body.0.body, time).await
+    event::edition_finished_at(login, req_id, db, path, body.0.body, time).await
 }
