@@ -143,7 +143,6 @@ pub(super) async fn insert_record(
 pub struct FinishedOutput {
     pub record_id: u32,
     pub player_id: u32,
-    pub map_id: u32,
     pub res: HasFinishedResponse,
 }
 
@@ -247,7 +246,6 @@ pub async fn finished(
     Ok(FinishedOutput {
         record_id,
         player_id,
-        map_id: *map_id,
         res: HasFinishedResponse {
             has_improved,
             login,
