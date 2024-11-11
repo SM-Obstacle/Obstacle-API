@@ -9,17 +9,31 @@ use crate::{error::RecordsResult, models};
 ///
 /// This is used by the various items of the API, because we use a different source to retrieve
 /// the player records for an event.
-#[derive(Default, Clone, Copy)]
-pub struct OptEvent<'ev, 'ed>(
+///
+/// This type isn't used as is, but rather with either [`OptEvent`] or [`OptEventIds`].
+#[derive(Clone, Copy)]
+pub struct OptEventImpl<Ev, Ed>(
     /// The inner type, which is simply an optional couple of references to an event and its edition.
-    pub Option<(&'ev models::Event, &'ed models::EventEdition)>,
+    pub Option<(Ev, Ed)>,
 );
 
-impl<'ev, 'ed> OptEvent<'ev, 'ed> {
+impl<Ev, Ed> Default for OptEventImpl<Ev, Ed> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+/// A specialization of the [`OptEventImpl`] type with references to the event models.
+pub type OptEvent<'ev, 'ed> = OptEventImpl<&'ev models::Event, &'ed models::EventEdition>;
+
+/// A specialization of the [`OptEventImpl`] type with the event ID and its edition ID.
+pub type OptEventIds = OptEventImpl<u32, u32>;
+
+impl<Ev, Ed> OptEventImpl<Ev, Ed> {
     /// Constructs a new [`OptEvent`] with the provided event and edition.
     ///
     /// If there are no event, use the [`Default`] implementation.
-    pub fn new(event: &'ev models::Event, edition: &'ed models::EventEdition) -> Self {
+    pub fn new(event: Ev, edition: Ed) -> Self {
         Self(Some((event, edition)))
     }
 
@@ -93,6 +107,13 @@ impl<'ev, 'ed> OptEvent<'ev, 'ed> {
                 "and eer.event_id = ? and eer.edition_id = ?",
             ))
             .unwrap_or_default()
+    }
+}
+
+impl OptEvent<'_, '_> {
+    /// Returns an instance of [`OptEventIds`] with the IDs of the referenced event edition.
+    pub fn to_ids(&self) -> OptEventIds {
+        OptEventImpl(self.0.map(|(ev, ed)| (ev.id, ed.id)))
     }
 }
 
