@@ -257,7 +257,7 @@ pub async fn finished(
             )
             .await?;
             let is_pb =
-                previous_time.is_none() || previous_time.is_some_and(|t| t < params.rest.time);
+                previous_time.is_none() || previous_time.is_some_and(|t| t > params.rest.time);
 
             insert_record(
                 db,
