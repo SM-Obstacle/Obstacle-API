@@ -7,7 +7,7 @@ use itertools::Itertools;
 use records_lib::{
     error::RecordsError,
     event::{self, EventMap, OptEvent},
-    models, Database, NullableInteger, NullableText,
+    models, player, Database, NullableInteger, NullableText,
 };
 use serde::Serialize;
 use sqlx::{FromRow, MySqlConnection};
@@ -506,6 +506,18 @@ pub async fn edition_finished_at(
         .fit(req_id)?;
 
     if let Some(original_map_id) = original_map_id {
+        // Get the previous time of the player on the original map to check if it's a PB
+        let time_on_previous = player::get_time_on_map(
+            &mut conn.mysql_conn,
+            res.player_id,
+            original_map_id,
+            Default::default(),
+        )
+        .await
+        .with_api_err()
+        .fit(req_id)?;
+        let is_pb = time_on_previous.is_none() || time_on_previous.is_some_and(|t| t > rest.time);
+
         // Here, we don't provide the event instances, because we don't want to save in event mode.
         pf::insert_record(
             &mut conn,
@@ -515,6 +527,7 @@ pub async fn edition_finished_at(
             Default::default(),
             Some(res.record_id),
             at,
+            is_pb,
         )
         .await
         .fit(req_id)?;

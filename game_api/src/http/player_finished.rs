@@ -1,17 +1,16 @@
+use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
 use deadpool_redis::redis::AsyncCommands;
 use futures::TryStreamExt;
 use records_lib::{
     event::OptEvent,
-    models,
+    models, player,
     redis_key::map_key,
     update_ranks::{get_rank, get_rank_opt, update_leaderboard},
     DatabaseConnection, NullableInteger,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Connection;
-
-use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 
 use super::{event, map::MapParam};
 
@@ -102,6 +101,7 @@ async fn send_query(
     Ok(record_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn insert_record(
     db: &mut DatabaseConnection,
     map_id: u32,
@@ -110,16 +110,18 @@ pub(super) async fn insert_record(
     event: OptEvent<'_, '_>,
     event_record_id: Option<u32>,
     at: chrono::NaiveDateTime,
+    update_redis_lb: bool,
 ) -> RecordsResult<u32> {
     let key = map_key(map_id, event);
     update_leaderboard(db, map_id, event).await?;
 
-    // FIXME: if the player already has a time in the LB, we should check if the new time is better
-    let _: () = db
-        .redis_conn
-        .zadd(key, player_id, body.time)
-        .await
-        .with_api_err()?;
+    if update_redis_lb {
+        let _: () = db
+            .redis_conn
+            .zadd(key, player_id, body.time)
+            .await
+            .with_api_err()?;
+    }
 
     // FIXME: find a way to retry deadlock errors **without loops**
     let record_id = db
@@ -209,11 +211,27 @@ pub async fn finished(
 
     let old_rank = get_rank_opt(&mut db.redis_conn, map.id, player_id, event).await?;
 
-    // We insert the record (whether it is the new personal best or not)
-    let record_id =
-        insert_record(db, map.id, player_id, params.rest.clone(), event, None, at).await?;
+    // We insert the record
+    let record_id = insert_record(
+        db,
+        map.id,
+        player_id,
+        params.rest.clone(),
+        event,
+        None,
+        at,
+        has_improved,
+    )
+    .await?;
 
-    let current_rank = get_rank(db, map.id, player_id, params.rest.time, event).await?;
+    let current_rank = get_rank(
+        db,
+        map.id,
+        player_id,
+        if has_improved { new } else { old },
+        event,
+    )
+    .await?;
 
     // If the record isn't in an event context, save the record to the events that have the map
     // and allow records saving without an event context.
@@ -230,6 +248,17 @@ pub async fn finished(
                 continue;
             };
 
+            // Get previous the time of the player on the original map, to check if it would be a PB or not.
+            let previous_time = player::get_time_on_map(
+                &mut db.mysql_conn,
+                player_id,
+                original_map_id,
+                Default::default(),
+            )
+            .await?;
+            let is_pb =
+                previous_time.is_none() || previous_time.is_some_and(|t| t < params.rest.time);
+
             insert_record(
                 db,
                 original_map_id,
@@ -238,6 +267,7 @@ pub async fn finished(
                 Default::default(),
                 Some(record_id),
                 at,
+                is_pb,
             )
             .await?;
         }

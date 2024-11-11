@@ -1,20 +1,20 @@
 use std::iter;
 
+use crate::{utils::json, FitRequestId, RecordsResponse, RecordsResult, RecordsResultExt};
 use actix_web::{web::Query, Responder};
 use deadpool_redis::redis::AsyncCommands;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
+use records_lib::update_ranks::force_update;
 use records_lib::{
     event::OptEvent,
-    models, must,
+    models, must, player,
     redis_key::map_key,
     update_ranks::{get_rank, update_leaderboard},
     DatabaseConnection, MySqlPool,
 };
 use serde::{Deserialize, Serialize};
 use tracing_actix_web::RequestId;
-
-use crate::{utils::json, FitRequestId, RecordsResponse, RecordsResult, RecordsResultExt};
 
 use super::map::MapParam;
 
@@ -141,6 +141,36 @@ pub struct ResponseBody {
     pub response: Vec<RankedRecord>,
 }
 
+/// Checks that the time of the player registered in MariaDB and Redis are the same, and updates
+/// the Redis leaderboard otherwise.
+async fn check_update_redis_lb(
+    conn: &mut DatabaseConnection,
+    map_id: u32,
+    player_id: u32,
+    event: OptEvent<'_, '_>,
+) -> RecordsResult<()> {
+    // Get the time of the player on this map
+    let mdb_time =
+        player::get_time_on_map(&mut conn.mysql_conn, player_id, map_id, event.to_ids()).await?;
+
+    // Get the one in Redis
+    let r_time: Option<i32> = conn
+        .redis_conn
+        .zscore(map_key(map_id, event), player_id)
+        .await
+        .with_api_err()?;
+
+    // Update the Redis leaderboard if they're different
+    if mdb_time
+        .zip(r_time)
+        .is_some_and(|(mdb_time, r_time)| mdb_time != r_time)
+    {
+        force_update(map_id, event, conn).await.with_api_err()?;
+    }
+
+    Ok(())
+}
+
 pub async fn overview(
     req_id: RequestId,
     db: &MySqlPool,
@@ -164,6 +194,10 @@ pub async fn overview(
     // Update redis if needed
     let key = map_key(map_id, event);
     let count = update_leaderboard(conn, map.id, event).await.fit(req_id)? as u32;
+
+    check_update_redis_lb(conn, map_id, player_id, event)
+        .await
+        .fit(req_id)?;
 
     let mut ranked_records: Vec<RankedRecord> = vec![];
 

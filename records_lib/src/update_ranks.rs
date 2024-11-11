@@ -146,11 +146,11 @@ fn get_mariadb_lb<'a>(
 ///
 /// This function deletes the Redis key and reinserts all the records from the MariaDB database.
 /// All this is done in a single transaction.
-async fn force_update(
+pub async fn force_update(
     map_id: u32,
     event: OptEvent<'_, '_>,
     db: &mut DatabaseConnection,
-) -> Result<(), crate::error::RecordsError> {
+) -> RecordsResult<()> {
     let mut pipe = redis::pipe();
     let pipe = pipe.atomic();
 
@@ -253,7 +253,7 @@ async fn get_rank_failed(
     player_id: u32,
     event: OptEvent<'_, '_>,
     map_id: u32,
-) -> RecordsResult<crate::error::RecordsError> {
+) -> RecordsResult<RecordsError> {
     use std::fmt::Write as _;
 
     fn num_digits<N>(n: N) -> usize
