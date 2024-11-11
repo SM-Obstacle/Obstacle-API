@@ -101,6 +101,7 @@ async fn send_query(
     Ok(record_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn insert_record(
     db: &mut DatabaseConnection,
     map_id: u32,
