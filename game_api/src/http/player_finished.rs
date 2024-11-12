@@ -1,11 +1,9 @@
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
-use deadpool_redis::redis::AsyncCommands;
 use futures::TryStreamExt;
 use records_lib::{
     event::OptEvent,
     models, player,
-    redis_key::map_key,
     update_ranks::{get_rank, get_rank_opt, update_leaderboard},
     DatabaseConnection, NullableInteger,
 };
@@ -112,15 +110,17 @@ pub(super) async fn insert_record(
     at: chrono::NaiveDateTime,
     update_redis_lb: bool,
 ) -> RecordsResult<u32> {
-    let key = map_key(map_id, event);
     update_leaderboard(db, map_id, event).await?;
 
     if update_redis_lb {
-        let _: () = db
-            .redis_conn
-            .zadd(key, player_id, body.time)
-            .await
-            .with_api_err()?;
+        records_lib::update_ranks::update_rank(
+            &mut db.redis_conn,
+            map_id,
+            player_id,
+            body.time,
+            event,
+        )
+        .await?;
     }
 
     // FIXME: find a way to retry deadlock errors **without loops**

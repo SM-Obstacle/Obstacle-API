@@ -53,17 +53,81 @@
 //! * [`get_rank`], which expects the player ID *and* his real time (retrieved in advance
 //!   from MariaDB), and returns a non-optional rank.
 
-use deadpool_redis::redis::{self, AsyncCommands};
-use futures::{Stream, TryStreamExt};
-use itertools::{EitherOrBoth, Itertools};
-use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
-
 use crate::{
     error::{RecordsError, RecordsResult},
     event::OptEvent,
     redis_key::{map_key, MapKey},
     DatabaseConnection, RedisConnection,
 };
+use deadpool_redis::redis::{self, AsyncCommands};
+use futures::{Stream, TryStreamExt};
+use itertools::{EitherOrBoth, Itertools};
+use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
+use std::collections::HashSet;
+use std::future::Future;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
+
+const WAIT_UNLOCK_TIMEOUT: Duration = Duration::from_secs(10);
+
+static LB_LOCK: LazyLock<RwLock<HashSet<u32>>> = LazyLock::new(Default::default);
+
+async fn lock_within<F, Fut, R>(map_id: u32, f: F) -> R
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = R>,
+{
+    wait_unlock(map_id).await;
+    LB_LOCK.write().await.insert(map_id);
+    let r = f().await;
+    LB_LOCK.write().await.remove(&map_id);
+    r
+}
+
+async fn wait_unlock(map_id: u32) {
+    let i = Instant::now();
+
+    while i.elapsed() < WAIT_UNLOCK_TIMEOUT {
+        if !LB_LOCK.read().await.contains(&map_id) {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+
+    #[cfg(feature = "tracing")]
+    tracing::warn!("Waiting for unlock of {map_id} exceeded {WAIT_UNLOCK_TIMEOUT:?}");
+}
+
+/// Updates the rank of a player on a map.
+///
+/// This is roughly just a `ZRANK` command for the Redis leaderboard of the map.
+/// The difference is that it locks the leaderboard during the operation so that any other request
+/// that might access the ranks of the leaderboard must wait for it to finish.
+///
+/// # Arguments
+///
+/// * `redis_conn`: a connection to the Redis server
+/// * `map_id`: The ID of the map
+/// * `player_id`: The ID of the player
+/// * `time`: The time of the player on this map
+/// * `event`: The event context if provided
+pub async fn update_rank(
+    redis_conn: &mut RedisConnection,
+    map_id: u32,
+    player_id: u32,
+    time: i32,
+    event: OptEvent<'_, '_>,
+) -> RecordsResult<()> {
+    let _: () = lock_within(map_id, || async {
+        redis_conn
+            .zadd(map_key(map_id, event), player_id, time)
+            .await
+    })
+    .await?;
+
+    Ok(())
+}
 
 async fn count_records_map(
     db: &mut MySqlConnection,
@@ -158,19 +222,25 @@ pub async fn force_update(
 
     pipe.del(&key);
 
-    get_mariadb_lb(
-        &mut db.mysql_conn,
-        event,
-        map_id,
-        &get_mariadb_lb_query(event),
-    )
-    .map_ok(|(player_id, time): (u32, i32)| {
-        pipe.zadd(&key, player_id, time);
+    lock_within(map_id, || async {
+        get_mariadb_lb(
+            &mut db.mysql_conn,
+            event,
+            map_id,
+            &get_mariadb_lb_query(event),
+        )
+        .map_ok(|(player_id, time): (u32, i32)| {
+            pipe.zadd(&key, player_id, time);
+        })
+        .try_collect::<()>()
+        .await?;
+
+        let _: () = pipe.query_async(&mut db.redis_conn).await?;
+
+        RecordsResult::Ok(())
     })
-    .try_collect::<()>()
     .await?;
 
-    let _: () = pipe.query_async(&mut db.redis_conn).await?;
     Ok(())
 }
 
@@ -205,6 +275,8 @@ pub async fn get_rank_opt(
 ) -> RecordsResult<Option<i32>> {
     let key = map_key(map_id, event);
 
+    wait_unlock(map_id).await;
+
     // Get the score (time) of the player
     let Some(score): Option<i32> = redis_conn.zscore(&key, player_id).await? else {
         return Ok(None);
@@ -230,6 +302,8 @@ pub async fn get_rank(
     event: OptEvent<'_, '_>,
 ) -> RecordsResult<i32> {
     let key = map_key(map_id, event);
+
+    wait_unlock(map_id).await;
 
     // Get the score (time) of the player
     let score: Option<i32> = db.redis_conn.zscore(&key, player_id).await?;
