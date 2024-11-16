@@ -48,10 +48,7 @@
 //! But if we don't already know his time, then we can't tell if the returned rank from Redis
 //! is valid or not.
 //!
-//! This is why we have 2 functions to get the rank of a player:
-//! * [`get_rank_opt`], which expects the player ID, and returns an optional rank.
-//! * [`get_rank`], which expects the player ID *and* his real time (retrieved in advance
-//!   from MariaDB), and returns a non-optional rank.
+//! This is why the [`get_rank`] function requires the time of the player.
 
 use crate::{
     error::{RecordsError, RecordsResult},
@@ -273,27 +270,6 @@ async fn get_rank_impl(
         }
     })
     .await
-}
-
-/// Gets the rank of a player in a map, or None if not found.
-///
-/// The ranking type is the standard competition ranking (1224).
-///
-/// See the [module documentation](super) for more information about the ranking system.
-pub async fn get_rank_opt(
-    redis_conn: &mut RedisConnection,
-    map_id: u32,
-    player_id: u32,
-    event: OptEvent<'_, '_>,
-) -> RecordsResult<Option<i32>> {
-    let key = map_key(map_id, event);
-
-    // Get the score (time) of the player
-    let Some(score): Option<i32> = redis_conn.zscore(&key, player_id).await? else {
-        return Ok(None);
-    };
-
-    get_rank_impl(redis_conn, map_id, &key, score).await
 }
 
 /// Gets the rank of a player in a map, or fully updates its leaderboard if not found.
