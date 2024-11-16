@@ -255,20 +255,24 @@ pub async fn force_update(
 
 async fn get_rank_impl(
     redis_conn: &mut RedisConnection,
+    map_id: u32,
     key: &MapKey<'_>,
     time: i32,
 ) -> RecordsResult<Option<i32>> {
-    let player_ids: Vec<u32> = redis_conn
-        .zrangebyscore_limit(key, time, time, 0, 1)
-        .await?;
+    lock::within(map_id, || async {
+        let player_ids: Vec<u32> = redis_conn
+            .zrangebyscore_limit(key, time, time, 0, 1)
+            .await?;
 
-    match player_ids.first() {
-        Some(id) => {
-            let rank: Option<i32> = redis_conn.zrank(key, *id).await?;
-            Ok(rank.map(|rank| rank + 1))
+        match player_ids.first() {
+            Some(id) => {
+                let rank: Option<i32> = redis_conn.zrank(key, *id).await?;
+                Ok(rank.map(|rank| rank + 1))
+            }
+            None => Ok(None),
         }
-        None => Ok(None),
-    }
+    })
+    .await
 }
 
 /// Gets the rank of a player in a map, or None if not found.
@@ -282,17 +286,14 @@ pub async fn get_rank_opt(
     player_id: u32,
     event: OptEvent<'_, '_>,
 ) -> RecordsResult<Option<i32>> {
-    lock::within(map_id, || async {
-        let key = map_key(map_id, event);
+    let key = map_key(map_id, event);
 
-        // Get the score (time) of the player
-        let Some(score): Option<i32> = redis_conn.zscore(&key, player_id).await? else {
-            return Ok(None);
-        };
+    // Get the score (time) of the player
+    let Some(score): Option<i32> = redis_conn.zscore(&key, player_id).await? else {
+        return Ok(None);
+    };
 
-        get_rank_impl(redis_conn, &key, score).await
-    })
-    .await
+    get_rank_impl(redis_conn, map_id, &key, score).await
 }
 
 /// Gets the rank of a player in a map, or fully updates its leaderboard if not found.
@@ -311,26 +312,25 @@ pub async fn get_rank(
     time: i32,
     event: OptEvent<'_, '_>,
 ) -> RecordsResult<i32> {
-    lock::within(map_id, || async {
-        let key = map_key(map_id, event);
+    let key = map_key(map_id, event);
 
-        // Get the score (time) of the player
-        let score: Option<i32> = db.redis_conn.zscore(&key, player_id).await?;
-
-        if score.is_none() || score.is_some_and(|t| t != time) {
+    // Get the score (time) of the player
+    let time = match db.redis_conn.zscore(&key, player_id).await? {
+        Some(t) if t == time => t,
+        _ => {
             force_update(map_id, event, db).await?;
-        }
 
-        // There are cases where the time saved in MariaDB is different from the `time` argument.
-        // Thus, we need to get the time from Redis again, because it's the correct one at this point.
-        let time = db.redis_conn.zscore(&key, player_id).await?;
-
-        match get_rank_impl(&mut db.redis_conn, &key, time).await? {
-            Some(r) => Ok(r),
-            None => Err(get_rank_failed(db, player_id, time, event, map_id).await?),
+            // There are cases where the time saved in MariaDB is different from the `time` argument.
+            // Thus, we need to get the time from Redis again,
+            // because it's the correct one at this point.
+            db.redis_conn.zscore(&key, player_id).await?
         }
-    })
-    .await
+    };
+
+    match get_rank_impl(&mut db.redis_conn, map_id, &key, time).await? {
+        Some(r) => Ok(r),
+        None => Err(get_rank_failed(db, player_id, time, event, map_id).await?),
+    }
 }
 
 /// Panics with a clear message of the leaderboards differences between MariaDB and Redis.
