@@ -15,7 +15,7 @@ async-graphql = { workspace = true, features = [
   "dataloader",
   "apollo_tracing",
 ] }
-sqlx = { workspace = true, features = ["runtime-tokio-native-tls", "mysql"] }
+sqlx = { workspace = true }
 chrono = { workspace = true }
 deadpool = { workspace = true }
 deadpool-redis = { workspace = true }
@@ -36,9 +36,8 @@ anyhow = { workspace = true }
 dotenvy = { workspace = true }
 itertools = { workspace = true }
 once_cell = { workspace = true }
-records-lib = { workspace = true, features = ["tracing", "reqwest"] }
+records-lib = { workspace = true, features = ["tracing"] }
 mkenv = { workspace = true }
-actix-governor = "0.5.0"
 
 [dev-dependencies]
 tracing-test = "0.2.5"

@@ -1,0 +1,146 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Clippy",
+      "cargo": {
+        "args": ["clippy"]
+      },
+      "args": []
+    },
+    {
+      "command": "yarn dev",
+      "name": "Website dev",
+      "request": "launch",
+      "type": "node-terminal",
+      "cwd": "${workspaceFolder}/website"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in library 'game_api_lib'",
+      "cargo": {
+        "args": ["test", "--no-run", "--lib", "--package=game-api"],
+        "filter": {
+          "name": "game_api_lib",
+          "kind": "lib"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable 'game-api'",
+      "cargo": {
+        "args": ["build", "--bin=game-api", "--package=game-api"],
+        "filter": {
+          "name": "game-api",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in executable 'game-api'",
+      "cargo": {
+        "args": ["test", "--no-run", "--bin=game-api", "--package=game-api"],
+        "filter": {
+          "name": "game-api",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in library 'records_lib'",
+      "cargo": {
+        "args": ["test", "--no-run", "--lib", "--package=records-lib"],
+        "filter": {
+          "name": "records_lib",
+          "kind": "lib"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable 'socc'",
+      "cargo": {
+        "args": ["build", "--bin=socc", "--package=socc"],
+        "filter": {
+          "name": "socc",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in executable 'socc'",
+      "cargo": {
+        "args": ["test", "--no-run", "--bin=socc", "--package=socc"],
+        "filter": {
+          "name": "socc",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable 'admin'",
+      "cargo": {
+        "args": ["build", "--bin=admin", "--package=admin"],
+        "filter": {
+          "name": "admin",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in executable 'admin'",
+      "cargo": {
+        "args": ["test", "--no-run", "--bin=admin", "--package=admin"],
+        "filter": {
+          "name": "admin",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Run all services",
+      "configurations": [
+        "Debug executable 'game-api'",
+        "Debug executable 'socc'",
+        "Website dev"
+      ]
+    }
+  ]
+}
