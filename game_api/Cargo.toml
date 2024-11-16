@@ -38,7 +38,6 @@ itertools = { workspace = true }
 once_cell = { workspace = true }
 records-lib = { workspace = true, features = ["tracing", "reqwest"] }
 mkenv = { workspace = true }
-actix-governor = "0.5.0"
 
 [dev-dependencies]
 tracing-test = "0.2.5"
