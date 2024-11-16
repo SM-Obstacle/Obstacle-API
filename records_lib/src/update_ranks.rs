@@ -314,18 +314,11 @@ pub async fn get_rank(
 ) -> RecordsResult<i32> {
     let key = map_key(map_id, event);
 
-    // Get the score (time) of the player
-    let time = match db.redis_conn.zscore(&key, player_id).await? {
-        Some(t) if t == time => t,
-        _ => {
-            force_update(map_id, event, db).await?;
-
-            // There are cases where the time saved in MariaDB is different from the `time` argument.
-            // Thus, we need to get the time from Redis again,
-            // because it's the correct one at this point.
-            db.redis_conn.zscore(&key, player_id).await?
-        }
-    };
+    // Get the time of the player saved in Redis and update it if inconsistent
+    let score: Option<i32> = db.redis_conn.zscore(&key, player_id).await?;
+    if score.is_none_or(|t| t != time) {
+        force_update(map_id, event, db).await?;
+    }
 
     match get_rank_impl(&mut db.redis_conn, map_id, &key, time).await? {
         Some(r) => Ok(r),
