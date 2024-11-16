@@ -321,6 +321,10 @@ pub async fn get_rank(
             force_update(map_id, event, db).await?;
         }
 
+        // There are cases where the time saved in MariaDB is different from the `time` argument.
+        // Thus, we need to get the time from Redis again, because it's the correct one at this point.
+        let time = db.redis_conn.zscore(&key, player_id).await?;
+
         match get_rank_impl(&mut db.redis_conn, &key, time).await? {
             Some(r) => Ok(r),
             None => Err(get_rank_failed(db, player_id, time, event, map_id).await?),
