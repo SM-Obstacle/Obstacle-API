@@ -1,6 +1,7 @@
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
 use futures::TryStreamExt;
+use itertools::Itertools;
 use records_lib::{
     event::OptEvent,
     models, player,
@@ -78,13 +79,9 @@ async fn send_query(
     .fetch_one(&mut *db)
     .await?;
 
-    let cps_times = body
-        .cps
-        .iter()
-        .enumerate()
-        .map(|(i, t)| format!("({i}, {map_id}, {record_id}, {t})"))
-        .collect::<Vec<String>>()
-        .join(", ");
+    let cps_times = body.cps.iter().enumerate().format_with(", ", |(i, t), f| {
+        f(&format_args!("({i}, {map_id}, {record_id}, {t})"))
+    });
 
     sqlx::query(
         format!(
