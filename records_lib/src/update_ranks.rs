@@ -323,7 +323,7 @@ pub async fn get_rank(
 
         match get_rank_impl(&mut db.redis_conn, &key, time).await? {
             Some(r) => Ok(r),
-            None => Err(get_rank_failed(db, player_id, event, map_id).await?),
+            None => Err(get_rank_failed(db, player_id, time, event, map_id).await?),
         }
     })
     .await
@@ -336,6 +336,7 @@ pub async fn get_rank(
 async fn get_rank_failed(
     db: &mut DatabaseConnection,
     player_id: u32,
+    time: i32,
     event: OptEvent<'_, '_>,
     map_id: u32,
 ) -> RecordsResult<RecordsError> {
@@ -429,7 +430,7 @@ async fn get_rank_failed(
         }
     }
 
-    tracing::error!("missing player rank ({player_id} on {map_id})\n{msg}");
+    tracing::error!("missing player rank ({player_id} on map {map_id} with time {time})\n{msg}");
 
     Ok(RecordsError::Internal)
 }
