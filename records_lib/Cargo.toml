@@ -16,7 +16,7 @@ sqlx = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }
 mkenv = { workspace = true }
-reqwest = { workspace = true, optional = true }
+reqwest = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }
 itertools = { workspace = true }
