@@ -107,7 +107,7 @@ mod lock {
 
 /// Updates the rank of a player on a map.
 ///
-/// This is roughly just a `ZRANK` command for the Redis leaderboard of the map.
+/// This is roughly just a `ZADD` command for the Redis leaderboard of the map.
 /// The difference is that it locks the leaderboard during the operation so that any other request
 /// that might access the ranks of the leaderboard must wait for it to finish.
 ///
