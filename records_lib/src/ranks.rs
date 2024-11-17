@@ -373,10 +373,15 @@ async fn get_rank_failed(
                     "{c}{rpid:w4$} | {rtime:w4$} || {mpid:w4$} | {mtime:w4$}{c_end}",
                     c = if rpid != mpid || rtime != mtime {
                         "\x1b[93m"
+                    } else if player_id == rpid && player_id == mpid {
+                        "\x1b[34m"
                     } else {
                         ""
                     },
-                    c_end = if rpid != mpid || rtime != mtime {
+                    c_end = if rpid != mpid
+                        || rtime != mtime
+                        || (player_id == rpid && player_id == mpid)
+                    {
                         "\x1b[0m"
                     } else {
                         ""
