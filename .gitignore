@@ -9,6 +9,5 @@ Cargo.lock
 *.http
 *.csv
 etc/*
-gen_doc.sh
 
 website*
