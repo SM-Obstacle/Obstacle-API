@@ -194,7 +194,7 @@ fn get_mariadb_lb_query(event: OptEvent<'_, '_>) -> String {
                 WHERE map_id = ?
                     {and_event}
                 GROUP BY record_player_id
-                ORDER BY time, record_date ASC",
+                ORDER BY time, record_player_id ASC",
     )
 }
 
