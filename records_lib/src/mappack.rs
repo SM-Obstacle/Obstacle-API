@@ -8,12 +8,12 @@ use crate::{
     error::RecordsResult,
     event::OptEvent,
     models, must,
+    ranks::get_rank,
     redis_key::{
         mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_nb_map_key,
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
-    update_ranks::get_rank,
     DatabaseConnection, RedisConnection,
 };
 

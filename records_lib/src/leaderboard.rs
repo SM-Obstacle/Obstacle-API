@@ -4,7 +4,7 @@ use std::fmt;
 
 use futures::{Stream, TryStreamExt};
 
-use crate::{error::RecordsResult, event::OptEvent, update_ranks::get_rank, Database};
+use crate::{error::RecordsResult, event::OptEvent, ranks::get_rank, Database};
 
 /// The type returned by the [`compet_rank_by_key`](CompetRankingByKeyIter::compet_rank_by_key)
 /// method.

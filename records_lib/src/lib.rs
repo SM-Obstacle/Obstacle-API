@@ -22,9 +22,9 @@ pub mod mappack;
 pub mod models;
 pub mod must;
 pub mod player;
+pub mod ranks;
 pub mod redis_key;
 pub mod time;
-pub mod update_ranks;
 
 /// The MySQL/MariaDB pool type.
 pub type MySqlPool = Pool<MySql>;

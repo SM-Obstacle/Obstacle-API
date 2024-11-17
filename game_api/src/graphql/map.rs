@@ -9,8 +9,8 @@ use futures::StreamExt;
 use records_lib::{
     event::OptEvent,
     models::{self, Record},
+    ranks::{get_rank, update_leaderboard},
     redis_key::alone_map_key,
-    update_ranks::{get_rank, update_leaderboard},
     Database, DatabaseConnection,
 };
 use sqlx::{mysql, FromRow, MySqlPool};

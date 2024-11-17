@@ -5,12 +5,12 @@ use actix_web::{web::Query, Responder};
 use deadpool_redis::redis::AsyncCommands;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
-use records_lib::update_ranks::force_update;
+use records_lib::ranks::force_update;
 use records_lib::{
     event::OptEvent,
     models, must, player,
+    ranks::{get_rank, update_leaderboard},
     redis_key::map_key,
-    update_ranks::{get_rank, update_leaderboard},
     DatabaseConnection, MySqlPool,
 };
 use serde::{Deserialize, Serialize};

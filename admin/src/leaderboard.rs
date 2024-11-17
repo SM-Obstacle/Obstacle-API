@@ -3,7 +3,7 @@ use std::fmt;
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
-    map, must, player, redis_key::map_key, time::Time, update_ranks::get_rank, Database,
+    map, must, player, ranks::get_rank, redis_key::map_key, time::Time, Database,
     DatabaseConnection,
 };
 

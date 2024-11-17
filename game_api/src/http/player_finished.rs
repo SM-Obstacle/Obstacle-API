@@ -2,9 +2,7 @@ use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
 use futures::TryStreamExt;
 use itertools::Itertools;
-use records_lib::{
-    event::OptEvent, models, player, update_ranks, DatabaseConnection, NullableInteger,
-};
+use records_lib::{event::OptEvent, models, player, ranks, DatabaseConnection, NullableInteger};
 use serde::{Deserialize, Serialize};
 use sqlx::Connection;
 
@@ -104,10 +102,10 @@ pub(super) async fn insert_record(
     at: chrono::NaiveDateTime,
     update_redis_lb: bool,
 ) -> RecordsResult<u32> {
-    update_ranks::update_leaderboard(db, map_id, event).await?;
+    ranks::update_leaderboard(db, map_id, event).await?;
 
     if update_redis_lb {
-        update_ranks::update_rank(&mut db.redis_conn, map_id, player_id, body.time, event).await?;
+        ranks::update_rank(&mut db.redis_conn, map_id, player_id, body.time, event).await?;
     }
 
     // FIXME: find a way to retry deadlock errors **without loops**
@@ -194,7 +192,7 @@ pub async fn finished(
                 old,
                 params.rest.time,
                 params.rest.time < old,
-                Some(update_ranks::get_rank(db, map.id, player_id, old, event).await?),
+                Some(ranks::get_rank(db, map.id, player_id, old, event).await?),
             )
         } else {
             (params.rest.time, params.rest.time, true, None)
@@ -213,7 +211,7 @@ pub async fn finished(
     )
     .await?;
 
-    let current_rank = update_ranks::get_rank(
+    let current_rank = ranks::get_rank(
         db,
         map.id,
         player_id,

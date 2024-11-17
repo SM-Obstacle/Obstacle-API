@@ -8,7 +8,7 @@ use async_graphql::{connection, Enum, ErrorExtensionValues, Object, Value, ID};
 use async_graphql_actix_web::GraphQLRequest;
 use futures::StreamExt as _;
 use records_lib::models;
-use records_lib::update_ranks::get_rank;
+use records_lib::ranks::get_rank;
 use records_lib::{must, Database};
 use reqwest::Client;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
