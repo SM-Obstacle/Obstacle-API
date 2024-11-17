@@ -1,13 +1,9 @@
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
-use deadpool_redis::redis::AsyncCommands;
 use futures::TryStreamExt;
+use itertools::Itertools;
 use records_lib::{
-    event::OptEvent,
-    models, player,
-    redis_key::map_key,
-    update_ranks::{get_rank, get_rank_opt, update_leaderboard},
-    DatabaseConnection, NullableInteger,
+    event::OptEvent, models, player, update_ranks, DatabaseConnection, NullableInteger,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Connection;
@@ -80,13 +76,9 @@ async fn send_query(
     .fetch_one(&mut *db)
     .await?;
 
-    let cps_times = body
-        .cps
-        .iter()
-        .enumerate()
-        .map(|(i, t)| format!("({i}, {map_id}, {record_id}, {t})"))
-        .collect::<Vec<String>>()
-        .join(", ");
+    let cps_times = body.cps.iter().enumerate().format_with(", ", |(i, t), f| {
+        f(&format_args!("({i}, {map_id}, {record_id}, {t})"))
+    });
 
     sqlx::query(
         format!(
@@ -112,15 +104,10 @@ pub(super) async fn insert_record(
     at: chrono::NaiveDateTime,
     update_redis_lb: bool,
 ) -> RecordsResult<u32> {
-    let key = map_key(map_id, event);
-    update_leaderboard(db, map_id, event).await?;
+    update_ranks::update_leaderboard(db, map_id, event).await?;
 
     if update_redis_lb {
-        let _: () = db
-            .redis_conn
-            .zadd(key, player_id, body.time)
-            .await
-            .with_api_err()?;
+        update_ranks::update_rank(&mut db.redis_conn, map_id, player_id, body.time, event).await?;
     }
 
     // FIXME: find a way to retry deadlock errors **without loops**
@@ -201,15 +188,17 @@ pub async fn finished(
         .await
         .with_api_err()?;
 
-    let (old, new, has_improved) = if let Some(models::Record { time: old, .. }) = old_record {
-        let improved = params.rest.time < old;
-
-        (old, params.rest.time, improved)
-    } else {
-        (params.rest.time, params.rest.time, true)
-    };
-
-    let old_rank = get_rank_opt(&mut db.redis_conn, map.id, player_id, event).await?;
+    let (old, new, has_improved, old_rank) =
+        if let Some(models::Record { time: old, .. }) = old_record {
+            (
+                old,
+                params.rest.time,
+                params.rest.time < old,
+                Some(update_ranks::get_rank(db, map.id, player_id, old, event).await?),
+            )
+        } else {
+            (params.rest.time, params.rest.time, true, None)
+        };
 
     // We insert the record
     let record_id = insert_record(
@@ -224,7 +213,7 @@ pub async fn finished(
     )
     .await?;
 
-    let current_rank = get_rank(
+    let current_rank = update_ranks::get_rank(
         db,
         map.id,
         player_id,

@@ -48,15 +48,7 @@
 //! But if we don't already know his time, then we can't tell if the returned rank from Redis
 //! is valid or not.
 //!
-//! This is why we have 2 functions to get the rank of a player:
-//! * [`get_rank_opt`], which expects the player ID, and returns an optional rank.
-//! * [`get_rank`], which expects the player ID *and* his real time (retrieved in advance
-//!   from MariaDB), and returns a non-optional rank.
-
-use deadpool_redis::redis::{self, AsyncCommands};
-use futures::{Stream, TryStreamExt};
-use itertools::{EitherOrBoth, Itertools};
-use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
+//! This is why the [`get_rank`] function requires the time of the player.
 
 use crate::{
     error::{RecordsError, RecordsResult},
@@ -64,6 +56,84 @@ use crate::{
     redis_key::{map_key, MapKey},
     DatabaseConnection, RedisConnection,
 };
+use deadpool_redis::redis::{self, AsyncCommands};
+use futures::{Stream, TryStreamExt};
+use itertools::{EitherOrBoth, Itertools};
+use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
+use std::collections::HashSet;
+use std::future::Future;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
+
+mod lock {
+    use super::*;
+
+    const WAIT_UNLOCK_TIMEOUT: Duration = Duration::from_secs(10);
+
+    static LB_LOCK: LazyLock<RwLock<HashSet<u32>>> = LazyLock::new(Default::default);
+
+    pub(super) async fn within<F, Fut, R>(map_id: u32, f: F) -> R
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = R>,
+    {
+        wait_unlock(map_id).await;
+        LB_LOCK.write().await.insert(map_id);
+        let r = f().await;
+        LB_LOCK.write().await.remove(&map_id);
+        r
+    }
+
+    async fn wait_unlock(map_id: u32) {
+        let i = Instant::now();
+
+        while i.elapsed() < WAIT_UNLOCK_TIMEOUT {
+            if !LB_LOCK.read().await.contains(&map_id) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        #[cfg(feature = "tracing")]
+        tracing::warn!(
+            "Waiting for unlock of {map_id} exceeded {WAIT_UNLOCK_TIMEOUT:?}, unlocking it"
+        );
+        LB_LOCK.write().await.remove(&map_id);
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Unlocked {map_id}");
+    }
+}
+
+/// Updates the rank of a player on a map.
+///
+/// This is roughly just a `ZRANK` command for the Redis leaderboard of the map.
+/// The difference is that it locks the leaderboard during the operation so that any other request
+/// that might access the ranks of the leaderboard must wait for it to finish.
+///
+/// # Arguments
+///
+/// * `redis_conn`: a connection to the Redis server
+/// * `map_id`: The ID of the map
+/// * `player_id`: The ID of the player
+/// * `time`: The time of the player on this map
+/// * `event`: The event context if provided
+pub async fn update_rank(
+    redis_conn: &mut RedisConnection,
+    map_id: u32,
+    player_id: u32,
+    time: i32,
+    event: OptEvent<'_, '_>,
+) -> RecordsResult<()> {
+    let _: () = lock::within(map_id, || async {
+        redis_conn
+            .zadd(map_key(map_id, event), player_id, time)
+            .await
+    })
+    .await?;
+
+    Ok(())
+}
 
 async fn count_records_map(
     db: &mut MySqlConnection,
@@ -156,61 +226,50 @@ pub async fn force_update(
 
     let key = map_key(map_id, event);
 
-    pipe.del(&key);
+    lock::within(map_id, || async {
+        pipe.del(&key);
 
-    get_mariadb_lb(
-        &mut db.mysql_conn,
-        event,
-        map_id,
-        &get_mariadb_lb_query(event),
-    )
-    .map_ok(|(player_id, time): (u32, i32)| {
-        pipe.zadd(&key, player_id, time);
+        get_mariadb_lb(
+            &mut db.mysql_conn,
+            event,
+            map_id,
+            &get_mariadb_lb_query(event),
+        )
+        .map_ok(|(player_id, time): (u32, i32)| {
+            pipe.zadd(&key, player_id, time);
+        })
+        .try_collect::<()>()
+        .await?;
+
+        let _: () = pipe.query_async(&mut db.redis_conn).await?;
+
+        RecordsResult::Ok(())
     })
-    .try_collect::<()>()
     .await?;
 
-    let _: () = pipe.query_async(&mut db.redis_conn).await?;
     Ok(())
 }
 
 async fn get_rank_impl(
     redis_conn: &mut RedisConnection,
+    map_id: u32,
     key: &MapKey<'_>,
     time: i32,
 ) -> RecordsResult<Option<i32>> {
-    let player_ids: Vec<u32> = redis_conn
-        .zrangebyscore_limit(key, time, time, 0, 1)
-        .await?;
+    lock::within(map_id, || async {
+        let player_ids: Vec<u32> = redis_conn
+            .zrangebyscore_limit(key, time, time, 0, 1)
+            .await?;
 
-    match player_ids.first() {
-        Some(id) => {
-            let rank: Option<i32> = redis_conn.zrank(key, *id).await?;
-            Ok(rank.map(|rank| rank + 1))
+        match player_ids.first() {
+            Some(id) => {
+                let rank: Option<i32> = redis_conn.zrank(key, *id).await?;
+                Ok(rank.map(|rank| rank + 1))
+            }
+            None => Ok(None),
         }
-        None => Ok(None),
-    }
-}
-
-/// Gets the rank of a player in a map, or None if not found.
-///
-/// The ranking type is the standard competition ranking (1224).
-///
-/// See the [module documentation](super) for more information about the ranking system.
-pub async fn get_rank_opt(
-    redis_conn: &mut RedisConnection,
-    map_id: u32,
-    player_id: u32,
-    event: OptEvent<'_, '_>,
-) -> RecordsResult<Option<i32>> {
-    let key = map_key(map_id, event);
-
-    // Get the score (time) of the player
-    let Some(score): Option<i32> = redis_conn.zscore(&key, player_id).await? else {
-        return Ok(None);
-    };
-
-    get_rank_impl(redis_conn, &key, score).await
+    })
+    .await
 }
 
 /// Gets the rank of a player in a map, or fully updates its leaderboard if not found.
@@ -231,16 +290,15 @@ pub async fn get_rank(
 ) -> RecordsResult<i32> {
     let key = map_key(map_id, event);
 
-    // Get the score (time) of the player
+    // Get the time of the player saved in Redis and update it if inconsistent
     let score: Option<i32> = db.redis_conn.zscore(&key, player_id).await?;
-
-    if score.is_none() || score.is_some_and(|t| t != time) {
+    if score.is_none_or(|t| t != time) {
         force_update(map_id, event, db).await?;
     }
 
-    match get_rank_impl(&mut db.redis_conn, &key, time).await? {
+    match get_rank_impl(&mut db.redis_conn, map_id, &key, time).await? {
         Some(r) => Ok(r),
-        None => Err(get_rank_failed(db, player_id, event, map_id).await?),
+        None => Err(get_rank_failed(db, player_id, time, event, map_id).await?),
     }
 }
 
@@ -251,6 +309,7 @@ pub async fn get_rank(
 async fn get_rank_failed(
     db: &mut DatabaseConnection,
     player_id: u32,
+    time: i32,
     event: OptEvent<'_, '_>,
     map_id: u32,
 ) -> RecordsResult<RecordsError> {
@@ -344,7 +403,7 @@ async fn get_rank_failed(
         }
     }
 
-    tracing::error!("missing player rank ({player_id} on {map_id})\n{msg}");
+    tracing::error!("missing player rank ({player_id} on map {map_id} with time {time})\n{msg}");
 
     Ok(RecordsError::Internal)
 }
