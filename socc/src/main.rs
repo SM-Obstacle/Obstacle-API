@@ -8,7 +8,7 @@ use std::{future::Future, time::Duration};
 
 use anyhow::Context;
 use mkenv::Env as _;
-use records_lib::{Database, DatabaseConnection, DbEnv, LibEnv};
+use records_lib::{Database, DbEnv, LibEnv};
 use tokio::{task::JoinHandle, time};
 use tracing::info;
 
@@ -16,15 +16,14 @@ mod campaign_scores;
 
 async fn handle<F, Fut>(db: Database, period: Duration, f: F) -> anyhow::Result<()>
 where
-    F: Fn(DatabaseConnection) -> Fut,
+    F: Fn(Database) -> Fut,
     Fut: Future<Output = anyhow::Result<()>>,
 {
     let mut interval = time::interval(period);
 
     loop {
         interval.tick().await;
-        let conn = db.acquire().await?;
-        f(conn).await?;
+        f(db.clone()).await?;
     }
 }
 

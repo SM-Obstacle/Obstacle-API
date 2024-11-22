@@ -8,6 +8,7 @@ use actix_web::{
 use futures::TryStreamExt;
 use itertools::Itertools as _;
 use records_lib::{
+    acquire,
     event::{self, OptEvent},
     models::Banishment,
     must, Database,
@@ -205,7 +206,7 @@ pub async fn finished_at(
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
-    let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
+    let mut conn = acquire!(db.with_api_err().fit(req_id)?);
 
     let res = pf::finished(
         login,

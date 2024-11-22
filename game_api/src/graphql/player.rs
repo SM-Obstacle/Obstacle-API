@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use async_graphql::{connection, dataloader::Loader, Context, Enum, ID};
 use futures::StreamExt;
 use records_lib::{
+    acquire,
     models::{self, Role},
     Database,
 };
@@ -175,7 +176,7 @@ impl Player {
 
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
-        let mut conn = db.acquire().await?;
+        let mut conn = acquire!(db?);
 
         while let Some(record) = records.next().await {
             let record = record?;

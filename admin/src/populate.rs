@@ -5,7 +5,7 @@ use deadpool_redis::redis::AsyncCommands as _;
 use futures::{stream, StreamExt as _, TryStreamExt};
 use itertools::Itertools as _;
 use records_lib::{
-    event, map,
+    acquire, event, map,
     mappack::{self, AnyMappackId},
     models, must,
     redis_key::mappack_key,
@@ -208,13 +208,13 @@ pub async fn populate(
         kind,
     }: PopulateCommand,
 ) -> anyhow::Result<()> {
-    let mut conn = db.acquire().await?;
+    let mut conn = acquire!(db?);
 
     let (event, edition) =
-        must::have_event_edition(&mut conn.mysql_conn, &event_handle, event_edition).await?;
+        must::have_event_edition(conn.mysql_conn, &event_handle, event_edition).await?;
 
     let categories =
-        event::get_categories_by_edition_id(&mut conn.mysql_conn, event.id, edition.id).await?;
+        event::get_categories_by_edition_id(conn.mysql_conn, event.id, edition.id).await?;
 
     if !categories.is_empty() {
         tracing::info!(
@@ -251,10 +251,8 @@ pub async fn populate(
             tracing::info!("Found {} map(s) in MX mappack with ID {mx_id}", maps.len());
 
             for map in maps {
-                let player = must::have_player(&mut conn.mysql_conn, &map.AuthorLogin).await?;
-                let map_id = match map::get_map_from_uid(&mut conn.mysql_conn, &map.TrackUID)
-                    .await?
-                {
+                let player = must::have_player(conn.mysql_conn, &map.AuthorLogin).await?;
+                let map_id = match map::get_map_from_uid(conn.mysql_conn, &map.TrackUID).await? {
                     Some(map) => map.id,
                     None => sqlx::query_scalar(
                         "insert into maps (game_id, player_id, name) values (?, ?, ?) returning id",
@@ -262,7 +260,7 @@ pub async fn populate(
                     .bind(&map.TrackUID)
                     .bind(player.id)
                     .bind(&map.GbxMapName)
-                    .fetch_one(&mut *conn.mysql_conn)
+                    .fetch_one(&mut **conn.mysql_conn)
                     .await?,
                 };
 
@@ -274,7 +272,7 @@ pub async fn populate(
                 .bind(edition.id)
                 .bind(map_id)
                 .bind(map.MapID)
-                .execute(&mut *conn.mysql_conn)
+                .execute(&mut **conn.mysql_conn)
                 .await?;
             }
 
@@ -322,7 +320,7 @@ pub async fn populate(
     ) in rows
     {
         let (mx_id, map) = match id {
-            Id::MapUid { map_uid } => (None, must::have_map(&mut conn.mysql_conn, &map_uid).await?),
+            Id::MapUid { map_uid } => (None, must::have_map(conn.mysql_conn, &map_uid).await?),
             Id::MxId { mx_id } => (
                 Some(mx_id),
                 mx_maps
@@ -336,7 +334,7 @@ pub async fn populate(
             Some(id) => match id {
                 OriginalId::MapUid { original_map_uid } => (
                     None,
-                    Some(must::have_map(&mut conn.mysql_conn, &original_map_uid).await?),
+                    Some(must::have_map(conn.mysql_conn, &original_map_uid).await?),
                 ),
                 OriginalId::MxId { original_mx_id } => (
                     Some(original_mx_id),
@@ -393,7 +391,7 @@ pub async fn populate(
         .bind(silver_time)
         .bind(gold_time)
         .bind(author_time)
-        .execute(&mut *conn.mysql_conn)
+        .execute(&mut **conn.mysql_conn)
         .await?;
 
         let _: () = conn

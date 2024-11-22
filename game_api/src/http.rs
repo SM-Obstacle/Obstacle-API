@@ -6,7 +6,7 @@ use std::fmt;
 use actix_web::web::{JsonConfig, Query};
 use actix_web::{web, HttpResponse, Scope};
 
-use records_lib::Database;
+use records_lib::{acquire, Database};
 use serde::Serialize;
 use tracing_actix_web::RequestId;
 
@@ -181,14 +181,7 @@ async fn overview(
     db: Res<Database>,
     Query(query): overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    let mut conn = db.acquire().await.fit(req_id)?;
+    let conn = acquire!(db.with_api_err().fit(req_id)?);
 
-    overview::overview(
-        req_id,
-        &db.mysql_pool,
-        &mut conn,
-        query.into_params(None),
-        Default::default(),
-    )
-    .await
+    overview::overview(req_id, conn, query.into_params(None), Default::default()).await
 }

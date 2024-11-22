@@ -93,7 +93,7 @@ async fn send_query(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn insert_record(
-    db: &mut DatabaseConnection,
+    db: &mut DatabaseConnection<'_>,
     map_id: u32,
     player_id: u32,
     body: InsertRecordParams,
@@ -105,7 +105,7 @@ pub(super) async fn insert_record(
     ranks::update_leaderboard(db, map_id, event).await?;
 
     if update_redis_lb {
-        ranks::update_rank(&mut db.redis_conn, map_id, player_id, body.time, event).await?;
+        ranks::update_rank(db.redis_conn, map_id, player_id, body.time, event).await?;
     }
 
     // FIXME: find a way to retry deadlock errors **without loops**
@@ -135,13 +135,13 @@ pub struct FinishedOutput {
 
 pub async fn finished(
     login: String,
-    db: &mut DatabaseConnection,
+    db: &mut DatabaseConnection<'_>,
     params: FinishedParams<'_>,
     event: OptEvent<'_, '_>,
     at: chrono::NaiveDateTime,
 ) -> RecordsResult<FinishedOutput> {
     // First, we retrieve all what we need to save the record
-    let player_id = records_lib::must::have_player(&mut db.mysql_conn, &login)
+    let player_id = records_lib::must::have_player(db.mysql_conn, &login)
         .await?
         .id;
     let map @ models::Map {
@@ -150,7 +150,7 @@ pub async fn finished(
         ..
     } = match params.map {
         MapParam::AlreadyQueried(map) => map,
-        MapParam::Uid(uid) => &records_lib::must::have_map(&mut db.mysql_conn, &uid).await?,
+        MapParam::Uid(uid) => &records_lib::must::have_map(db.mysql_conn, &uid).await?,
     };
 
     let (join_event, and_event) = event.get_join();
@@ -182,7 +182,7 @@ pub async fn finished(
     }
 
     let old_record = query
-        .fetch_optional(&mut *db.mysql_conn)
+        .fetch_optional(&mut **db.mysql_conn)
         .await
         .with_api_err()?;
 
@@ -223,13 +223,13 @@ pub async fn finished(
     // If the record isn't in an event context, save the record to the events that have the map
     // and allow records saving without an event context.
     if event.0.is_none() {
-        let editions = records_lib::event::get_editions_which_contain(&mut db.mysql_conn, *map_id)
+        let editions = records_lib::event::get_editions_which_contain(db.mysql_conn, *map_id)
             .try_collect::<Vec<_>>()
             .await
             .with_api_err()?;
 
         for (event_id, edition_id, original_map_id) in editions {
-            event::insert_event_record(&mut db.mysql_conn, record_id, event_id, edition_id).await?;
+            event::insert_event_record(db.mysql_conn, record_id, event_id, edition_id).await?;
 
             let Some(original_map_id) = original_map_id else {
                 continue;
@@ -237,7 +237,7 @@ pub async fn finished(
 
             // Get previous the time of the player on the original map, to check if it would be a PB or not.
             let previous_time = player::get_time_on_map(
-                &mut db.mysql_conn,
+                db.mysql_conn,
                 player_id,
                 original_map_id,
                 Default::default(),

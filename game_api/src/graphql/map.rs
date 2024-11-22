@@ -7,11 +7,12 @@ use async_graphql::{
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
+    acquire,
     event::OptEvent,
     models::{self, Record},
     ranks::{get_rank, update_leaderboard},
     redis_key::alone_map_key,
-    Database, DatabaseConnection,
+    Database,
 };
 use sqlx::{mysql, FromRow, MySqlPool};
 
@@ -46,7 +47,7 @@ impl Map {
         event: OptEvent<'_, '_>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
-        let mut conn = db.acquire().await?;
+        let mut conn = acquire!(db?);
 
         let key = alone_map_key(self.inner.id);
 
@@ -111,11 +112,6 @@ impl Map {
 
         let mut records = query.fetch(&db.mysql_pool);
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
-
-        let mut conn = DatabaseConnection {
-            mysql_conn: db.mysql_pool.acquire().await?,
-            ..conn
-        };
 
         while let Some(record) = records.next().await {
             let record = record?;

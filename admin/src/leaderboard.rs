@@ -3,7 +3,7 @@ use std::fmt;
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
-    map, must, player, ranks::get_rank, redis_key::map_key, time::Time, Database,
+    acquire, map, must, player, ranks::get_rank, redis_key::map_key, time::Time, Database,
     DatabaseConnection,
 };
 
@@ -59,7 +59,7 @@ struct LbLine {
 }
 
 async fn mariadb_lb(
-    db: &mut DatabaseConnection,
+    db: &mut DatabaseConnection<'_>,
     map_id: u32,
     offset: Option<isize>,
     limit: Option<isize>,
@@ -102,7 +102,7 @@ async fn mariadb_lb(
 
     let mut lb = sqlx::query_as(query)
         .bind(map_id)
-        .fetch(&mut *db.mysql_conn)
+        .fetch(&mut **db.mysql_conn)
         .enumerate()
         .map(|(i, line)| (i + 1, line));
 
@@ -126,7 +126,7 @@ async fn mariadb_lb(
 }
 
 async fn redis_lb(
-    db: &mut DatabaseConnection,
+    db: &mut DatabaseConnection<'_>,
     map_id: u32,
     offset: Option<isize>,
     limit: Option<isize>,
@@ -149,7 +149,7 @@ async fn redis_lb(
             continue;
         };
 
-        let player = player::get_player_from_id(&mut *db.mysql_conn, player_id as _).await?;
+        let player = player::get_player_from_id(&mut **db.mysql_conn, player_id as _).await?;
         let rank = get_rank(db, map_id, player_id as _, time as _, Default::default()).await?;
 
         table.add_row(prettytable::row![
@@ -166,10 +166,10 @@ async fn redis_lb(
     Ok(())
 }
 
-async fn full(db: &mut DatabaseConnection, cmd: FullCmd) -> anyhow::Result<()> {
+async fn full(db: &mut DatabaseConnection<'_>, cmd: FullCmd) -> anyhow::Result<()> {
     let map = match cmd.map {
-        Map::MapId { map_id } => map::get_map_from_id(&mut db.mysql_conn, map_id).await?,
-        Map::MapUid { map_uid } => must::have_map(&mut db.mysql_conn, &map_uid).await?,
+        Map::MapId { map_id } => map::get_map_from_id(db.mysql_conn, map_id).await?,
+        Map::MapUid { map_uid } => must::have_map(db.mysql_conn, &map_uid).await?,
     };
 
     match cmd.source {
@@ -179,7 +179,7 @@ async fn full(db: &mut DatabaseConnection, cmd: FullCmd) -> anyhow::Result<()> {
 }
 
 pub async fn leaderboard(db: Database, cmd: LbCommand) -> anyhow::Result<()> {
-    let mut conn = db.acquire().await?;
+    let mut conn = acquire!(db?);
 
     match cmd {
         LbCommand::Full(full_cmd) => full(&mut conn, full_cmd).await?,

@@ -167,7 +167,7 @@ async fn count_records_map(
 ///
 /// It returns the number of records in the map.
 pub async fn update_leaderboard(
-    db: &mut DatabaseConnection,
+    db: &mut DatabaseConnection<'_>,
     map_id: u32,
     event: OptEvent<'_, '_>,
 ) -> RecordsResult<i64> {
@@ -175,7 +175,7 @@ pub async fn update_leaderboard(
         .redis_conn
         .zcount(map_key(map_id, event), "-inf", "+inf")
         .await?;
-    let mysql_count: i64 = count_records_map(&mut db.mysql_conn, map_id, event).await?;
+    let mysql_count: i64 = count_records_map(db.mysql_conn, map_id, event).await?;
 
     if redis_count != mysql_count {
         force_update(map_id, event, db).await?;
@@ -219,7 +219,7 @@ fn get_mariadb_lb<'a>(
 pub async fn force_update(
     map_id: u32,
     event: OptEvent<'_, '_>,
-    db: &mut DatabaseConnection,
+    db: &mut DatabaseConnection<'_>,
 ) -> RecordsResult<()> {
     let mut pipe = redis::pipe();
     let pipe = pipe.atomic();
@@ -229,19 +229,14 @@ pub async fn force_update(
     lock::within(map_id, || async {
         pipe.del(&key);
 
-        get_mariadb_lb(
-            &mut db.mysql_conn,
-            event,
-            map_id,
-            &get_mariadb_lb_query(event),
-        )
-        .map_ok(|(player_id, time): (u32, i32)| {
-            pipe.zadd(&key, player_id, time);
-        })
-        .try_collect::<()>()
-        .await?;
+        get_mariadb_lb(db.mysql_conn, event, map_id, &get_mariadb_lb_query(event))
+            .map_ok(|(player_id, time): (u32, i32)| {
+                pipe.zadd(&key, player_id, time);
+            })
+            .try_collect::<()>()
+            .await?;
 
-        let _: () = pipe.query_async(&mut db.redis_conn).await?;
+        let _: () = pipe.query_async(&mut **db.redis_conn).await?;
 
         RecordsResult::Ok(())
     })
@@ -282,7 +277,7 @@ async fn get_rank_impl(
 ///
 /// See the [module documentation](super) for more information.
 pub async fn get_rank(
-    db: &mut DatabaseConnection,
+    db: &mut DatabaseConnection<'_>,
     map_id: u32,
     player_id: u32,
     time: i32,
@@ -296,7 +291,7 @@ pub async fn get_rank(
         force_update(map_id, event, db).await?;
     }
 
-    match get_rank_impl(&mut db.redis_conn, map_id, &key, time).await? {
+    match get_rank_impl(db.redis_conn, map_id, &key, time).await? {
         Some(r) => Ok(r),
         None => Err(get_rank_failed(db, player_id, time, event, map_id).await?),
     }
@@ -307,7 +302,7 @@ pub async fn get_rank(
 /// The `O` generic parameter is used to return the same type as the [`get_rank`] function.
 #[cold]
 async fn get_rank_failed(
-    db: &mut DatabaseConnection,
+    db: &mut DatabaseConnection<'_>,
     player_id: u32,
     time: i32,
     event: OptEvent<'_, '_>,
@@ -325,14 +320,9 @@ async fn get_rank_failed(
     let key = &map_key(map_id, event);
     let redis_lb: Vec<i64> = db.redis_conn.zrange_withscores(key, 0, -1).await?;
 
-    let mariadb_lb = get_mariadb_lb(
-        &mut db.mysql_conn,
-        event,
-        map_id,
-        &get_mariadb_lb_query(event),
-    )
-    .try_collect::<Vec<_>>()
-    .await?;
+    let mariadb_lb = get_mariadb_lb(db.mysql_conn, event, map_id, &get_mariadb_lb_query(event))
+        .try_collect::<Vec<_>>()
+        .await?;
 
     let lb = redis_lb
         .chunks_exact(2)

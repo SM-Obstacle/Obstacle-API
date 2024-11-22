@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use async_graphql::SimpleObject;
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
-    map,
+    acquire, map,
     mappack::{update_mappack, AnyMappackId},
     must, player,
     redis_key::{
@@ -31,7 +31,7 @@ struct MXMappackInfoResponse {
 
 async fn fill_mappack(
     client: &Client,
-    conn: &mut DatabaseConnection,
+    conn: &mut DatabaseConnection<'_>,
     mappack: AnyMappackId<'_>,
     mappack_id: u32,
 ) -> RecordsResult<()> {
@@ -57,7 +57,7 @@ async fn fill_mappack(
 
     for mx_map in maps {
         // We check that the map exists in our database
-        let _ = must::have_map(&mut conn.mysql_conn, &mx_map.TrackUID).await?;
+        let _ = must::have_map(conn.mysql_conn, &mx_map.TrackUID).await?;
         let _: () = conn
             .redis_conn
             .sadd(mappack_key(mappack), mx_map.TrackUID)
@@ -188,7 +188,7 @@ impl MappackPlayer<'_> {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<MappackMap>> {
         let db = ctx.data_unchecked::<Database>();
-        let mut conn = db.acquire().await?;
+        let conn = acquire!(db?);
 
         let maps_uids: Vec<String> = conn
             .redis_conn
@@ -217,7 +217,7 @@ impl MappackPlayer<'_> {
                     game_id,
                 ))
                 .await?;
-            let map = must::have_map(&mut conn.mysql_conn, game_id).await?;
+            let map = must::have_map(conn.mysql_conn, game_id).await?;
 
             out.push(MappackMap {
                 map: map.into(),
@@ -309,7 +309,7 @@ impl Mappack {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<MappackPlayer<'a>>> {
         let db = ctx.data_unchecked::<Database>();
-        let mut conn = db.acquire().await?;
+        let conn = acquire!(db?);
 
         let leaderboard: Vec<u32> = conn
             .redis_conn
@@ -319,7 +319,7 @@ impl Mappack {
         let mut out = Vec::with_capacity(leaderboard.len());
 
         for id in leaderboard {
-            let player = player::get_player_from_id(&mut *conn.mysql_conn, id).await?;
+            let player = player::get_player_from_id(&mut **conn.mysql_conn, id).await?;
             out.push(MappackPlayer {
                 inner: player.into(),
                 mappack: self,
@@ -371,7 +371,7 @@ pub async fn get_mappack(
     mappack_id: String,
 ) -> RecordsResult<Mappack> {
     let db = ctx.data_unchecked::<Database>();
-    let mut conn = db.acquire().await.with_api_err()?;
+    let mut conn = acquire!(db.with_api_err()?);
     let mappack = AnyMappackId::Id(&mappack_id);
 
     let mappack_uids: Vec<String> = conn

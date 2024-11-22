@@ -7,8 +7,8 @@ use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use async_graphql::{connection, Enum, ErrorExtensionValues, Object, Value, ID};
 use async_graphql_actix_web::GraphQLRequest;
 use futures::StreamExt as _;
-use records_lib::models;
 use records_lib::ranks::get_rank;
+use records_lib::{acquire, models};
 use records_lib::{must, Database};
 use reqwest::Client;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
@@ -370,7 +370,7 @@ impl QueryRoot {
         record_id: u32,
     ) -> async_graphql::Result<RankedRecord> {
         let db = ctx.data_unchecked::<Database>();
-        let mut conn = db.acquire().await?;
+        let mut conn = acquire!(db?);
 
         let Some(record) =
             sqlx::query_as::<_, models::Record>("select * from records where record_id = ?")
@@ -440,7 +440,7 @@ impl QueryRoot {
         let mut records = sqlx::query_as::<_, models::Record>(&query).fetch(&db.mysql_pool);
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
-        let mut conn = db.acquire().await?;
+        let mut conn = acquire!(db?);
 
         while let Some(record) = records.next().await {
             let record = record?;

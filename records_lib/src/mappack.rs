@@ -148,7 +148,7 @@ impl AnyMappackId<'_> {
 #[cfg_attr(feature = "tracing", tracing::instrument(skip(db), err))]
 pub async fn update_mappack(
     mappack: AnyMappackId<'_>,
-    db: &mut DatabaseConnection,
+    db: &mut DatabaseConnection<'_>,
 ) -> RecordsResult<usize> {
     // Calculate the scores
     let scores = calc_scores(mappack, db).await?;
@@ -161,7 +161,7 @@ pub async fn update_mappack(
     let total_scores = scores.scores.len();
 
     // Then save them to the Redis database for cache-handling
-    save(mappack, scores, &mut db.redis_conn).await?;
+    save(mappack, scores, db.redis_conn).await?;
 
     // And we save it to the registered mappacks set.
     if mappack.has_ttl() {
@@ -328,7 +328,7 @@ async fn save(
 #[cfg_attr(feature = "tracing", tracing::instrument(skip(db)))]
 async fn calc_scores(
     mappack: AnyMappackId<'_>,
-    db: &mut DatabaseConnection,
+    db: &mut DatabaseConnection<'_>,
 ) -> RecordsResult<Option<MappackScores>> {
     let mappack_key = mappack_key(mappack);
     let mappack_uids: Vec<String> = db.redis_conn.smembers(&mappack_key).await?;
@@ -351,7 +351,7 @@ async fn calc_scores(
     } else {
         let mut out = Vec::with_capacity(mappack_uids.len());
         for map_uid in &mappack_uids {
-            let map = must::have_map(&mut db.mysql_conn, map_uid).await?;
+            let map = must::have_map(db.mysql_conn, map_uid).await?;
             maps.push(MappackMap {
                 map_id: map.game_id.clone(),
                 last_rank: 0,
@@ -381,7 +381,7 @@ async fn calc_scores(
             query
         };
 
-        let res = query.fetch_all(&mut *db.mysql_conn).await?;
+        let res = query.fetch_all(&mut **db.mysql_conn).await?;
 
         let mut records = Vec::with_capacity(res.len());
 

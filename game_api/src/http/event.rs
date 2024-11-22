@@ -5,6 +5,7 @@ use actix_web::{
 use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{
+    acquire,
     error::RecordsError,
     event::{self, EventMap, OptEvent},
     models, player, Database, NullableInteger, NullableText,
@@ -414,10 +415,10 @@ async fn edition_overview(
     path: Path<(String, u32)>,
     query: overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
+    let conn = acquire!(db.with_api_err().fit(req_id)?);
     let (event, edition) = path.into_inner();
     let (event, edition, EventMap { map, .. }) = records_lib::must::have_event_edition_with_map(
-        &mut conn.mysql_conn,
+        conn.mysql_conn,
         &query.map_uid,
         event,
         edition,
@@ -432,8 +433,7 @@ async fn edition_overview(
 
     overview::overview(
         req_id,
-        &db.mysql_pool,
-        &mut conn,
+        conn,
         query.0.into_params(Some(&map)),
         OptEvent::new(&event, &edition),
     )
@@ -467,7 +467,7 @@ pub async fn edition_finished_at(
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
-    let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
+    let mut conn = acquire!(db.with_api_err().fit(req_id)?);
 
     let (event_handle, edition_id) = path.into_inner();
 
@@ -481,7 +481,7 @@ pub async fn edition_finished_at(
             original_map_id,
         },
     ) = records_lib::must::have_event_edition_with_map(
-        &mut conn.mysql_conn,
+        conn.mysql_conn,
         &body.map_uid,
         event_handle,
         edition_id,
@@ -508,7 +508,7 @@ pub async fn edition_finished_at(
     if let Some(original_map_id) = original_map_id {
         // Get the previous time of the player on the original map to check if it's a PB
         let time_on_previous = player::get_time_on_map(
-            &mut conn.mysql_conn,
+            conn.mysql_conn,
             res.player_id,
             original_map_id,
             Default::default(),
@@ -536,7 +536,7 @@ pub async fn edition_finished_at(
     // Then we insert it for the event edition records.
     // This is not part of the transaction, because we don't want to roll back
     // the insertion of the record if this query fails.
-    insert_event_record(&mut conn.mysql_conn, res.record_id, event.id, edition.id)
+    insert_event_record(conn.mysql_conn, res.record_id, event.id, edition.id)
         .await
         .fit(req_id)?;
 

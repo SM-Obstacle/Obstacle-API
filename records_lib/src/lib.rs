@@ -8,8 +8,6 @@
 
 #![warn(missing_docs)]
 
-use sqlx::{pool::PoolConnection, MySql, Pool};
-
 mod env;
 mod modeversion;
 mod mptypes;
@@ -24,10 +22,11 @@ pub mod must;
 pub mod player;
 pub mod ranks;
 pub mod redis_key;
+pub mod table_lock;
 pub mod time;
 
 /// The MySQL/MariaDB pool type.
-pub type MySqlPool = Pool<MySql>;
+pub type MySqlPool = sqlx::Pool<sqlx::MySql>;
 /// The Redis pool type.
 pub type RedisPool = deadpool_redis::Pool;
 /// The type of a Redis connection.
@@ -37,14 +36,12 @@ pub use env::*;
 pub use modeversion::*;
 pub use mptypes::*;
 
-use self::error::RecordsResult;
-
 /// Represents a connection to the API database, both MariaDB and Redis.
-pub struct DatabaseConnection {
+pub struct DatabaseConnection<'a> {
     /// The connection to the MariaDB database.
-    pub mysql_conn: PoolConnection<MySql>,
+    pub mysql_conn: &'a mut sqlx::pool::PoolConnection<sqlx::MySql>,
     /// The connection to the Redis database.
-    pub redis_conn: RedisConnection,
+    pub redis_conn: &'a mut RedisConnection,
 }
 
 /// Represents the database of the API, meaning the MariaDB and Redis pools.
@@ -56,13 +53,14 @@ pub struct Database {
     pub redis_pool: RedisPool,
 }
 
-impl Database {
-    /// Retrieves a connection object for each database pool, and returns them wrapped in a
-    /// [`DatabaseConnection`].
-    pub async fn acquire(&self) -> RecordsResult<DatabaseConnection> {
-        Ok(DatabaseConnection {
-            mysql_conn: self.mysql_pool.acquire().await?,
-            redis_conn: self.redis_pool.get().await?,
-        })
-    }
+// TODO: remove this after doing the tests
+#[allow(missing_docs)]
+#[macro_export]
+macro_rules! acquire {
+    ($db:ident $($t:tt)*) => {{
+        $crate::DatabaseConnection {
+            mysql_conn: &mut $db.mysql_pool.acquire().await $($t)*,
+            redis_conn: &mut $db.redis_pool.get().await $($t)*,
+        }
+    }};
 }

@@ -9,6 +9,7 @@ use actix_web::{
 };
 use futures::{future::try_join_all, StreamExt};
 use records_lib::{
+    acquire,
     models::{self, Map, Player},
     Database,
 };
@@ -57,9 +58,9 @@ async fn insert(
     db: Res<Database>,
     Json(body): Json<UpdateMapBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
+    let conn = acquire!(db.with_api_err().fit(req_id)?);
 
-    let res = records_lib::map::get_map_from_uid(&mut conn.mysql_conn, &body.map_uid)
+    let res = records_lib::map::get_map_from_uid(conn.mysql_conn, &body.map_uid)
         .await
         .fit(req_id)?;
 
@@ -89,7 +90,7 @@ async fn insert(
     .bind(player_id)
     .bind(&body.name)
     .bind(body.cps_number)
-    .execute(&mut *conn.mysql_conn)
+    .execute(&mut **conn.mysql_conn)
     .await
     .with_api_err()
     .fit(req_id)?;

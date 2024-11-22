@@ -2,10 +2,10 @@ use std::time::Duration;
 
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
-    event,
+    acquire, event,
     mappack::{self, AnyMappackId},
     redis_key::{mappack_key, mappacks_key},
-    DatabaseConnection,
+    Database, DatabaseConnection,
 };
 
 const PROCESS_DURATION_SECS: u64 = 3600 * 24; // Every day
@@ -13,7 +13,7 @@ pub const PROCESS_DURATION: Duration = Duration::from_secs(PROCESS_DURATION_SECS
 
 #[tracing::instrument(skip(conn))]
 async fn update_mappack(
-    conn: &mut DatabaseConnection,
+    conn: &mut DatabaseConnection<'_>,
     mappack: AnyMappackId<'_>,
 ) -> anyhow::Result<()> {
     let rows = mappack::update_mappack(mappack, conn).await?;
@@ -21,9 +21,9 @@ async fn update_mappack(
     Ok(())
 }
 
-async fn update_event_mappacks(conn: &mut DatabaseConnection) -> anyhow::Result<()> {
-    for event in event::event_list(&mut conn.mysql_conn).await? {
-        for edition in event::event_editions_list(&mut conn.mysql_conn, &event.handle).await? {
+async fn update_event_mappacks(conn: &mut DatabaseConnection<'_>) -> anyhow::Result<()> {
+    for event in event::event_list(conn.mysql_conn).await? {
+        for edition in event::event_editions_list(conn.mysql_conn, &event.handle).await? {
             tracing::info!(
                 "Got event edition ({}:{}) {:?}",
                 edition.event_id,
@@ -35,8 +35,8 @@ async fn update_event_mappacks(conn: &mut DatabaseConnection) -> anyhow::Result<
 
             let _: () = conn.redis_conn.del(mappack_key(mappack)).await?;
 
-            for map in event::event_edition_maps(&mut conn.mysql_conn, edition.event_id, edition.id)
-                .await?
+            for map in
+                event::event_edition_maps(conn.mysql_conn, edition.event_id, edition.id).await?
             {
                 let _: () = conn
                     .redis_conn
@@ -51,7 +51,9 @@ async fn update_event_mappacks(conn: &mut DatabaseConnection) -> anyhow::Result<
     Ok(())
 }
 
-pub async fn update(mut conn: DatabaseConnection) -> anyhow::Result<()> {
+pub async fn update(db: Database) -> anyhow::Result<()> {
+    let mut conn = acquire!(db?);
+
     update_event_mappacks(&mut conn).await?;
 
     let mappacks: Vec<String> = conn.redis_conn.smembers(mappacks_key()).await?;

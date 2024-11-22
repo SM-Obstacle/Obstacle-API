@@ -4,7 +4,7 @@ use std::fmt;
 
 use futures::{Stream, TryStreamExt};
 
-use crate::{error::RecordsResult, event::OptEvent, ranks::get_rank, Database};
+use crate::{acquire, error::RecordsResult, event::OptEvent, ranks::get_rank, Database};
 
 /// The type returned by the [`compet_rank_by_key`](CompetRankingByKeyIter::compet_rank_by_key)
 /// method.
@@ -204,7 +204,7 @@ pub fn leaderboard<'a>(
         .fetch(&db.mysql_pool)
         .map_err(From::from)
         .and_then(move |row| async move {
-            let mut conn = db.acquire().await?;
+            let mut conn = acquire!(db?);
             let rank = get_rank(&mut conn, map_id, row.player_id, row.time, event).await?;
             Ok(Row {
                 rank,
