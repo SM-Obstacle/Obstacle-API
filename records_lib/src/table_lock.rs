@@ -28,12 +28,10 @@ where
     F: for<'a> TableLockGuardFunc<'a, Param, Output = Result<T, E>>,
     E: From<sqlx::Error>,
 {
-    sqlx::query("lock tables records as r read")
+    sqlx::query(&format!("start transaction read only"))
         .execute(&mut **mysql_conn)
         .await?;
     let ret = f(mysql_conn, args).await;
-    sqlx::query("unlock tables")
-        .execute(&mut **mysql_conn)
-        .await?;
+    sqlx::query("rollback").execute(&mut **mysql_conn).await?;
     ret
 }
