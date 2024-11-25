@@ -6,6 +6,7 @@ use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{
     acquire,
+    context::{Context, Ctx as _},
     error::RecordsError,
     event::{self, EventMap, OptEvent},
     models, player, Database, NullableInteger, NullableText,
@@ -154,11 +155,9 @@ struct EventHandleEditionResponse {
 
 async fn event_list(req_id: RequestId, db: Res<Database>) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let ctx = Context::default().with_mysql_conn(&mut mysql_conn);
 
-    let out = event::event_list(&mut mysql_conn)
-        .await
-        .with_api_err()
-        .fit(req_id)?;
+    let out = event::event_list(ctx).await.with_api_err().fit(req_id)?;
 
     json(out)
 }

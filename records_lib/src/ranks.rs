@@ -398,6 +398,7 @@ async fn get_rank_failed(
         }
     }
 
+    #[cfg(feature = "tracing")]
     tracing::error!("missing player rank ({player_id} on map {map_id} with time {time})\n{msg}");
 
     Ok(RecordsError::Internal)

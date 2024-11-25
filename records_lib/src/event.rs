@@ -3,7 +3,11 @@
 use futures::{Stream, TryStreamExt as _};
 use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
 
-use crate::{error::RecordsResult, models};
+use crate::{
+    context::{HasEventIds, HasMySqlConnection},
+    error::RecordsResult,
+    models,
+};
 
 /// Represents an optional event in a certain context.
 ///
@@ -150,7 +154,7 @@ impl From<RawSqlEventListItem> for EventListItem {
 }
 
 /// Returns the list of events from the database.
-pub async fn event_list(db: &mut MySqlConnection) -> RecordsResult<Vec<EventListItem>> {
+pub async fn event_list<C: HasMySqlConnection>(mut ctx: C) -> RecordsResult<Vec<EventListItem>> {
     sqlx::query_as::<_, RawSqlEventListItem>(
         "select ev.handle as handle, max(ee.id) as last_edition_id, ev.*
         from event ev
@@ -161,7 +165,7 @@ pub async fn event_list(db: &mut MySqlConnection) -> RecordsResult<Vec<EventList
         group by ev.id, ev.handle
         order by ev.id",
     )
-    .fetch(db)
+    .fetch(ctx.get_mysql_conn())
     .map_ok(From::from)
     .map_err(From::from)
     .try_collect()
@@ -169,8 +173,8 @@ pub async fn event_list(db: &mut MySqlConnection) -> RecordsResult<Vec<EventList
 }
 
 /// Returns the list of event editions bound to the provided event handle.
-pub async fn event_editions_list(
-    db: &mut MySqlConnection,
+pub async fn event_editions_list<C: HasMySqlConnection>(
+    mut ctx: C,
     event_handle: &str,
 ) -> RecordsResult<Vec<models::EventEdition>> {
     let res = sqlx::query_as(
@@ -180,22 +184,16 @@ pub async fn event_editions_list(
             and (ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate())",
     )
     .bind(event_handle)
-    .fetch_all(db)
+    .fetch_all(ctx.get_mysql_conn())
     .await?;
     Ok(res)
 }
 
 /// Returns the list of the maps of the provided event edition.
-///
-/// ## Parameters
-///
-/// * `event_id`: the database ID of the event.
-/// * `edition_id` the ID of the edition bound to this event.
-pub async fn event_edition_maps(
-    db: &mut MySqlConnection,
-    event_id: u32,
-    edition_id: u32,
+pub async fn event_edition_maps<C: HasMySqlConnection + HasEventIds>(
+    mut ctx: C,
 ) -> RecordsResult<Vec<models::Map>> {
+    let (event_id, edition_id) = ctx.get_event_ids();
     sqlx::query_as(
         "select m.* from maps m
         inner join event_edition_maps eem on m.id = eem.map_id
@@ -203,7 +201,7 @@ pub async fn event_edition_maps(
     )
     .bind(event_id)
     .bind(edition_id)
-    .fetch_all(db)
+    .fetch_all(ctx.get_mysql_conn())
     .await
     .map_err(From::from)
 }
@@ -376,7 +374,9 @@ pub fn get_editions_which_contain(
     .fetch(db)
 }
 
-/// The event map retrieved from the [`have_event_edition_with_map`] function.
+/// The event map retrieved from the [`have_event_edition_with_map`][1] function.
+///
+/// [1]: crate::must::have_event_edition_with_map
 #[derive(sqlx::FromRow)]
 pub struct EventMap {
     /// The map of the event edition.

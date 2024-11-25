@@ -9,6 +9,7 @@ use futures::{StreamExt as _, TryStreamExt};
 use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use records_lib::{
+    context::Ctx,
     event::{self, EventMap, MedalTimes, OptEvent},
     mappack::AnyMappackId,
     models::{self, EventCategory},
@@ -83,8 +84,9 @@ impl Event {
     async fn editions(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<EventEdition>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
+        let mut ctx = records_lib::context::Context::default().with_mysql_conn(&mut mysql_conn);
 
-        let q = event::event_editions_list(&mut mysql_conn, &self.inner.handle).await?;
+        let q = event::event_editions_list(&mut ctx, &self.inner.handle).await?;
 
         Ok(q.into_iter()
             .map(|inner| EventEdition {
