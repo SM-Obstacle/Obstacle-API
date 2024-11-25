@@ -9,7 +9,7 @@ use crate::{event::OptEvent, models, Database, DatabaseConnection, RedisConnecti
 // so this is really big.
 // TODO: maybe use a macro? :) (or split in modules)
 
-// TODO: add in the future: mappack id, event handle
+// TODO: add in the future: mappack id
 
 pub trait Ctx {
     fn ctx(&self) -> &Context<'_>;
@@ -22,6 +22,16 @@ pub trait Ctx {
     #[inline(always)]
     fn by_ref_mut(&mut self) -> &mut Self {
         self
+    }
+
+    fn with_event_handle(self, handle: &str) -> WithEventHandle<'_, Self>
+    where
+        Self: Sized,
+    {
+        WithEventHandle {
+            handle,
+            extra: self,
+        }
     }
 
     fn with_map_uid(self, uid: &str) -> WithMapUid<'_, Self>
@@ -214,6 +224,22 @@ impl<T: Ctx> Ctx for &mut T {
     #[inline]
     fn ctx(&self) -> &Context<'_> {
         <T as Ctx>::ctx(self)
+    }
+}
+
+pub trait HasEventHandle: Ctx {
+    fn get_event_handle(&self) -> &str;
+}
+
+impl<T: HasEventHandle> HasEventHandle for &T {
+    fn get_event_handle(&self) -> &str {
+        <T as HasEventHandle>::get_event_handle(self)
+    }
+}
+
+impl<T: HasEventHandle> HasEventHandle for &mut T {
+    fn get_event_handle(&self) -> &str {
+        <T as HasEventHandle>::get_event_handle(self)
     }
 }
 
@@ -608,6 +634,12 @@ impl<E: HasPlayerLogin> HasPlayerLogin for WithMap<'_, E> {
     }
 }
 
+impl<E: HasEventHandle> HasEventHandle for WithMap<'_, E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
+    }
+}
+
 /**************************************
  * MAP ID IMPL
  **************************************/
@@ -710,6 +742,12 @@ impl<E: HasPlayerLogin> HasPlayerLogin for WithMapId<E> {
 impl<E: HasMapUid> HasMapUid for WithMapId<E> {
     fn get_map_uid(&self) -> &str {
         <E as HasMapUid>::get_map_uid(&self.extra)
+    }
+}
+
+impl<E: HasEventHandle> HasEventHandle for WithMapId<E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
     }
 }
 
@@ -822,6 +860,12 @@ impl<E: HasMapUid> HasMapUid for WithPlayer<'_, E> {
     }
 }
 
+impl<E: HasEventHandle> HasEventHandle for WithPlayer<'_, E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
+    }
+}
+
 /**************************************
  * PLAYER ID IMPL
  **************************************/
@@ -924,6 +968,12 @@ impl<E: HasPlayerLogin> HasPlayerLogin for WithPlayerId<E> {
 impl<E: HasMapUid> HasMapUid for WithPlayerId<E> {
     fn get_map_uid(&self) -> &str {
         <E as HasMapUid>::get_map_uid(&self.extra)
+    }
+}
+
+impl<E: HasEventHandle> HasEventHandle for WithPlayerId<E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
     }
 }
 
@@ -1036,6 +1086,12 @@ impl<E: HasMapUid> HasMapUid for WithMySqlConnection<'_, E> {
     }
 }
 
+impl<E: HasEventHandle> HasEventHandle for WithMySqlConnection<'_, E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
+    }
+}
+
 /**************************************
  * REDIS CONNECTION IMPL
  **************************************/
@@ -1142,6 +1198,12 @@ impl<E: HasPlayerLogin> HasPlayerLogin for WithRedisConnection<'_, E> {
 impl<E: HasMapUid> HasMapUid for WithRedisConnection<'_, E> {
     fn get_map_uid(&self) -> &str {
         <E as HasMapUid>::get_map_uid(&self.extra)
+    }
+}
+
+impl<E: HasEventHandle> HasEventHandle for WithRedisConnection<'_, E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
     }
 }
 
@@ -1252,6 +1314,12 @@ impl<E: HasMapUid> HasMapUid for WithDbConnection<'_, '_, E> {
     }
 }
 
+impl<E: HasEventHandle> HasEventHandle for WithDbConnection<'_, '_, E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
+    }
+}
+
 /**************************************
  * EVENT IMPL
  **************************************/
@@ -1355,6 +1423,12 @@ impl<E: HasPlayerLogin> HasPlayerLogin for WithEvent<'_, E> {
 impl<E: HasMapUid> HasMapUid for WithEvent<'_, E> {
     fn get_map_uid(&self) -> &str {
         <E as HasMapUid>::get_map_uid(&self.extra)
+    }
+}
+
+impl<E: HasEventHandle> HasEventHandle for WithEvent<'_, E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
     }
 }
 
@@ -1464,6 +1538,12 @@ impl<E: HasMapUid> HasMapUid for WithEventId<E> {
     }
 }
 
+impl<E: HasEventHandle> HasEventHandle for WithEventId<E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
+    }
+}
+
 /**************************************
  * EVENT EDITION IMPL
  **************************************/
@@ -1567,6 +1647,12 @@ impl<E: HasPlayerLogin> HasPlayerLogin for WithEdition<'_, E> {
 impl<E: HasMapUid> HasMapUid for WithEdition<'_, E> {
     fn get_map_uid(&self) -> &str {
         <E as HasMapUid>::get_map_uid(&self.extra)
+    }
+}
+
+impl<E: HasEventHandle> HasEventHandle for WithEdition<'_, E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
     }
 }
 
@@ -1675,6 +1761,12 @@ impl<E: HasMapUid> HasMapUid for WithEditionId<E> {
     }
 }
 
+impl<E: HasEventHandle> HasEventHandle for WithEditionId<E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
+    }
+}
+
 /**************************************
  * REDIS POOL IMPL
  **************************************/
@@ -1777,6 +1869,12 @@ impl<E: HasPlayerLogin> HasPlayerLogin for WithRedisPool<E> {
 impl<E: HasMapUid> HasMapUid for WithRedisPool<E> {
     fn get_map_uid(&self) -> &str {
         <E as HasMapUid>::get_map_uid(&self.extra)
+    }
+}
+
+impl<E: HasEventHandle> HasEventHandle for WithRedisPool<E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
     }
 }
 
@@ -1885,6 +1983,12 @@ impl<E: HasMapUid> HasMapUid for WithMySqlPool<E> {
     }
 }
 
+impl<E: HasEventHandle> HasEventHandle for WithMySqlPool<E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
+    }
+}
+
 /**************************************
  * PLAYER LOGIN IMPL
  **************************************/
@@ -1990,6 +2094,12 @@ impl<E: HasMapUid> HasMapUid for WithPlayerLogin<'_, E> {
     }
 }
 
+impl<E: HasEventHandle> HasEventHandle for WithPlayerLogin<'_, E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
+    }
+}
+
 /**************************************
  * MAP UID IMPL
  **************************************/
@@ -2090,6 +2200,117 @@ impl<E: HasEdition> HasEdition for WithMapUid<'_, E> {
 }
 
 impl<E: HasEditionId> HasEditionId for WithMapUid<'_, E> {
+    fn get_edition_id(&self) -> u32 {
+        <E as HasEditionId>::get_edition_id(&self.extra)
+    }
+}
+
+impl<E: HasEventHandle> HasEventHandle for WithMapUid<'_, E> {
+    fn get_event_handle(&self) -> &str {
+        <E as HasEventHandle>::get_event_handle(&self.extra)
+    }
+}
+
+/**************************************
+ * EVENT HANDLE IMPL
+ **************************************/
+
+pub struct WithEventHandle<'a, E> {
+    handle: &'a str,
+    extra: E,
+}
+
+impl<E: Ctx> HasEventHandle for WithEventHandle<'_, E> {
+    fn get_event_handle(&self) -> &str {
+        self.handle
+    }
+}
+
+impl<E: Ctx> Ctx for WithEventHandle<'_, E> {
+    fn ctx(&self) -> &Context<'_> {
+        <E as Ctx>::ctx(&self.extra)
+    }
+}
+
+impl<E: HasPlayerLogin> HasPlayerLogin for WithEventHandle<'_, E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
+    }
+}
+
+impl<E: HasRedisPool> HasRedisPool for WithEventHandle<'_, E> {
+    fn get_redis_pool(&self) -> RedisPool {
+        <E as HasRedisPool>::get_redis_pool(&self.extra)
+    }
+}
+
+impl<E: HasMySqlPool> HasMySqlPool for WithEventHandle<'_, E> {
+    fn get_mysql_pool(&self) -> MySqlPool {
+        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
+    }
+}
+
+impl<E: HasRedisConnection> HasRedisConnection for WithEventHandle<'_, E> {
+    fn get_redis_conn(&mut self) -> &mut RedisConnection {
+        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
+    }
+}
+
+impl<E: HasMySqlConnection> HasMySqlConnection for WithEventHandle<'_, E> {
+    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
+        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
+    }
+}
+
+impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithEventHandle<'_, E> {
+    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
+        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
+    }
+}
+
+impl<E: HasPlayer> HasPlayer for WithEventHandle<'_, E> {
+    fn get_player(&self) -> &models::Player {
+        <E as HasPlayer>::get_player(&self.extra)
+    }
+}
+
+impl<E: HasPlayerId> HasPlayerId for WithEventHandle<'_, E> {
+    fn get_player_id(&self) -> u32 {
+        <E as HasPlayerId>::get_player_id(&self.extra)
+    }
+}
+
+impl<E: HasMap> HasMap for WithEventHandle<'_, E> {
+    fn get_map(&self) -> &models::Map {
+        <E as HasMap>::get_map(&self.extra)
+    }
+}
+
+impl<E: HasMapId> HasMapId for WithEventHandle<'_, E> {
+    fn get_map_id(&self) -> u32 {
+        <E as HasMapId>::get_map_id(&self.extra)
+    }
+}
+
+impl<E: HasEvent> HasEvent for WithEventHandle<'_, E> {
+    fn get_event(&self) -> &models::Event {
+        <E as HasEvent>::get_event(&self.extra)
+    }
+}
+
+impl<E: HasEventId> HasEventId for WithEventHandle<'_, E> {
+    fn get_event_id(&self) -> u32 {
+        <E as HasEventId>::get_event_id(&self.extra)
+    }
+}
+
+impl<E: HasEdition> HasEdition for WithEventHandle<'_, E> {
+    fn get_edition(&self) -> &models::EventEdition {
+        <E as HasEdition>::get_edition(&self.extra)
+    }
+}
+
+impl<E: HasEditionId> HasEditionId for WithEventHandle<'_, E> {
     fn get_edition_id(&self) -> u32 {
         <E as HasEditionId>::get_edition_id(&self.extra)
     }
