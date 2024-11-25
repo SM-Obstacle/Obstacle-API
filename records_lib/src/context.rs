@@ -4,10 +4,12 @@ use sqlx::MySqlPool;
 
 use crate::{event::OptEvent, models, Database, DatabaseConnection, RedisConnection, RedisPool};
 
-// considering N combination traits, for the N+1 trait, there are 2N impls.
+// considering N combination traits, for the N+1 trait, there are 2N new impls.
 // (N delegation impls for the new trait and N new impls for each previous trait)
 // so this is really big.
 // TODO: maybe use a macro? :)
+
+// TODO: add in the future: player login, map uid, mappack id, event handle (71 new impls)
 
 pub trait Ctx {
     fn ctx(&self) -> &Context<'_>;
@@ -22,7 +24,14 @@ pub trait Ctx {
         self
     }
 
-    fn with_player<'a>(self, player: &'a models::Player) -> WithPlayer<'a, Self>
+    fn with_player_login(self, login: &str) -> WithPlayerLogin<'_, Self>
+    where
+        Self: Sized,
+    {
+        WithPlayerLogin { login, extra: self }
+    }
+
+    fn with_player(self, player: &models::Player) -> WithPlayer<'_, Self>
     where
         Self: Sized,
     {
@@ -198,6 +207,22 @@ impl<T: Ctx> Ctx for &mut T {
     #[inline]
     fn ctx(&self) -> &Context<'_> {
         <T as Ctx>::ctx(self)
+    }
+}
+
+pub trait HasPlayerLogin: Ctx {
+    fn get_player_login(&self) -> &str;
+}
+
+impl<T: HasPlayerLogin> HasPlayerLogin for &T {
+    fn get_player_login(&self) -> &str {
+        <T as HasPlayerLogin>::get_player_login(self)
+    }
+}
+
+impl<T: HasPlayerLogin> HasPlayerLogin for &mut T {
+    fn get_player_login(&self) -> &str {
+        <T as HasPlayerLogin>::get_player_login(self)
     }
 }
 
@@ -548,6 +573,12 @@ impl<E: HasRedisPool> HasRedisPool for WithMap<'_, E> {
     }
 }
 
+impl<E: HasPlayerLogin> HasPlayerLogin for WithMap<'_, E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
+    }
+}
+
 /**************************************
  * MAP ID IMPL
  **************************************/
@@ -641,6 +672,12 @@ impl<E: HasRedisPool> HasRedisPool for WithMapId<E> {
     }
 }
 
+impl<E: HasPlayerLogin> HasPlayerLogin for WithMapId<E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
+    }
+}
+
 /**************************************
  * PLAYER IMPL
  **************************************/
@@ -659,6 +696,12 @@ impl<E: Ctx> HasPlayer for WithPlayer<'_, E> {
 impl<E: Ctx> HasPlayerId for WithPlayer<'_, E> {
     fn get_player_id(&self) -> u32 {
         self.player.id
+    }
+}
+
+impl<E: Ctx> HasPlayerLogin for WithPlayer<'_, E> {
+    fn get_player_login(&self) -> &str {
+        &self.player.login
     }
 }
 
@@ -831,6 +874,12 @@ impl<E: HasRedisPool> HasRedisPool for WithPlayerId<E> {
     }
 }
 
+impl<E: HasPlayerLogin> HasPlayerLogin for WithPlayerId<E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
+    }
+}
+
 /**************************************
  * MYSQL CONNECTION IMPL
  **************************************/
@@ -925,6 +974,12 @@ impl<E: HasMySqlPool> HasMySqlPool for WithMySqlConnection<'_, E> {
 impl<E: HasRedisPool> HasRedisPool for WithMySqlConnection<'_, E> {
     fn get_redis_pool(&self) -> RedisPool {
         <E as HasRedisPool>::get_redis_pool(&self.extra)
+    }
+}
+
+impl<E: HasPlayerLogin> HasPlayerLogin for WithMySqlConnection<'_, E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
     }
 }
 
@@ -1025,6 +1080,12 @@ impl<E: HasRedisPool> HasRedisPool for WithRedisConnection<'_, E> {
     }
 }
 
+impl<E: HasPlayerLogin> HasPlayerLogin for WithRedisConnection<'_, E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
+    }
+}
+
 /**************************************
  * DB CONNECTION IMPL
  **************************************/
@@ -1117,6 +1178,12 @@ impl<E: HasMySqlPool> HasMySqlPool for WithDbConnection<'_, '_, E> {
 impl<E: HasRedisPool> HasRedisPool for WithDbConnection<'_, '_, E> {
     fn get_redis_pool(&self) -> RedisPool {
         <E as HasRedisPool>::get_redis_pool(&self.extra)
+    }
+}
+
+impl<E: HasPlayerLogin> HasPlayerLogin for WithDbConnection<'_, '_, E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
     }
 }
 
@@ -1214,6 +1281,12 @@ impl<E: HasRedisPool> HasRedisPool for WithEvent<'_, E> {
     }
 }
 
+impl<E: HasPlayerLogin> HasPlayerLogin for WithEvent<'_, E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
+    }
+}
+
 /**************************************
  * EVENT ID IMPL
  **************************************/
@@ -1305,6 +1378,12 @@ impl<E: HasMySqlPool> HasMySqlPool for WithEventId<E> {
 impl<E: HasRedisPool> HasRedisPool for WithEventId<E> {
     fn get_redis_pool(&self) -> RedisPool {
         <E as HasRedisPool>::get_redis_pool(&self.extra)
+    }
+}
+
+impl<E: HasPlayerLogin> HasPlayerLogin for WithEventId<E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
     }
 }
 
@@ -1402,6 +1481,12 @@ impl<E: HasRedisPool> HasRedisPool for WithEdition<'_, E> {
     }
 }
 
+impl<E: HasPlayerLogin> HasPlayerLogin for WithEdition<'_, E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
+    }
+}
+
 /**************************************
  * EVENT EDITION ID IMPL
  **************************************/
@@ -1495,6 +1580,12 @@ impl<E: HasRedisPool> HasRedisPool for WithEditionId<E> {
     }
 }
 
+impl<E: HasPlayerLogin> HasPlayerLogin for WithEditionId<E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
+    }
+}
+
 /**************************************
  * REDIS POOL IMPL
  **************************************/
@@ -1582,6 +1673,12 @@ impl<E: HasEditionId> HasEditionId for WithRedisPool<E> {
     }
 }
 
+impl<E: HasPlayerLogin> HasPlayerLogin for WithRedisPool<E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
+    }
+}
+
 /**************************************
  * MYSQL POOL IMPL
  **************************************/
@@ -1664,6 +1761,105 @@ impl<E: HasEdition> HasEdition for WithMySqlPool<E> {
 }
 
 impl<E: HasEditionId> HasEditionId for WithMySqlPool<E> {
+    fn get_edition_id(&self) -> u32 {
+        <E as HasEditionId>::get_edition_id(&self.extra)
+    }
+}
+
+impl<E: HasPlayerLogin> HasPlayerLogin for WithMySqlPool<E> {
+    fn get_player_login(&self) -> &str {
+        <E as HasPlayerLogin>::get_player_login(&self.extra)
+    }
+}
+
+/**************************************
+ * PLAYER LOGIN IMPL
+ **************************************/
+
+pub struct WithPlayerLogin<'a, E> {
+    login: &'a str,
+    extra: E,
+}
+
+impl<E: Ctx> HasPlayerLogin for WithPlayerLogin<'_, E> {
+    fn get_player_login(&self) -> &str {
+        self.login
+    }
+}
+
+impl<E: Ctx> Ctx for WithPlayerLogin<'_, E> {
+    fn ctx(&self) -> &Context<'_> {
+        <E as Ctx>::ctx(&self.extra)
+    }
+}
+
+impl<E: HasRedisPool> HasRedisPool for WithPlayerLogin<'_, E> {
+    fn get_redis_pool(&self) -> RedisPool {
+        <E as HasRedisPool>::get_redis_pool(&self.extra)
+    }
+}
+
+impl<E: HasMySqlPool> HasMySqlPool for WithPlayerLogin<'_, E> {
+    fn get_mysql_pool(&self) -> MySqlPool {
+        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
+    }
+}
+
+impl<E: HasRedisConnection> HasRedisConnection for WithPlayerLogin<'_, E> {
+    fn get_redis_conn(&mut self) -> &mut RedisConnection {
+        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
+    }
+}
+
+impl<E: HasMySqlConnection> HasMySqlConnection for WithPlayerLogin<'_, E> {
+    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
+        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
+    }
+}
+
+impl<E: HasPlayer> HasPlayer for WithPlayerLogin<'_, E> {
+    fn get_player(&self) -> &models::Player {
+        <E as HasPlayer>::get_player(&self.extra)
+    }
+}
+
+impl<E: HasPlayerId> HasPlayerId for WithPlayerLogin<'_, E> {
+    fn get_player_id(&self) -> u32 {
+        <E as HasPlayerId>::get_player_id(&self.extra)
+    }
+}
+
+impl<E: HasMap> HasMap for WithPlayerLogin<'_, E> {
+    fn get_map(&self) -> &models::Map {
+        <E as HasMap>::get_map(&self.extra)
+    }
+}
+
+impl<E: HasMapId> HasMapId for WithPlayerLogin<'_, E> {
+    fn get_map_id(&self) -> u32 {
+        <E as HasMapId>::get_map_id(&self.extra)
+    }
+}
+
+impl<E: HasEvent> HasEvent for WithPlayerLogin<'_, E> {
+    fn get_event(&self) -> &models::Event {
+        <E as HasEvent>::get_event(&self.extra)
+    }
+}
+
+impl<E: HasEventId> HasEventId for WithPlayerLogin<'_, E> {
+    fn get_event_id(&self) -> u32 {
+        <E as HasEventId>::get_event_id(&self.extra)
+    }
+}
+
+impl<E: HasEdition> HasEdition for WithPlayerLogin<'_, E> {
+    fn get_edition(&self) -> &models::EventEdition {
+        <E as HasEdition>::get_edition(&self.extra)
+    }
+}
+
+impl<E: HasEditionId> HasEditionId for WithPlayerLogin<'_, E> {
     fn get_edition_id(&self) -> u32 {
         <E as HasEditionId>::get_edition_id(&self.extra)
     }
