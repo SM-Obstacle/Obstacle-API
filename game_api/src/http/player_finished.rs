@@ -121,6 +121,31 @@ pub struct FinishedOutput {
     pub res: HasFinishedResponse,
 }
 
+async fn get_old_record<C>(
+    db: &mut sqlx::MySqlConnection,
+    ctx: C,
+) -> RecordsResult<Option<models::Record>>
+where
+    C: HasPlayerId + HasMapId,
+{
+    let builder = ctx.sql_frag_builder();
+    let mut query = sqlx::QueryBuilder::new("SELECT r.* FROM records r ");
+    builder
+        .push_event_join(&mut query, "eer", "r")
+        .push(" where map_id = ")
+        .push_bind(ctx.get_map_id())
+        .push(" and record_player_id = ")
+        .push_bind(ctx.get_player_id())
+        .push(" ");
+    builder
+        .push_event_filter(&mut query, "eer")
+        .push("order by time limit 1")
+        .build_query_as::<models::Record>()
+        .fetch_optional(db)
+        .await
+        .with_api_err()
+}
+
 pub async fn finished<C>(
     db: &mut DatabaseConnection<'_>,
     ctx: C,
@@ -144,22 +169,7 @@ where
         return Err(RecordsErrorKind::InvalidTimes);
     }
 
-    let builder = ctx.sql_frag_builder();
-    let mut query = sqlx::QueryBuilder::new("SELECT r.* FROM records r ");
-    builder
-        .push_event_join(&mut query, "eer", "r")
-        .push(" where map_id = ")
-        .push_bind(ctx.get_map().id)
-        .push(" and record_player_id = ")
-        .push_bind(player.id)
-        .push(" ");
-    let old_record = builder
-        .push_event_filter(&mut query, "eer")
-        .push("order by time limit 1")
-        .build_query_as::<models::Record>()
-        .fetch_optional(&mut **db.mysql_conn)
-        .await
-        .with_api_err()?;
+    let old_record = get_old_record(&mut db.mysql_conn, &ctx).await?;
 
     let (old, new, has_improved, old_rank) =
         if let Some(models::Record { time: old, .. }) = old_record {
