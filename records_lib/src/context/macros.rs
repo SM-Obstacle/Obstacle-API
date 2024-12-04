@@ -2,32 +2,32 @@ macro_rules! impl_ctx {
     () => {
         #[inline(always)]
         fn get_opt_event(&self) -> Option<&models::Event> {
-            <E as Ctx>::get_opt_event(&self.extra)
+            <E as $crate::context::Ctx>::get_opt_event(&self.extra)
         }
 
         #[inline(always)]
         fn get_opt_event_id(&self) -> Option<u32> {
-            <E as Ctx>::get_opt_event_id(&self.extra)
+            <E as $crate::context::Ctx>::get_opt_event_id(&self.extra)
         }
 
         #[inline(always)]
         fn get_opt_edition(&self) -> Option<&models::EventEdition> {
-            <E as Ctx>::get_opt_edition(&self.extra)
+            <E as $crate::context::Ctx>::get_opt_edition(&self.extra)
         }
 
         #[inline(always)]
         fn get_opt_edition_id(&self) -> Option<u32> {
-            <E as Ctx>::get_opt_edition_id(&self.extra)
+            <E as $crate::context::Ctx>::get_opt_edition_id(&self.extra)
         }
 
         #[inline(always)]
         fn get_opt_event_edition(&self) -> Option<(&models::Event, &models::EventEdition)> {
-            <E as Ctx>::get_opt_event_edition(&self.extra)
+            <E as $crate::context::Ctx>::get_opt_event_edition(&self.extra)
         }
 
         #[inline(always)]
         fn get_opt_event_edition_ids(&self) -> Option<(u32, u32)> {
-            <E as Ctx>::get_opt_event_edition_ids(&self.extra)
+            <E as $crate::context::Ctx>::get_opt_event_edition_ids(&self.extra)
         }
     };
 
@@ -38,13 +38,19 @@ pub(super) use impl_ctx;
 
 macro_rules! new_combinator {
     (
-        'combinator: struct $Combinator:ident $(<$lt:lifetime>)? {$(
-            $field:ident: $ty:ty
-        ),* $(,)?}
+        'combinator {
+            $(#[$($combin_meta:tt)*])*
+            struct $Combinator:ident $(<$lt:lifetime>)? {$(
+                $field:ident: $ty:ty
+            ),* $(,)?}
+        }
 
-        $( 'trait $(needs [$($subtrait:ident),* $(,)?])?: $($trait_lt:lifetime)? trait $AssociatedTrait:ident.$trait_fn:ident -> $trait_fn_ty:ty |$trait_self:ident| {
-            $expr:expr
-        } )?
+        $( 'trait $(needs [$($subtrait:ident),* $(,)?])? {
+            $(#[$($assoc_meta:tt)*])*
+            $($trait_lt:lifetime)? trait $AssociatedTrait:ident.$trait_fn:ident($trait_self:ident) -> $trait_fn_ty:ty {
+                $expr:expr
+            }
+        }  )?
 
         'delegates {$(
             $($delegate_trait_lt:lifetime)? $DelegateTrait:ident.$fn:ident -> $fn_ty:ty
@@ -53,22 +59,30 @@ macro_rules! new_combinator {
         $( 'ctx_impl {$($ctx_impl_tt:tt)*} )?
 
         $( 'addon_impls {$(
-            $($addon_trait_lt:lifetime)? $AddonTrait:ident.$addon_fn:ident -> $addon_fn_ty:ty |$addon_self:ident| {
+            $($addon_trait_lt:lifetime)? $AddonTrait:ident.$addon_fn:ident($addon_self:ident) -> $addon_fn_ty:ty {
                 $addon_expr:expr
             }
         ),* $(,)?} )?
     ) => {
+        $(#[$($combin_meta)*])*
         pub struct $Combinator <$($lt,)? E> {
             $( $field: $ty, )*
             extra: E,
         }
 
-        impl <$($lt,)? E: Ctx> Ctx for $Combinator <$($lt,)? E> {
+        impl <$($lt,)? E> $Combinator <$($lt,)? E> {
+            pub(super) fn new(extra: E, $($field: $ty),*) -> Self {
+                Self { extra, $($field),* }
+            }
+        }
+
+        impl <$($lt,)? E: $crate::context::Ctx> $crate::context::Ctx for $Combinator <$($lt,)? E> {
             $crate::context::macros::impl_ctx!($($($ctx_impl_tt)*)?);
         }
 
         $(
-            pub trait $AssociatedTrait: Ctx $( $(+ $subtrait)* )? {
+            $(#[$($assoc_meta)*])*
+            pub trait $AssociatedTrait: $crate::context::Ctx $( $(+ $subtrait)* )? {
                 fn $trait_fn(&self) -> $trait_fn_ty;
             }
 
@@ -86,7 +100,7 @@ macro_rules! new_combinator {
                 }
             }
 
-            impl <$($trait_lt,)? E: Ctx> $AssociatedTrait for $Combinator <$($trait_lt,)? E> {
+            impl <$($trait_lt,)? E: $crate::context::Ctx> $AssociatedTrait for $Combinator <$($trait_lt,)? E> {
                 fn $trait_fn($trait_self: &Self) -> $trait_fn_ty {
                     $expr
                 }
@@ -94,7 +108,7 @@ macro_rules! new_combinator {
         )?
 
         $( $(
-            impl <$($addon_trait_lt,)? E: Ctx> $AddonTrait for $Combinator <$($addon_trait_lt,)? E> {
+            impl <$($addon_trait_lt,)? E: $crate::context::Ctx> $AddonTrait for $Combinator <$($addon_trait_lt,)? E> {
                 fn $addon_fn($addon_self: &Self) -> $addon_fn_ty {
                     $addon_expr
                 }

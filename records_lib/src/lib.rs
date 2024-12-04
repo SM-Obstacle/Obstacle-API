@@ -27,7 +27,7 @@ pub mod table_lock;
 pub mod time;
 
 /// The MySQL/MariaDB pool type.
-pub type MySqlPool = sqlx::Pool<sqlx::MySql>;
+pub type MySqlPool = sqlx::MySqlPool;
 /// The Redis pool type.
 pub type RedisPool = deadpool_redis::Pool;
 /// The type of a Redis connection.
