@@ -63,8 +63,11 @@ async fn send_query(
     let mut query =
         sqlx::QueryBuilder::new("INSERT INTO checkpoint_times (cp_num, map_id, record_id, time) ");
     query
-        .push_values(body.cps, |mut b, cptime| {
-            b.push_bind(cptime);
+        .push_values(body.cps.into_iter().enumerate(), |mut b, (i, cptime)| {
+            b.push_bind(i as u32)
+                .push_bind(map_id)
+                .push_bind(record_id)
+                .push_bind(cptime);
         })
         .build()
         .execute(db)
