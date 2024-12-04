@@ -206,7 +206,7 @@ where
 
             let ctx = ctx.by_ref().with_map_id(original_map_id).with_no_event();
 
-            // Get previous the time of the player on the original map, to check if it would be a PB or not.
+            // Get the previous time of the player on the original map, to check if it would be a PB or not.
             let previous_time = player::get_time_on_map(db.mysql_conn, &ctx).await?;
             let is_pb = previous_time.is_none() || previous_time.is_some_and(|t| t > params.time);
 
