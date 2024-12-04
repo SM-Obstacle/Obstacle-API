@@ -7,6 +7,7 @@ use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use async_graphql::{connection, Enum, ErrorExtensionValues, Object, Value, ID};
 use async_graphql_actix_web::GraphQLRequest;
 use futures::StreamExt as _;
+use records_lib::context::{Context, Ctx};
 use records_lib::ranks::get_rank;
 use records_lib::{acquire, models};
 use records_lib::{must, Database};
@@ -203,7 +204,9 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<MySqlPool>();
 
         let mut conn = db.acquire().await?;
-        let event = must::have_event_handle(&mut conn, &handle).await?;
+        let event =
+            must::have_event_handle(&mut conn, Context::default().with_event_handle(&handle))
+                .await?;
 
         Ok(event.into())
     }
@@ -384,10 +387,10 @@ impl QueryRoot {
         let out = models::RankedRecord {
             rank: get_rank(
                 &mut conn,
-                record.map_id,
-                record.record_player_id,
+                Context::default()
+                    .with_player_id(record.record_player_id)
+                    .with_map_id(record.map_id),
                 record.time,
-                Default::default(),
             )
             .await?,
             record,
@@ -442,15 +445,17 @@ impl QueryRoot {
 
         let mut conn = acquire!(db?);
 
+        let ctx = Context::default();
+
         while let Some(record) = records.next().await {
             let record = record?;
 
             let rank = get_rank(
                 &mut conn,
-                record.map_id,
-                record.record_player_id,
+                ctx.by_ref()
+                    .with_map_id(record.map_id)
+                    .with_player_id(record.record_player_id),
                 record.time,
-                Default::default(),
             )
             .await?;
 

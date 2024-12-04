@@ -2,18 +2,121 @@
 
 use sqlx::MySqlPool;
 
-use crate::{event::OptEvent, models, Database, DatabaseConnection, RedisConnection, RedisPool};
+use crate::{mappack::AnyMappackId, models, Database, RedisPool};
 
-// considering N combination traits, for the N+1 trait, there are 2N new impls.
-// (N delegation impls for the new trait and N new impls for each previous trait)
-// so this is really big.
-// TODO: maybe use a macro? :) (or split in modules)
+macro_rules! impl_ctx {
+    () => {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            <E as Ctx>::get_opt_event(&self.extra)
+        }
 
-// TODO: add in the future: mappack id
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            <E as Ctx>::get_opt_event_id(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            <E as Ctx>::get_opt_edition(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            <E as Ctx>::get_opt_edition_id(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_edition(&self) -> Option<(&models::Event, &models::EventEdition)> {
+            <E as Ctx>::get_opt_event_edition(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_edition_ids(&self) -> Option<(u32, u32)> {
+            <E as Ctx>::get_opt_event_edition_ids(&self.extra)
+        }
+    };
+
+    ($($t:tt)*) => { $($t)* };
+}
+
+macro_rules! new_combinator {
+    (
+        'combinator: struct $Combinator:ident $(<$lt:lifetime>)? {$(
+            $field:ident: $ty:ty
+        ),* $(,)?}
+
+        $( 'trait $(needs [$($subtrait:ident),* $(,)?])?: $($trait_lt:lifetime)? trait $AssociatedTrait:ident.$trait_fn:ident -> $trait_fn_ty:ty |$trait_self:ident| {
+            $expr:expr
+        } )?
+
+        'delegates {$(
+            $($delegate_trait_lt:lifetime)? $DelegateTrait:ident.$fn:ident -> $fn_ty:ty
+        ),* $(,)?}
+
+        $( 'ctx_impl {$($ctx_impl_tt:tt)*} )?
+
+        $( 'addon_impls {$(
+            $($addon_trait_lt:lifetime)? $AddonTrait:ident.$addon_fn:ident -> $addon_fn_ty:ty |$addon_self:ident| {
+                $addon_expr:expr
+            }
+        ),* $(,)?} )?
+    ) => {
+        pub struct $Combinator <$($lt,)? E> {
+            $( $field: $ty, )*
+            extra: E,
+        }
+
+        impl <$($lt,)? E: Ctx> Ctx for $Combinator <$($lt,)? E> {
+            impl_ctx!($($($ctx_impl_tt)*)?);
+        }
+
+        $(
+            pub trait $AssociatedTrait: Ctx $( $(+ $subtrait)* )? {
+                fn $trait_fn(&self) -> $trait_fn_ty;
+            }
+
+            impl<T: $AssociatedTrait> $AssociatedTrait for &T {
+                #[inline]
+                fn $trait_fn(&self) -> $trait_fn_ty {
+                    <T as $AssociatedTrait>::$trait_fn(self)
+                }
+            }
+
+            impl<T: $AssociatedTrait> $AssociatedTrait for &mut T {
+                #[inline]
+                fn $trait_fn(&self) -> $trait_fn_ty {
+                    <T as $AssociatedTrait>::$trait_fn(self)
+                }
+            }
+
+            impl <$($trait_lt,)? E: Ctx> $AssociatedTrait for $Combinator <$($trait_lt,)? E> {
+                fn $trait_fn($trait_self: &Self) -> $trait_fn_ty {
+                    $expr
+                }
+            }
+        )?
+
+        $( $(
+            impl <$($addon_trait_lt,)? E: Ctx> $AddonTrait for $Combinator <$($addon_trait_lt,)? E> {
+                fn $addon_fn($addon_self: &Self) -> $addon_fn_ty {
+                    $addon_expr
+                }
+            }
+        )* )?
+
+        $(
+            impl <$($delegate_trait_lt,)? E: $DelegateTrait> $DelegateTrait for $Combinator <$($delegate_trait_lt,)? E> {
+                #[inline]
+                fn $fn(&self) -> $fn_ty {
+                    <E as $DelegateTrait>::$fn(&self.extra)
+                }
+            }
+        )*
+    };
+}
 
 pub trait Ctx {
-    fn ctx(&self) -> &Context<'_>;
-
     #[inline(always)]
     fn by_ref(&self) -> &Self {
         self
@@ -22,6 +125,71 @@ pub trait Ctx {
     #[inline(always)]
     fn by_ref_mut(&mut self) -> &mut Self {
         self
+    }
+
+    #[inline]
+    fn get_opt_event(&self) -> Option<&models::Event> {
+        None
+    }
+
+    #[inline]
+    fn get_opt_event_id(&self) -> Option<u32> {
+        None
+    }
+
+    #[inline]
+    fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+        None
+    }
+
+    #[inline]
+    fn get_opt_edition_id(&self) -> Option<u32> {
+        None
+    }
+
+    #[inline]
+    fn get_opt_event_edition(&self) -> Option<(&models::Event, &models::EventEdition)> {
+        self.get_opt_event().zip(self.get_opt_edition())
+    }
+
+    #[inline]
+    fn get_opt_event_edition_ids(&self) -> Option<(u32, u32)> {
+        self.get_opt_event_id().zip(self.get_opt_edition_id())
+    }
+
+    #[inline]
+    fn sql_frag_builder(&self) -> SqlFragmentBuilder<'_, Self>
+    where
+        Self: Sized,
+    {
+        SqlFragmentBuilder { ctx: self }
+    }
+
+    fn with_no_event(self) -> WithNoEvent<Self>
+    where
+        Self: Sized,
+    {
+        WithNoEvent { extra: self }
+    }
+
+    fn with_mappack(self, mappack_id: AnyMappackId<'_>) -> WithMappackId<'_, Self>
+    where
+        Self: Sized,
+    {
+        WithMappackId {
+            mappack_id,
+            extra: self,
+        }
+    }
+
+    fn with_event_handle_owned(self, handle: String) -> WithEventHandleOwned<Self>
+    where
+        Self: Sized,
+    {
+        WithEventHandleOwned {
+            handle,
+            extra: self,
+        }
     }
 
     fn with_event_handle(self, handle: &str) -> WithEventHandle<'_, Self>
@@ -34,6 +202,13 @@ pub trait Ctx {
         }
     }
 
+    fn with_map_uid_owned(self, uid: String) -> WithMapUidOwned<Self>
+    where
+        Self: Sized,
+    {
+        WithMapUidOwned { uid, extra: self }
+    }
+
     fn with_map_uid(self, uid: &str) -> WithMapUid<'_, Self>
     where
         Self: Sized,
@@ -41,11 +216,28 @@ pub trait Ctx {
         WithMapUid { uid, extra: self }
     }
 
+    fn with_player_login_owned(self, login: String) -> WithPlayerLoginOwned<Self>
+    where
+        Self: Sized,
+    {
+        WithPlayerLoginOwned { login, extra: self }
+    }
+
     fn with_player_login(self, login: &str) -> WithPlayerLogin<'_, Self>
     where
         Self: Sized,
     {
         WithPlayerLogin { login, extra: self }
+    }
+
+    fn with_player_owned(self, player: models::Player) -> WithPlayerOwned<Self>
+    where
+        Self: Sized,
+    {
+        WithPlayerOwned {
+            player,
+            extra: self,
+        }
     }
 
     fn with_player(self, player: &models::Player) -> WithPlayer<'_, Self>
@@ -66,6 +258,13 @@ pub trait Ctx {
             player_id,
             extra: self,
         }
+    }
+
+    fn with_map_owned(self, map: models::Map) -> WithMapOwned<Self>
+    where
+        Self: Sized,
+    {
+        WithMapOwned { map, extra: self }
     }
 
     fn with_map(self, map: &models::Map) -> WithMap<'_, Self>
@@ -112,37 +311,11 @@ pub trait Ctx {
         WithRedisPool { pool, extra: self }
     }
 
-    fn with_db_conn<'a, 'b>(
-        self,
-        conn: &'a mut DatabaseConnection<'b>,
-    ) -> WithDbConnection<'a, 'b, Self>
+    fn with_event_owned(self, event: models::Event) -> WithEventOwned<Self>
     where
         Self: Sized,
     {
-        WithDbConnection { conn, extra: self }
-    }
-
-    fn with_mysql_conn(
-        self,
-        mysql_conn: &mut sqlx::MySqlConnection,
-    ) -> WithMySqlConnection<'_, Self>
-    where
-        Self: Sized,
-    {
-        WithMySqlConnection {
-            mysql_conn,
-            extra: self,
-        }
-    }
-
-    fn with_redis_conn(self, redis_conn: &mut RedisConnection) -> WithRedisConnection<'_, Self>
-    where
-        Self: Sized,
-    {
-        WithRedisConnection {
-            redis_conn,
-            extra: self,
-        }
+        WithEventOwned { event, extra: self }
     }
 
     fn with_event(self, event: &models::Event) -> WithEvent<'_, Self>
@@ -158,6 +331,16 @@ pub trait Ctx {
     {
         WithEventId {
             event_id,
+            extra: self,
+        }
+    }
+
+    fn with_edition_owned(self, edition: models::EventEdition) -> WithEditionOwned<Self>
+    where
+        Self: Sized,
+    {
+        WithEditionOwned {
+            edition,
             extra: self,
         }
     }
@@ -179,6 +362,23 @@ pub trait Ctx {
         WithEditionId {
             edition_id,
             extra: self,
+        }
+    }
+
+    fn with_event_edition_owned(
+        self,
+        event: models::Event,
+        edition: models::EventEdition,
+    ) -> WithEventOwned<WithEditionOwned<Self>>
+    where
+        Self: Sized,
+    {
+        WithEventOwned {
+            event,
+            extra: WithEditionOwned {
+                edition,
+                extra: self,
+            },
         }
     }
 
@@ -213,97 +413,281 @@ pub trait Ctx {
     }
 }
 
-impl<T: Ctx> Ctx for &T {
-    #[inline]
-    fn ctx(&self) -> &Context<'_> {
-        <T as Ctx>::ctx(self)
+impl<T: Ctx> Ctx for &T {}
+
+impl<T: Ctx> Ctx for &mut T {}
+
+new_combinator! {
+    'combinator: struct WithMappackId<'a> {
+        mappack_id: AnyMappackId<'a>,
+    }
+    'trait: 'a trait HasMappackId.get_mappack_id -> AnyMappackId<'_> |self| {
+        self.mappack_id
+    }
+    'delegates {
+        'a HasRedisPool.get_redis_pool -> RedisPool,
+        'a HasMySqlPool.get_mysql_pool -> MySqlPool,
+
+        'a HasPlayer.get_player -> &models::Player,
+        'a HasPlayerLogin.get_player_login -> &str,
+        'a HasPlayerId.get_player_id -> u32,
+
+        'a HasMap.get_map -> &models::Map,
+        'a HasMapId.get_map_id -> u32,
+        'a HasMapUid.get_map_uid -> &str,
+
+        // HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+        'a HasEvent.get_event -> &models::Event,
+        'a HasEdition.get_edition -> &models::EventEdition,
+        'a HasEventHandle.get_event_handle -> &str,
+        'a HasEventId.get_event_id -> u32,
+        'a HasEditionId.get_edition_id -> u32,
     }
 }
 
-impl<T: Ctx> Ctx for &mut T {
-    #[inline]
-    fn ctx(&self) -> &Context<'_> {
-        <T as Ctx>::ctx(self)
+new_combinator! {
+    'combinator: struct WithEventHandle<'a> {
+        handle: &'a str,
+    }
+    'trait: 'a trait HasEventHandle.get_event_handle -> &str |self| {
+        self.handle
+    }
+    'delegates {
+        'a HasRedisPool.get_redis_pool -> RedisPool,
+        'a HasMySqlPool.get_mysql_pool -> MySqlPool,
+
+        'a HasPlayer.get_player -> &models::Player,
+        'a HasPlayerLogin.get_player_login -> &str,
+        'a HasPlayerId.get_player_id -> u32,
+
+        'a HasMap.get_map -> &models::Map,
+        'a HasMapUid.get_map_uid -> &str,
+        'a HasMapId.get_map_id -> u32,
+
+        'a HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        'a HasEvent.get_event -> &models::Event,
+        // HasEventHandle.get_event_handle -> &str,
+        'a HasEventId.get_event_id -> u32,
+
+        'a HasEdition.get_edition -> &models::EventEdition,
+        'a HasEditionId.get_edition_id -> u32,
     }
 }
 
-pub trait HasEventHandle: Ctx {
-    fn get_event_handle(&self) -> &str;
-}
+new_combinator! {
+    'combinator: struct WithEventHandleOwned {
+        handle: String,
+    }
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-impl<T: HasEventHandle> HasEventHandle for &T {
-    fn get_event_handle(&self) -> &str {
-        <T as HasEventHandle>::get_event_handle(self)
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerLogin.get_player_login -> &str,
+        HasPlayerId.get_player_id -> u32,
+
+        HasMap.get_map -> &models::Map,
+        HasMapUid.get_map_uid -> &str,
+        HasMapId.get_map_id -> u32,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        HasEvent.get_event -> &models::Event,
+        // HasEventHandle.get_event_handle -> &str,
+        HasEventId.get_event_id -> u32,
+
+        HasEdition.get_edition -> &models::EventEdition,
+        HasEditionId.get_edition_id -> u32,
+    }
+    'addon_impls {
+        HasEventHandle.get_event_handle -> &str |self| {
+            &self.handle
+        }
     }
 }
 
-impl<T: HasEventHandle> HasEventHandle for &mut T {
-    fn get_event_handle(&self) -> &str {
-        <T as HasEventHandle>::get_event_handle(self)
+new_combinator! {
+    'combinator: struct WithMapUid<'a> {
+        uid: &'a str,
+    }
+    'trait: 'a trait HasMapUid.get_map_uid -> &str |self| {
+        self.uid
+    }
+    'delegates {
+        'a HasRedisPool.get_redis_pool -> RedisPool,
+        'a HasMySqlPool.get_mysql_pool -> MySqlPool,
+
+        'a HasPlayer.get_player -> &models::Player,
+        'a HasPlayerLogin.get_player_login -> &str,
+        'a HasPlayerId.get_player_id -> u32,
+
+        'a HasMap.get_map -> &models::Map,
+        // HasMapUid.get_map_uid -> &str,
+        'a HasMapId.get_map_id -> u32,
+
+        'a HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        'a HasEvent.get_event -> &models::Event,
+        'a HasEventHandle.get_event_handle -> &str,
+        'a HasEventId.get_event_id -> u32,
+
+        'a HasEdition.get_edition -> &models::EventEdition,
+        'a HasEditionId.get_edition_id -> u32,
     }
 }
 
-pub trait HasMapUid: Ctx {
-    fn get_map_uid(&self) -> &str;
-}
+new_combinator! {
+    'combinator: struct WithMapUidOwned {
+        uid: String,
+    }
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-impl<T: HasMapUid> HasMapUid for &T {
-    fn get_map_uid(&self) -> &str {
-        <T as HasMapUid>::get_map_uid(self)
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerLogin.get_player_login -> &str,
+        HasPlayerId.get_player_id -> u32,
+
+        HasMap.get_map -> &models::Map,
+        // HasMapUid.get_map_uid -> &str,
+        HasMapId.get_map_id -> u32,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        HasEvent.get_event -> &models::Event,
+        HasEventHandle.get_event_handle -> &str,
+        HasEventId.get_event_id -> u32,
+
+        HasEdition.get_edition -> &models::EventEdition,
+        HasEditionId.get_edition_id -> u32,
+    }
+    'addon_impls {
+        HasMapUid.get_map_uid -> &str |self| {
+            &self.uid
+        }
     }
 }
 
-impl<T: HasMapUid> HasMapUid for &mut T {
-    fn get_map_uid(&self) -> &str {
-        <T as HasMapUid>::get_map_uid(self)
+new_combinator! {
+    'combinator: struct WithPlayerLogin<'a> {
+        login: &'a str,
+    }
+    'trait: 'a trait HasPlayerLogin.get_player_login -> &str |self| {
+        self.login
+    }
+    'delegates {
+        'a HasRedisPool.get_redis_pool -> RedisPool,
+        'a HasMySqlPool.get_mysql_pool -> MySqlPool,
+
+        'a HasPlayer.get_player -> &models::Player,
+        // HasPlayerLogin.get_player_login -> &str,
+        'a HasPlayerId.get_player_id -> u32,
+
+        'a HasMap.get_map -> &models::Map,
+        'a HasMapUid.get_map_uid -> &str,
+        'a HasMapId.get_map_id -> u32,
+
+        'a HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        'a HasEvent.get_event -> &models::Event,
+        'a HasEventHandle.get_event_handle -> &str,
+        'a HasEventId.get_event_id -> u32,
+
+        'a HasEdition.get_edition -> &models::EventEdition,
+        'a HasEditionId.get_edition_id -> u32,
     }
 }
 
-pub trait HasPlayerLogin: Ctx {
-    fn get_player_login(&self) -> &str;
-}
+new_combinator! {
+    'combinator: struct WithPlayerLoginOwned {
+        login: String,
+    }
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-impl<T: HasPlayerLogin> HasPlayerLogin for &T {
-    fn get_player_login(&self) -> &str {
-        <T as HasPlayerLogin>::get_player_login(self)
+        HasPlayer.get_player -> &models::Player,
+        // HasPlayerLogin.get_player_login -> &str,
+        HasPlayerId.get_player_id -> u32,
+
+        HasMap.get_map -> &models::Map,
+        HasMapUid.get_map_uid -> &str,
+        HasMapId.get_map_id -> u32,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        HasEvent.get_event -> &models::Event,
+        HasEventHandle.get_event_handle -> &str,
+        HasEventId.get_event_id -> u32,
+
+        HasEdition.get_edition -> &models::EventEdition,
+        HasEditionId.get_edition_id -> u32,
+    }
+    'addon_impls {
+        HasPlayerLogin.get_player_login -> &str |self| {
+            &self.login
+        }
     }
 }
 
-impl<T: HasPlayerLogin> HasPlayerLogin for &mut T {
-    fn get_player_login(&self) -> &str {
-        <T as HasPlayerLogin>::get_player_login(self)
+new_combinator! {
+    'combinator: struct WithRedisPool {
+        pool: RedisPool
+    }
+    'trait: trait HasRedisPool.get_redis_pool -> RedisPool |self| {
+        self.pool.clone()
+    }
+    'delegates {
+        // HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
+
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerLogin.get_player_login -> &str,
+        HasPlayerId.get_player_id -> u32,
+
+        HasMap.get_map -> &models::Map,
+        HasMapId.get_map_id -> u32,
+        HasMapUid.get_map_uid -> &str,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        HasEvent.get_event -> &models::Event,
+        HasEventHandle.get_event_handle -> &str,
+        HasEventId.get_event_id -> u32,
+
+        HasEdition.get_edition -> &models::EventEdition,
+        HasEditionId.get_edition_id -> u32,
     }
 }
 
-pub trait HasRedisPool: Ctx {
-    fn get_redis_pool(&self) -> RedisPool;
-}
-
-impl<T: HasRedisPool> HasRedisPool for &T {
-    fn get_redis_pool(&self) -> RedisPool {
-        <T as HasRedisPool>::get_redis_pool(self)
+new_combinator! {
+    'combinator: struct WithMySqlPool {
+        pool: MySqlPool,
     }
-}
-
-impl<T: HasRedisPool> HasRedisPool for &mut T {
-    fn get_redis_pool(&self) -> RedisPool {
-        <T as HasRedisPool>::get_redis_pool(self)
+    'trait: trait HasMySqlPool.get_mysql_pool -> MySqlPool |self| {
+        self.pool.clone()
     }
-}
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        // HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-pub trait HasMySqlPool: Ctx {
-    fn get_mysql_pool(&self) -> MySqlPool;
-}
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerLogin.get_player_login -> &str,
+        HasPlayerId.get_player_id -> u32,
 
-impl<T: HasMySqlPool> HasMySqlPool for &T {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <T as HasMySqlPool>::get_mysql_pool(self)
-    }
-}
+        HasMap.get_map -> &models::Map,
+        HasMapUid.get_map_uid -> &str,
+        HasMapId.get_map_id -> u32,
 
-impl<T: HasMySqlPool> HasMySqlPool for &mut T {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <T as HasMySqlPool>::get_mysql_pool(self)
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        HasEvent.get_event -> &models::Event,
+        HasEventHandle.get_event_handle -> &str,
+        HasEventId.get_event_id -> u32,
+
+        HasEdition.get_edition -> &models::EventEdition,
+        HasEditionId.get_edition_id -> u32,
     }
 }
 
@@ -318,106 +702,215 @@ pub trait HasDbPool: HasRedisPool + HasMySqlPool {
 
 impl<T: HasRedisPool + HasMySqlPool> HasDbPool for T {}
 
-pub trait HasRedisConnection: Ctx {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection;
-}
+new_combinator! {
+    'combinator: struct WithPlayer<'a> {
+        player: &'a models::Player,
+    }
+    'trait needs [HasPlayerId, HasPlayerLogin]: 'a trait HasPlayer.get_player -> &models::Player |self| {
+        self.player
+    }
+    'delegates {
+        'a HasRedisPool.get_redis_pool -> RedisPool,
+        'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-impl<T: HasRedisConnection> HasRedisConnection for &mut T {
-    #[inline]
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <T as HasRedisConnection>::get_redis_conn(self)
+        // HasPlayer.get_player -> &models::Player,
+        // HasPlayerLogin.get_player_login -> &str,
+        // HasPlayerId.get_player_id -> u32,
+
+        'a HasMap.get_map -> &models::Map,
+        'a HasMapId.get_map_id -> u32,
+        'a HasMapUid.get_map_uid -> &str,
+
+        'a HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        'a HasEvent.get_event -> &models::Event,
+        'a HasEventHandle.get_event_handle -> &str,
+        'a HasEventId.get_event_id -> u32,
+
+        'a HasEdition.get_edition -> &models::EventEdition,
+        'a HasEditionId.get_edition_id -> u32,
+    }
+    'addon_impls {
+        'a HasPlayerLogin.get_player_login -> &str |self| {
+            &self.player.login
+        },
+        'a HasPlayerId.get_player_id -> u32 |self| {
+            self.player.id
+        }
     }
 }
 
-pub trait HasMySqlConnection: Ctx {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection;
-}
+new_combinator! {
+    'combinator: struct WithPlayerOwned {
+        player: models::Player,
+    }
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-impl<T: HasMySqlConnection> HasMySqlConnection for &mut T {
-    #[inline]
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <T as HasMySqlConnection>::get_mysql_conn(self)
+        // HasPlayer.get_player -> &models::Player,
+        // HasPlayerLogin.get_player_login -> &str,
+        // HasPlayerId.get_player_id -> u32,
+
+        HasMap.get_map -> &models::Map,
+        HasMapId.get_map_id -> u32,
+        HasMapUid.get_map_uid -> &str,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        HasEvent.get_event -> &models::Event,
+        HasEventHandle.get_event_handle -> &str,
+        HasEventId.get_event_id -> u32,
+
+        HasEdition.get_edition -> &models::EventEdition,
+        HasEditionId.get_edition_id -> u32,
+    }
+    'addon_impls {
+        HasPlayer.get_player -> &models::Player |self| {
+            &self.player
+        },
+        HasPlayerLogin.get_player_login -> &str |self| {
+            &self.player.login
+        },
+        HasPlayerId.get_player_id -> u32 |self| {
+            self.player.id
+        }
     }
 }
 
-pub trait HasDbConnection<'a>: HasMySqlConnection + HasRedisConnection {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a>;
-}
+new_combinator! {
+    'combinator: struct WithPlayerId {
+        player_id: u32,
+    }
+    'trait: trait HasPlayerId.get_player_id -> u32 |self| {
+        self.player_id
+    }
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-impl<'a, T: HasDbConnection<'a>> HasDbConnection<'a> for &mut T {
-    #[inline]
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <T as HasDbConnection<'a>>::get_db_conn(self)
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerLogin.get_player_login -> &str,
+        // HasPlayerId.get_player_id -> u32,
+
+        HasMap.get_map -> &models::Map,
+        HasMapUid.get_map_uid -> &str,
+        HasMapId.get_map_id -> u32,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        HasEvent.get_event -> &models::Event,
+        HasEventHandle.get_event_handle -> &str,
+        HasEventId.get_event_id -> u32,
+
+        HasEdition.get_edition -> &models::EventEdition,
+        HasEditionId.get_edition_id -> u32,
     }
 }
 
-pub trait HasPlayer: Ctx {
-    fn get_player(&self) -> &models::Player;
-}
+new_combinator! {
+    'combinator: struct WithMap<'a> {
+        map: &'a models::Map,
+    }
+    'trait needs [HasMapId, HasMapUid]: 'a trait HasMap.get_map -> &models::Map |self| {
+        self.map
+    }
+    'delegates {
+        'a HasRedisPool.get_redis_pool -> RedisPool,
+        'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-impl<T: HasPlayer> HasPlayer for &T {
-    #[inline]
-    fn get_player(&self) -> &models::Player {
-        <T as HasPlayer>::get_player(self)
+        'a HasPlayer.get_player -> &models::Player,
+        'a HasPlayerLogin.get_player_login -> &str,
+        'a HasPlayerId.get_player_id -> u32,
+
+        // HasMap.get_map -> &models::Map,
+        // HasMapUid.get_map_uid -> &str,
+        // HasMapId.get_map_id -> u32,
+
+        'a HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        'a HasEvent.get_event -> &models::Event,
+        'a HasEventHandle.get_event_handle -> &str,
+        'a HasEventId.get_event_id -> u32,
+
+        'a HasEdition.get_edition -> &models::EventEdition,
+        'a HasEditionId.get_edition_id -> u32,
+    }
+    'addon_impls {
+        'a HasMapId.get_map_id -> u32 |self| {
+            self.map.id
+        },
+        'a HasMapUid.get_map_uid -> &str |self| {
+            &self.map.game_id
+        },
     }
 }
 
-impl<T: HasPlayer> HasPlayer for &mut T {
-    #[inline]
-    fn get_player(&self) -> &models::Player {
-        <T as HasPlayer>::get_player(self)
+new_combinator! {
+    'combinator: struct WithMapOwned {
+        map: models::Map,
+    }
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
+
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerLogin.get_player_login -> &str,
+        HasPlayerId.get_player_id -> u32,
+
+        // HasMap.get_map -> &models::Map,
+        // HasMapUid.get_map_uid -> &str,
+        // HasMapId.get_map_id -> u32,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        HasEvent.get_event -> &models::Event,
+        HasEventHandle.get_event_handle -> &str,
+        HasEventId.get_event_id -> u32,
+
+        HasEdition.get_edition -> &models::EventEdition,
+        HasEditionId.get_edition_id -> u32,
+    }
+    'addon_impls {
+        HasMap.get_map -> &models::Map |self| {
+            &self.map
+        },
+        HasMapId.get_map_id -> u32 |self| {
+            self.map.id
+        },
+        HasMapUid.get_map_uid -> &str |self| {
+            &self.map.game_id
+        },
     }
 }
 
-pub trait HasPlayerId: Ctx {
-    fn get_player_id(&self) -> u32;
-}
-
-impl<T: HasPlayerId> HasPlayerId for &T {
-    fn get_player_id(&self) -> u32 {
-        <T as HasPlayerId>::get_player_id(self)
+new_combinator! {
+    'combinator: struct WithMapId {
+        map_id: u32,
     }
-}
-
-impl<T: HasPlayerId> HasPlayerId for &mut T {
-    fn get_player_id(&self) -> u32 {
-        <T as HasPlayerId>::get_player_id(self)
+    'trait: trait HasMapId.get_map_id -> u32 |self| {
+        self.map_id
     }
-}
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-pub trait HasMap: Ctx {
-    fn get_map(&self) -> &models::Map;
-}
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerId.get_player_id -> u32,
+        HasPlayerLogin.get_player_login -> &str,
 
-impl<T: HasMap> HasMap for &T {
-    #[inline]
-    fn get_map(&self) -> &models::Map {
-        <T as HasMap>::get_map(self)
-    }
-}
+        HasMap.get_map -> &models::Map,
+        HasMapUid.get_map_uid -> &str,
+        // HasMapId.get_map_id -> u32,
 
-impl<T: HasMap> HasMap for &mut T {
-    #[inline]
-    fn get_map(&self) -> &models::Map {
-        <T as HasMap>::get_map(self)
-    }
-}
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
 
-pub trait HasMapId: Ctx {
-    fn get_map_id(&self) -> u32;
-}
+        HasEvent.get_event -> &models::Event,
+        HasEventHandle.get_event_handle -> &str,
+        HasEventId.get_event_id -> u32,
 
-impl<T: HasMapId> HasMapId for &T {
-    #[inline]
-    fn get_map_id(&self) -> u32 {
-        <T as HasMapId>::get_map_id(self)
-    }
-}
-
-impl<T: HasMapId> HasMapId for &mut T {
-    #[inline]
-    fn get_map_id(&self) -> u32 {
-        <T as HasMapId>::get_map_id(self)
+        HasEdition.get_edition -> &models::EventEdition,
+        HasEditionId.get_edition_id -> u32,
     }
 }
 
@@ -441,1877 +934,457 @@ impl<T: HasEventId + HasEditionId> HasEventIds for T {
     }
 }
 
-pub trait HasEventId: Ctx {
-    fn get_event_id(&self) -> u32;
-}
+new_combinator! {
+    'combinator: struct WithEventId {
+        event_id: u32,
+    }
+    'trait: trait HasEventId.get_event_id -> u32 |self| {
+        self.event_id
+    }
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-impl<T: HasEventId> HasEventId for &T {
-    fn get_event_id(&self) -> u32 {
-        <T as HasEventId>::get_event_id(self)
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerLogin.get_player_login -> &str,
+        HasPlayerId.get_player_id -> u32,
+
+        HasMap.get_map -> &models::Map,
+        HasMapUid.get_map_uid -> &str,
+        HasMapId.get_map_id -> u32,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        HasEvent.get_event -> &models::Event,
+        HasEventHandle.get_event_handle -> &str,
+        // HasEventId.get_event_id -> u32,
+
+        HasEdition.get_edition -> &models::EventEdition,
+        HasEditionId.get_edition_id -> u32,
+    }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            <E as Ctx>::get_opt_event(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            Some(self.event_id)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            <E as Ctx>::get_opt_edition(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            <E as Ctx>::get_opt_edition_id(&self.extra)
+        }
     }
 }
 
-impl<T: HasEventId> HasEventId for &mut T {
-    fn get_event_id(&self) -> u32 {
-        <T as HasEventId>::get_event_id(self)
+new_combinator! {
+    'combinator: struct WithEditionId {
+        edition_id: u32,
+    }
+    'trait: trait HasEditionId.get_edition_id -> u32 |self| {
+        self.edition_id
+    }
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
+
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerLogin.get_player_login -> &str,
+        HasPlayerId.get_player_id -> u32,
+
+        HasMap.get_map -> &models::Map,
+        HasMapUid.get_map_uid -> &str,
+        HasMapId.get_map_id -> u32,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        HasEvent.get_event -> &models::Event,
+        HasEventHandle.get_event_handle -> &str,
+        HasEventId.get_event_id -> u32,
+
+        HasEdition.get_edition -> &models::EventEdition,
+        // HasEditionId.get_edition_id -> u32,
+    }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            <E as Ctx>::get_opt_event(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            <E as Ctx>::get_opt_event_id(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            <E as Ctx>::get_opt_edition(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            Some(self.edition_id)
+        }
     }
 }
 
-pub trait HasEditionId: Ctx {
-    fn get_edition_id(&self) -> u32;
-}
+new_combinator! {
+    'combinator: struct WithEvent<'a> {
+        event: &'a models::Event,
+    }
+    'trait needs [HasEventHandle, HasEventId]: 'a trait HasEvent.get_event -> &models::Event |self| {
+        self.event
+    }
+    'delegates {
+        'a HasRedisPool.get_redis_pool -> RedisPool,
+        'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-impl<T: HasEditionId> HasEditionId for &T {
-    fn get_edition_id(&self) -> u32 {
-        <T as HasEditionId>::get_edition_id(self)
+        'a HasPlayer.get_player -> &models::Player,
+        'a HasPlayerLogin.get_player_login -> &str,
+        'a HasPlayerId.get_player_id -> u32,
+
+        'a HasMap.get_map -> &models::Map,
+        'a HasMapUid.get_map_uid -> &str,
+        'a HasMapId.get_map_id -> u32,
+
+        'a HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        // HasEvent.get_event -> &models::Event,
+        // HasEventHandle.get_event_handle -> &str,
+        // HasEventId.get_event_id -> u32,
+
+        'a HasEdition.get_edition -> &models::EventEdition,
+        'a HasEditionId.get_edition_id -> u32,
+    }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            Some(self.event)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            Some(self.event.id)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            <E as Ctx>::get_opt_edition(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            <E as Ctx>::get_opt_edition_id(&self.extra)
+        }
+    }
+    'addon_impls {
+        'a HasEventHandle.get_event_handle -> &str |self| {
+            &self.event.handle
+        },
+        'a HasEventId.get_event_id -> u32 |self| {
+            self.event.id
+        },
     }
 }
 
-impl<T: HasEditionId> HasEditionId for &mut T {
-    fn get_edition_id(&self) -> u32 {
-        <T as HasEditionId>::get_edition_id(self)
+new_combinator! {
+    'combinator: struct WithEventOwned {
+        event: models::Event,
+    }
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
+
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerLogin.get_player_login -> &str,
+        HasPlayerId.get_player_id -> u32,
+
+        HasMap.get_map -> &models::Map,
+        HasMapUid.get_map_uid -> &str,
+        HasMapId.get_map_id -> u32,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        // HasEvent.get_event -> &models::Event,
+        // HasEventHandle.get_event_handle -> &str,
+        // HasEventId.get_event_id -> u32,
+
+        HasEdition.get_edition -> &models::EventEdition,
+        HasEditionId.get_edition_id -> u32,
+    }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            Some(&self.event)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            Some(self.event.id)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            <E as Ctx>::get_opt_edition(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            <E as Ctx>::get_opt_edition_id(&self.extra)
+        }
+    }
+    'addon_impls {
+        HasEvent.get_event -> &models::Event |self| {
+            &self.event
+        },
+        HasEventHandle.get_event_handle -> &str |self| {
+            &self.event.handle
+        },
+        HasEventId.get_event_id -> u32 |self| {
+            self.event.id
+        },
     }
 }
 
-pub trait HasEvent: Ctx {
-    fn get_event(&self) -> &models::Event;
-}
+new_combinator! {
+    'combinator: struct WithEdition<'a> {
+        edition: &'a models::EventEdition,
+    }
+    'trait needs [HasEventId, HasEditionId]: 'a trait HasEdition.get_edition -> &models::EventEdition |self| {
+        self.edition
+    }
+    'delegates {
+        'a HasRedisPool.get_redis_pool -> RedisPool,
+        'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-impl<T: HasEvent> HasEvent for &T {
-    fn get_event(&self) -> &models::Event {
-        <T as HasEvent>::get_event(self)
+        'a HasPlayer.get_player -> &models::Player,
+        'a HasPlayerLogin.get_player_login -> &str,
+        'a HasPlayerId.get_player_id -> u32,
+
+        'a HasMap.get_map -> &models::Map,
+        'a HasMapUid.get_map_uid -> &str,
+        'a HasMapId.get_map_id -> u32,
+
+        'a HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        'a HasEvent.get_event -> &models::Event,
+        'a HasEventHandle.get_event_handle -> &str,
+        // HasEventId.get_event_id -> u32,
+
+        // HasEdition.get_edition -> &models::EventEdition,
+        // HasEditionId.get_edition_id -> u32,
+    }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            <E as Ctx>::get_opt_event(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            Some(self.edition.event_id)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            Some(self.edition)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            Some(self.edition.id)
+        }
+    }
+    'addon_impls {
+        'a HasEditionId.get_edition_id -> u32 |self| {
+            self.edition.id
+        },
+        'a HasEventId.get_event_id -> u32 |self| {
+            self.edition.event_id
+        },
     }
 }
 
-impl<T: HasEvent> HasEvent for &mut T {
-    fn get_event(&self) -> &models::Event {
-        <T as HasEvent>::get_event(self)
+new_combinator! {
+    'combinator: struct WithEditionOwned {
+        edition:  models::EventEdition,
+    }
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
+
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerLogin.get_player_login -> &str,
+        HasPlayerId.get_player_id -> u32,
+
+        HasMap.get_map -> &models::Map,
+        HasMapUid.get_map_uid -> &str,
+        HasMapId.get_map_id -> u32,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        HasEvent.get_event -> &models::Event,
+        HasEventHandle.get_event_handle -> &str,
+        // HasEventId.get_event_id -> u32,
+
+        // HasEdition.get_edition -> &models::EventEdition,
+        // HasEditionId.get_edition_id -> u32,
+    }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            <E as Ctx>::get_opt_event(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            Some(self.edition.event_id)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            Some(&self.edition)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            Some(self.edition.id)
+        }
+    }
+    'addon_impls {
+        HasEdition.get_edition -> &models::EventEdition |self| {
+            &self.edition
+        },
+        HasEditionId.get_edition_id -> u32 |self| {
+            self.edition.id
+        },
+        HasEventId.get_event_id -> u32 |self| {
+            self.edition.event_id
+        },
     }
 }
 
-pub trait HasEdition: Ctx {
-    fn get_edition(&self) -> &models::EventEdition;
-}
-
-impl<T: HasEdition> HasEdition for &T {
-    fn get_edition(&self) -> &models::EventEdition {
-        <T as HasEdition>::get_edition(self)
+new_combinator! {
+    'combinator: struct WithNoEvent {
     }
-}
+    'delegates {
+        HasRedisPool.get_redis_pool -> RedisPool,
+        HasMySqlPool.get_mysql_pool -> MySqlPool,
 
-impl<T: HasEdition> HasEdition for &mut T {
-    fn get_edition(&self) -> &models::EventEdition {
-        <T as HasEdition>::get_edition(self)
+        HasPlayer.get_player -> &models::Player,
+        HasPlayerLogin.get_player_login -> &str,
+        HasPlayerId.get_player_id -> u32,
+
+        HasMap.get_map -> &models::Map,
+        HasMapUid.get_map_uid -> &str,
+        HasMapId.get_map_id -> u32,
+
+        HasMappackId.get_mappack_id -> AnyMappackId<'_>,
+
+        // HasEvent.get_event -> &models::Event,
+        // HasEventHandle.get_event_handle -> &str,
+        // HasEventId.get_event_id -> u32,
+
+        // HasEdition.get_edition -> &models::EventEdition,
+        // HasEditionId.get_edition_id -> u32,
+    }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            None
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            None
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            None
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            None
+        }
     }
 }
 
 #[derive(Default)]
 #[non_exhaustive]
-pub struct Context<'a> {
-    pub event: OptEvent<'a, 'a>,
-}
-
-impl Ctx for Context<'_> {
-    #[inline]
-    fn ctx(&self) -> &Context<'_> {
-        self
-    }
-}
-
-/**
- * In this module, impls are ordered in a way so that the first impls of each type
- * are the one made for the type, and the following impls are for delegation.
- *
- * This is just ordered like this so it's easier to refactor it by using a macro in the future.
- */
-
-/**************************************
- * MAP IMPL
- **************************************/
-
-pub struct WithMap<'a, E> {
-    map: &'a models::Map,
-    extra: E,
-}
-
-impl<E: Ctx> HasMap for WithMap<'_, E> {
-    fn get_map(&self) -> &models::Map {
-        self.map
-    }
-}
-
-impl<E: Ctx> HasMapId for WithMap<'_, E> {
-    fn get_map_id(&self) -> u32 {
-        self.map.id
-    }
-}
-
-impl<E: Ctx> HasMapUid for WithMap<'_, E> {
-    fn get_map_uid(&self) -> &str {
-        &self.map.game_id
-    }
-}
-
-impl<E: Ctx> Ctx for WithMap<'_, E> {
-    #[inline]
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithMap<'_, E> {
-    #[inline]
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithMap<'_, E> {
-    #[inline]
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithMap<'_, E> {
-    #[inline]
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithMap<'_, E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithMap<'_, E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithMap<'_, E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithMap<'_, E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithMap<'_, E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithMap<'_, E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithMap<'_, E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithMap<'_, E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithMap<'_, E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithMap<'_, E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * MAP ID IMPL
- **************************************/
-
-pub struct WithMapId<E> {
-    map_id: u32,
-    extra: E,
-}
-
-impl<E: Ctx> HasMapId for WithMapId<E> {
-    fn get_map_id(&self) -> u32 {
-        self.map_id
-    }
-}
-
-impl<E: Ctx> Ctx for WithMapId<E> {
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithMapId<E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithMapId<E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithMapId<E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithMapId<E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithMapId<E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithMapId<E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithMapId<E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithMapId<E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithMapId<E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithMapId<E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithMapId<E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithMapId<E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithMapId<E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithMapId<E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithMapId<E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * PLAYER IMPL
- **************************************/
-
-pub struct WithPlayer<'a, E> {
-    player: &'a models::Player,
-    extra: E,
-}
-
-impl<E: Ctx> HasPlayer for WithPlayer<'_, E> {
-    fn get_player(&self) -> &models::Player {
-        self.player
-    }
-}
-
-impl<E: Ctx> HasPlayerId for WithPlayer<'_, E> {
-    fn get_player_id(&self) -> u32 {
-        self.player.id
-    }
-}
-
-impl<E: Ctx> HasPlayerLogin for WithPlayer<'_, E> {
-    fn get_player_login(&self) -> &str {
-        &self.player.login
-    }
-}
-
-impl<E: Ctx> Ctx for WithPlayer<'_, E> {
-    #[inline]
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithPlayer<'_, E> {
-    #[inline]
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithPlayer<'_, E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithPlayer<'_, E> {
-    #[inline]
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithPlayer<'_, E> {
-    #[inline]
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithPlayer<'_, E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithPlayer<'_, E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithPlayer<'_, E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithPlayer<'_, E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithPlayer<'_, E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithPlayer<'_, E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithPlayer<'_, E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithPlayer<'_, E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithPlayer<'_, E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * PLAYER ID IMPL
- **************************************/
-
-pub struct WithPlayerId<E> {
-    player_id: u32,
-    extra: E,
-}
-
-impl<E: Ctx> HasPlayerId for WithPlayerId<E> {
-    fn get_player_id(&self) -> u32 {
-        self.player_id
-    }
-}
-
-impl<E: Ctx> Ctx for WithPlayerId<E> {
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithPlayerId<E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithPlayerId<E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithPlayerId<E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithPlayerId<E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithPlayerId<E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithPlayerId<E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithPlayerId<E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithPlayerId<E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithPlayerId<E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithPlayerId<E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithPlayerId<E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithPlayerId<E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithPlayerId<E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithPlayerId<E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithPlayerId<E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * MYSQL CONNECTION IMPL
- **************************************/
-
-pub struct WithMySqlConnection<'a, E> {
-    mysql_conn: &'a mut sqlx::MySqlConnection,
-    extra: E,
-}
-
-impl<E: Ctx> HasMySqlConnection for WithMySqlConnection<'_, E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        self.mysql_conn
-    }
-}
-
-impl<E: Ctx> Ctx for WithMySqlConnection<'_, E> {
-    #[inline]
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithMySqlConnection<'_, E> {
-    #[inline]
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithMySqlConnection<'_, E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithMySqlConnection<'_, E> {
-    #[inline]
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithMySqlConnection<'_, E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithMySqlConnection<'_, E> {
-    #[inline]
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithMySqlConnection<'_, E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithMySqlConnection<'_, E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithMySqlConnection<'_, E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithMySqlConnection<'_, E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithMySqlConnection<'_, E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithMySqlConnection<'_, E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithMySqlConnection<'_, E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithMySqlConnection<'_, E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithMySqlConnection<'_, E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithMySqlConnection<'_, E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * REDIS CONNECTION IMPL
- **************************************/
-
-pub struct WithRedisConnection<'a, E> {
-    redis_conn: &'a mut RedisConnection,
-    extra: E,
-}
-
-impl<E: Ctx> HasRedisConnection for WithRedisConnection<'_, E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        self.redis_conn
-    }
-}
-
-impl<E: Ctx> Ctx for WithRedisConnection<'_, E> {
-    #[inline]
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithRedisConnection<'_, E> {
-    #[inline]
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithRedisConnection<'_, E> {
-    #[inline]
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithRedisConnection<'_, E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithRedisConnection<'_, E> {
-    #[inline]
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithRedisConnection<'_, E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithRedisConnection<'_, E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithRedisConnection<'_, E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithRedisConnection<'_, E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithRedisConnection<'_, E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithRedisConnection<'_, E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithRedisConnection<'_, E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithRedisConnection<'_, E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithRedisConnection<'_, E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithRedisConnection<'_, E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithRedisConnection<'_, E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * DB CONNECTION IMPL
- **************************************/
-
-pub struct WithDbConnection<'a, 'b, E> {
-    conn: &'a mut DatabaseConnection<'b>,
-    extra: E,
-}
-
-impl<'a, E: Ctx> HasDbConnection<'a> for WithDbConnection<'_, 'a, E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        self.conn
-    }
-}
-
-impl<E: Ctx> HasMySqlConnection for WithDbConnection<'_, '_, E> {
-    #[inline]
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        &mut self.conn.mysql_conn
-    }
-}
-
-impl<E: Ctx> HasRedisConnection for WithDbConnection<'_, '_, E> {
-    #[inline]
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        &mut self.conn.redis_conn
-    }
-}
-
-impl<E: Ctx> Ctx for WithDbConnection<'_, '_, E> {
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithDbConnection<'_, '_, E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithDbConnection<'_, '_, E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithDbConnection<'_, '_, E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithDbConnection<'_, '_, E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithDbConnection<'_, '_, E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithDbConnection<'_, '_, E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithDbConnection<'_, '_, E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithDbConnection<'_, '_, E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithDbConnection<'_, '_, E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithDbConnection<'_, '_, E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithDbConnection<'_, '_, E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithDbConnection<'_, '_, E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithDbConnection<'_, '_, E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * EVENT IMPL
- **************************************/
-
-pub struct WithEvent<'a, E> {
-    event: &'a models::Event,
-    extra: E,
-}
-
-impl<E: Ctx> HasEvent for WithEvent<'_, E> {
-    fn get_event(&self) -> &models::Event {
-        self.event
-    }
-}
-
-impl<E: Ctx> HasEventId for WithEvent<'_, E> {
-    fn get_event_id(&self) -> u32 {
-        self.event.id
-    }
-}
-
-impl<E: Ctx> Ctx for WithEvent<'_, E> {
-    #[inline]
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithEvent<'_, E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithEvent<'_, E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithEvent<'_, E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithEvent<'_, E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithEvent<'_, E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithEvent<'_, E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithEvent<'_, E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithEvent<'_, E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithEvent<'_, E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithEvent<'_, E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithEvent<'_, E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithEvent<'_, E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithEvent<'_, E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithEvent<'_, E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * EVENT ID IMPL
- **************************************/
-
-pub struct WithEventId<E> {
-    event_id: u32,
-    extra: E,
-}
-
-impl<E: Ctx> HasEventId for WithEventId<E> {
-    fn get_event_id(&self) -> u32 {
-        self.event_id
-    }
-}
-
-impl<E: Ctx> Ctx for WithEventId<E> {
-    #[inline]
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithEventId<E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithEventId<E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithEventId<E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithEventId<E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithEventId<E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithEventId<E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithEventId<E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithEventId<E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithEventId<E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithEventId<E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithEventId<E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithEventId<E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithEventId<E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithEventId<E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithEventId<E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * EVENT EDITION IMPL
- **************************************/
-
-pub struct WithEdition<'a, E> {
-    edition: &'a models::EventEdition,
-    extra: E,
-}
-
-impl<E: Ctx> HasEdition for WithEdition<'_, E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        self.edition
-    }
-}
-
-impl<E: Ctx> HasEventId for WithEdition<'_, E> {
-    fn get_event_id(&self) -> u32 {
-        self.edition.event_id
-    }
-}
-
-impl<E: Ctx> HasEditionId for WithEdition<'_, E> {
-    fn get_edition_id(&self) -> u32 {
-        self.edition.id
-    }
-}
-
-impl<E: Ctx> Ctx for WithEdition<'_, E> {
-    #[inline]
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithEdition<'_, E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithEdition<'_, E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithEdition<'_, E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithEdition<'_, E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithEdition<'_, E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithEdition<'_, E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithEdition<'_, E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithEdition<'_, E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithEdition<'_, E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithEdition<'_, E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithEdition<'_, E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithEdition<'_, E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithEdition<'_, E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * EVENT EDITION ID IMPL
- **************************************/
-
-pub struct WithEditionId<E> {
-    edition_id: u32,
-    extra: E,
-}
-
-impl<E: Ctx> HasEditionId for WithEditionId<E> {
-    fn get_edition_id(&self) -> u32 {
-        self.edition_id
-    }
-}
-
-impl<E: Ctx> Ctx for WithEditionId<E> {
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithEditionId<E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithEditionId<E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithEditionId<E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithEditionId<E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithEditionId<E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithEditionId<E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithEditionId<E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithEditionId<E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithEditionId<E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithEditionId<E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithEditionId<E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithEditionId<E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithEditionId<E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithEditionId<E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithEditionId<E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * REDIS POOL IMPL
- **************************************/
-
-pub struct WithRedisPool<E> {
-    pool: RedisPool,
-    extra: E,
-}
-
-impl<E: Ctx> HasRedisPool for WithRedisPool<E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        self.pool.clone()
-    }
-}
-
-impl<E: Ctx> Ctx for WithRedisPool<E> {
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithRedisPool<E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithRedisPool<E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithRedisPool<E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithRedisPool<E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithRedisPool<E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithRedisPool<E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithRedisPool<E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithRedisPool<E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithRedisPool<E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithRedisPool<E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithRedisPool<E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithRedisPool<E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithRedisPool<E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithRedisPool<E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithRedisPool<E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * MYSQL POOL IMPL
- **************************************/
-
-pub struct WithMySqlPool<E> {
-    pool: MySqlPool,
-    extra: E,
-}
-
-impl<E: Ctx> HasMySqlPool for WithMySqlPool<E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        self.pool.clone()
-    }
-}
-
-impl<E: Ctx> Ctx for WithMySqlPool<E> {
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithMySqlPool<E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithMySqlPool<E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithMySqlPool<E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithMySqlPool<E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithMySqlPool<E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithMySqlPool<E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithMySqlPool<E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithMySqlPool<E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithMySqlPool<E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithMySqlPool<E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithMySqlPool<E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithMySqlPool<E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithMySqlPool<E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithMySqlPool<E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithMySqlPool<E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * PLAYER LOGIN IMPL
- **************************************/
-
-pub struct WithPlayerLogin<'a, E> {
-    login: &'a str,
-    extra: E,
-}
-
-impl<E: Ctx> HasPlayerLogin for WithPlayerLogin<'_, E> {
-    fn get_player_login(&self) -> &str {
-        self.login
-    }
-}
-
-impl<E: Ctx> Ctx for WithPlayerLogin<'_, E> {
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithPlayerLogin<'_, E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithPlayerLogin<'_, E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithPlayerLogin<'_, E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithPlayerLogin<'_, E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithPlayerLogin<'_, E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithPlayerLogin<'_, E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithPlayerLogin<'_, E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithPlayerLogin<'_, E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithPlayerLogin<'_, E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithPlayerLogin<'_, E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithPlayerLogin<'_, E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithPlayerLogin<'_, E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithPlayerLogin<'_, E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasMapUid> HasMapUid for WithPlayerLogin<'_, E> {
-    fn get_map_uid(&self) -> &str {
-        <E as HasMapUid>::get_map_uid(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithPlayerLogin<'_, E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * MAP UID IMPL
- **************************************/
-
-pub struct WithMapUid<'a, E> {
-    uid: &'a str,
-    extra: E,
-}
-
-impl<E: Ctx> HasMapUid for WithMapUid<'_, E> {
-    fn get_map_uid(&self) -> &str {
-        self.uid
-    }
-}
-
-impl<E: Ctx> Ctx for WithMapUid<'_, E> {
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithMapUid<'_, E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithMapUid<'_, E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithMapUid<'_, E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithMapUid<'_, E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithMapUid<'_, E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithMapUid<'_, E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithMapUid<'_, E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithMapUid<'_, E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithMapUid<'_, E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithMapUid<'_, E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithMapUid<'_, E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithMapUid<'_, E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithMapUid<'_, E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithMapUid<'_, E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
-    }
-}
-
-impl<E: HasEventHandle> HasEventHandle for WithMapUid<'_, E> {
-    fn get_event_handle(&self) -> &str {
-        <E as HasEventHandle>::get_event_handle(&self.extra)
-    }
-}
-
-/**************************************
- * EVENT HANDLE IMPL
- **************************************/
-
-pub struct WithEventHandle<'a, E> {
-    handle: &'a str,
-    extra: E,
-}
-
-impl<E: Ctx> HasEventHandle for WithEventHandle<'_, E> {
-    fn get_event_handle(&self) -> &str {
-        self.handle
-    }
-}
-
-impl<E: Ctx> Ctx for WithEventHandle<'_, E> {
-    fn ctx(&self) -> &Context<'_> {
-        <E as Ctx>::ctx(&self.extra)
-    }
-}
-
-impl<E: HasPlayerLogin> HasPlayerLogin for WithEventHandle<'_, E> {
-    fn get_player_login(&self) -> &str {
-        <E as HasPlayerLogin>::get_player_login(&self.extra)
-    }
-}
-
-impl<E: HasRedisPool> HasRedisPool for WithEventHandle<'_, E> {
-    fn get_redis_pool(&self) -> RedisPool {
-        <E as HasRedisPool>::get_redis_pool(&self.extra)
-    }
-}
-
-impl<E: HasMySqlPool> HasMySqlPool for WithEventHandle<'_, E> {
-    fn get_mysql_pool(&self) -> MySqlPool {
-        <E as HasMySqlPool>::get_mysql_pool(&self.extra)
-    }
-}
-
-impl<E: HasRedisConnection> HasRedisConnection for WithEventHandle<'_, E> {
-    fn get_redis_conn(&mut self) -> &mut RedisConnection {
-        <E as HasRedisConnection>::get_redis_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasMySqlConnection> HasMySqlConnection for WithEventHandle<'_, E> {
-    fn get_mysql_conn(&mut self) -> &mut sqlx::MySqlConnection {
-        <E as HasMySqlConnection>::get_mysql_conn(&mut self.extra)
-    }
-}
-
-impl<'a, E: HasDbConnection<'a>> HasDbConnection<'a> for WithEventHandle<'_, E> {
-    fn get_db_conn(&mut self) -> &mut DatabaseConnection<'a> {
-        <E as HasDbConnection<'a>>::get_db_conn(&mut self.extra)
-    }
-}
-
-impl<E: HasPlayer> HasPlayer for WithEventHandle<'_, E> {
-    fn get_player(&self) -> &models::Player {
-        <E as HasPlayer>::get_player(&self.extra)
-    }
-}
-
-impl<E: HasPlayerId> HasPlayerId for WithEventHandle<'_, E> {
-    fn get_player_id(&self) -> u32 {
-        <E as HasPlayerId>::get_player_id(&self.extra)
-    }
-}
-
-impl<E: HasMap> HasMap for WithEventHandle<'_, E> {
-    fn get_map(&self) -> &models::Map {
-        <E as HasMap>::get_map(&self.extra)
-    }
-}
-
-impl<E: HasMapId> HasMapId for WithEventHandle<'_, E> {
-    fn get_map_id(&self) -> u32 {
-        <E as HasMapId>::get_map_id(&self.extra)
-    }
-}
-
-impl<E: HasEvent> HasEvent for WithEventHandle<'_, E> {
-    fn get_event(&self) -> &models::Event {
-        <E as HasEvent>::get_event(&self.extra)
-    }
-}
-
-impl<E: HasEventId> HasEventId for WithEventHandle<'_, E> {
-    fn get_event_id(&self) -> u32 {
-        <E as HasEventId>::get_event_id(&self.extra)
-    }
-}
-
-impl<E: HasEdition> HasEdition for WithEventHandle<'_, E> {
-    fn get_edition(&self) -> &models::EventEdition {
-        <E as HasEdition>::get_edition(&self.extra)
-    }
-}
-
-impl<E: HasEditionId> HasEditionId for WithEventHandle<'_, E> {
-    fn get_edition_id(&self) -> u32 {
-        <E as HasEditionId>::get_edition_id(&self.extra)
+pub struct Context {
+    _priv: (),
+}
+
+impl Ctx for Context {}
+
+pub struct SqlFragmentBuilder<'ctx, C> {
+    ctx: &'ctx C,
+}
+
+impl<'ctx, C: Ctx> SqlFragmentBuilder<'ctx, C> {
+    pub fn push_event_view_name<'a, 'args, DB: sqlx::Database>(
+        &self,
+        qb: &'a mut sqlx::QueryBuilder<'args, DB>,
+        label: &str,
+    ) -> &'a mut sqlx::QueryBuilder<'args, DB> {
+        match self.ctx.get_opt_event_edition_ids() {
+            Some(_) => qb.push("global_event_records "),
+            None => qb.push("global_records "),
+        }
+        .push(label)
+    }
+
+    #[inline(always)]
+    pub fn push_event_join<'a, 'args, DB: sqlx::Database>(
+        &self,
+        qb: &'a mut sqlx::QueryBuilder<'args, DB>,
+        label: &str,
+        records_label: &str,
+    ) -> &'a mut sqlx::QueryBuilder<'args, DB> {
+        match self.ctx.get_opt_event_edition_ids() {
+            Some(_) => qb
+                .push("inner join event_edition_records ")
+                .push(label)
+                .push(" on ")
+                .push(label)
+                .push(".record_id = ")
+                .push(records_label)
+                .push(".record_id"),
+            None => qb,
+        }
+    }
+
+    #[inline(always)]
+    pub fn push_event_filter<'a, 'args, DB: sqlx::Database>(
+        &self,
+        qb: &'a mut sqlx::QueryBuilder<'args, DB>,
+        label: &str,
+    ) -> &'a mut sqlx::QueryBuilder<'args, DB>
+    where
+        u32: sqlx::Encode<'args, DB> + sqlx::Type<DB>,
+    {
+        match self.ctx.get_opt_event_edition_ids() {
+            Some((ev, ed)) => qb
+                .push("and (")
+                .push(label)
+                .push(".event_id = ")
+                .push_bind(ev)
+                .push(" and ")
+                .push(label)
+                .push(".edition_id = ")
+                .push_bind(ed)
+                .push(")"),
+            None => qb,
+        }
     }
 }

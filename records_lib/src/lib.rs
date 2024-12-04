@@ -54,7 +54,6 @@ pub struct Database {
     pub redis_pool: RedisPool,
 }
 
-// TODO: remove this after doing the tests
 #[allow(missing_docs)]
 #[macro_export]
 macro_rules! acquire {

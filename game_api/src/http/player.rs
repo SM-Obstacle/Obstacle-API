@@ -1,15 +1,13 @@
-use std::iter;
-
 use actix_session::Session;
 use actix_web::{
     web::{self, Data, Json, Query},
     HttpResponse, Responder, Scope,
 };
 use futures::TryStreamExt;
-use itertools::Itertools as _;
 use records_lib::{
     acquire,
-    event::{self, OptEvent},
+    context::{Context, Ctx},
+    event::{self},
     models::Banishment,
     must, Database,
 };
@@ -26,7 +24,7 @@ use crate::{
         TIMEOUT, WEB_TOKEN_SESS_KEY,
     },
     discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
-    utils::json,
+    utils::{self, json},
     AccessTokenErr, FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult,
     RecordsResultExt, Res,
 };
@@ -208,15 +206,19 @@ pub async fn finished_at(
 ) -> RecordsResponse<impl Responder> {
     let mut conn = acquire!(db.with_api_err().fit(req_id)?);
 
-    let res = pf::finished(
-        login,
-        &mut conn,
-        body.into_params(None),
-        Default::default(),
-        at,
-    )
-    .await
-    .fit(req_id)?;
+    let ctx = Context::default()
+        .with_map_uid(&body.map_uid)
+        .with_player_login(&login);
+
+    let map = must::have_map(conn.mysql_conn, &ctx)
+        .await
+        .with_api_err()
+        .fit(req_id)?;
+    let ctx = ctx.with_map(&map);
+
+    let res = pf::finished(&mut conn, &ctx, body.rest, at)
+        .await
+        .fit(req_id)?;
 
     json(res.res)
 }
@@ -329,11 +331,17 @@ async fn pb(
     Query(body): pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let ctx = Context::default()
+        .with_map_uid(&body.map_uid)
+        .with_player_login(&login)
+        .with_pool(db.0);
 
-    let map = must::have_map(&mut mysql_conn, &body.map_uid)
+    let map = must::have_map(&mut mysql_conn, &ctx)
         .await
         .with_api_err()
         .fit(req_id)?;
+
+    let ctx = ctx.with_map(&map);
 
     let mut editions = event::get_editions_which_contain(&mut mysql_conn, map.id);
     let edition = editions.try_next().await.with_api_err().fit(req_id)?;
@@ -346,17 +354,20 @@ async fn pb(
 
     drop(editions);
 
-    match edition {
+    let res = match edition {
         Some((event_id, edition_id, _)) if single_edition => {
             let (event, edition) =
                 must::have_event_edition_from_ids(&mut mysql_conn, event_id, edition_id)
                     .await
                     .with_api_err()
                     .fit(req_id)?;
-            pb::pb(login, req_id, db, body, OptEvent::new(&event, &edition)).await
+            pb::pb(ctx.with_event_edition(&event, &edition)).await
         }
-        _ => pb::pb(login, req_id, db, body, Default::default()).await,
+        _ => pb::pb(ctx).await,
     }
+    .fit(req_id)?;
+
+    utils::json(res)
 }
 
 #[derive(Deserialize)]
@@ -378,26 +389,29 @@ async fn times(
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let player = records_lib::must::have_player(&mut mysql_conn, &login)
-        .await
-        .fit(req_id)?;
+    let player = records_lib::must::have_player(
+        &mut mysql_conn,
+        Context::default().with_player_login(&login),
+    )
+    .await
+    .fit(req_id)?;
 
-    let query = format!(
+    let mut query = sqlx::QueryBuilder::new(
         "SELECT m.game_id AS map_uid, MIN(r.time) AS time
         FROM maps m
         INNER JOIN records r ON r.map_id = m.id
-        WHERE r.record_player_id = ? AND m.game_id IN ({})
-        GROUP BY m.id",
-        iter::repeat("?").take(body.maps_uids.len()).join(",")
+        WHERE r.record_player_id = ",
     );
-
-    let mut query = sqlx::query_as::<_, TimesResponseItem>(&query).bind(player.id);
-
-    for map_uid in body.maps_uids {
-        query = query.bind(map_uid);
+    let mut sep = query
+        .push_bind(player.id)
+        .push(" AND m.game_id IN (")
+        .separated(", ");
+    for uid in body.maps_uids {
+        sep.push_bind(uid);
     }
-
     let result = query
+        .push(") GROUP BY m.id")
+        .build_query_as::<TimesResponseItem>()
         .fetch_all(&mut *mysql_conn)
         .await
         .with_api_err()

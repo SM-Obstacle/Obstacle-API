@@ -1,22 +1,16 @@
-use std::iter;
-
-use crate::{utils, FitRequestId, RecordsResponse, RecordsResult, RecordsResultExt};
-use actix_web::{web::Query, Responder};
+use crate::{RecordsResult, RecordsResultExt};
+use actix_web::web::Query;
 use deadpool_redis::redis::AsyncCommands;
-use itertools::Itertools;
+use records_lib::context::{Ctx, HasMap, HasMapId, HasPlayer, HasPlayerId, HasPlayerLogin};
 use records_lib::ranks::force_update;
 use records_lib::{
-    event::OptEvent,
-    models, must, player,
+    must, player,
     ranks::{get_rank, update_leaderboard},
     redis_key::map_key,
     DatabaseConnection,
 };
 use records_lib::{table_lock, RedisConnection};
 use serde::{Deserialize, Serialize};
-use tracing_actix_web::RequestId;
-
-use super::map::MapParam;
 
 #[derive(Deserialize)]
 pub struct OverviewQuery {
@@ -24,21 +18,6 @@ pub struct OverviewQuery {
     pub(crate) login: String,
     #[serde(alias = "mapId")]
     pub(crate) map_uid: String,
-}
-
-pub struct OverviewParams<'a> {
-    pub(crate) login: String,
-    pub(crate) map: MapParam<'a>,
-}
-
-impl OverviewQuery {
-    #[inline]
-    pub fn into_params(self, map: Option<&models::Map>) -> OverviewParams<'_> {
-        OverviewParams {
-            login: self.login,
-            map: MapParam::from_map(map, self.map_uid),
-        }
-    }
 }
 
 pub type OverviewReq = Query<OverviewQuery>;
@@ -60,17 +39,20 @@ pub struct RankedRecord {
     pub time: i32,
 }
 
-async fn get_range(
+async fn get_range<C: HasMapId>(
     conn: &mut DatabaseConnection<'_>,
     (start, end): (u32, u32),
-    map_id: u32,
-    event: OptEvent<'_, '_>,
+    ctx: C,
 ) -> RecordsResult<Vec<RankedRecord>> {
     // transforms exclusive to inclusive range
     let end = end - 1;
     let player_ids: Vec<i32> = conn
         .redis_conn
-        .zrange(map_key(map_id, event), start as isize, end as isize)
+        .zrange(
+            map_key(ctx.get_map_id(), ctx.get_opt_event_edition()),
+            start as isize,
+            end as isize,
+        )
         .await
         .with_api_err()?;
 
@@ -79,33 +61,29 @@ async fn get_range(
         return Ok(Vec::new());
     }
 
-    let (join_event, and_event) = event.get_join();
+    let builder = ctx.sql_frag_builder();
 
-    let params = iter::repeat("?").take(player_ids.len()).join(",");
-
-    let query = format!(
+    let mut query = sqlx::QueryBuilder::new(
         "SELECT CAST(0 AS UNSIGNED) AS rank,
             p.id AS player_id,
             p.login AS login,
             p.name AS nickname,
             min(time) as time,
             map_id
-        FROM records r
-        {join_event}
-        INNER JOIN players p ON r.record_player_id = p.id
-        WHERE map_id = ? AND record_player_id IN ({params})
-            {and_event}
-        GROUP BY record_player_id
-        ORDER BY time, record_date ASC",
+        FROM records r ",
     );
-
-    let mut query = sqlx::query_as(&query).bind(map_id);
+    builder.push_event_join(&mut query, "eer", "r").push(
+        "INNER JOIN players p ON r.record_player_id = p.id \
+            WHERE map_id = ? AND record_player_id IN (",
+    );
+    let mut sep = query.separated(", ");
     for id in player_ids {
-        query = query.bind(id);
+        sep.push_bind(id);
     }
-    if let Some((event, edition)) = event.0 {
-        query = query.bind(event.id).bind(edition.id);
-    }
+    let query = builder
+        .push_event_filter(&mut query, "eer")
+        .push(" GROUP BY record_player_id ORDER BY time, record_date ASC")
+        .build_query_as();
 
     let records: Vec<RecordQueryRow> = query
         .fetch_all(&mut **conn.mysql_conn)
@@ -116,7 +94,7 @@ async fn get_range(
 
     for r in records {
         out.push(RankedRecord {
-            rank: get_rank(conn, map_id, r.player_id, r.time, event).await? as _,
+            rank: get_rank(conn, Ctx::with_player_id(&ctx, r.player_id), r.time).await? as _,
             login: r.login,
             nickname: r.nickname,
             time: r.time,
@@ -134,20 +112,20 @@ pub struct ResponseBody {
 
 /// Checks that the time of the player registered in MariaDB and Redis are the same, and updates
 /// the Redis leaderboard otherwise.
-async fn check_update_redis_lb(
-    conn: &mut DatabaseConnection<'_>,
-    map_id: u32,
-    player_id: u32,
-    event: OptEvent<'_, '_>,
-) -> RecordsResult<()> {
+async fn check_update_redis_lb<C>(conn: &mut DatabaseConnection<'_>, ctx: C) -> RecordsResult<()>
+where
+    C: HasMapId + HasPlayerId,
+{
     // Get the time of the player on this map
-    let mdb_time =
-        player::get_time_on_map(conn.mysql_conn, player_id, map_id, event.to_ids()).await?;
+    let mdb_time = player::get_time_on_map(conn.mysql_conn, &ctx).await?;
 
     // Get the one in Redis
     let r_time: Option<i32> = conn
         .redis_conn
-        .zscore(map_key(map_id, event), player_id)
+        .zscore(
+            map_key(ctx.get_map_id(), ctx.get_opt_event_edition()),
+            ctx.get_player_id(),
+        )
         .await
         .with_api_err()?;
 
@@ -156,7 +134,7 @@ async fn check_update_redis_lb(
         .zip(r_time)
         .is_some_and(|(mdb_time, r_time)| mdb_time != r_time)
     {
-        force_update(map_id, event, conn).await.with_api_err()?;
+        force_update(conn, &ctx).await.with_api_err()?;
     }
 
     Ok(())
@@ -176,27 +154,28 @@ impl From<sqlx::Error> for Error {
     }
 }
 
-struct BuildRecordsArrayParam<'a> {
+struct BuildRecordsArrayParam<'a, C> {
     redis_conn: &'a mut RedisConnection,
-    map_id: u32,
-    player_id: u32,
-    event: OptEvent<'a, 'a>,
+    ctx: C,
 }
 
-async fn build_records_array(
+async fn build_records_array<C>(
     mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
-    param: BuildRecordsArrayParam<'_>,
-) -> Result<Vec<RankedRecord>, Error> {
+    param: BuildRecordsArrayParam<'_, C>,
+) -> Result<Vec<RankedRecord>, Error>
+where
+    C: HasPlayer + HasMap,
+{
     let mut conn = DatabaseConnection {
         mysql_conn,
         redis_conn: param.redis_conn,
     };
 
     // Update redis if needed
-    let key = map_key(param.map_id, param.event);
-    let count = update_leaderboard(&mut conn, param.map_id, param.event).await? as u32;
+    let key = map_key(param.ctx.get_map().id, param.ctx.get_opt_event_edition());
+    let count = update_leaderboard(&mut conn, &param.ctx).await? as u32;
 
-    check_update_redis_lb(&mut conn, param.map_id, param.player_id, param.event).await?;
+    check_update_redis_lb(&mut conn, &param.ctx).await?;
 
     let mut ranked_records = vec![];
 
@@ -206,7 +185,7 @@ async fn build_records_array(
 
     let player_rank: Option<i64> = conn
         .redis_conn
-        .zrank(&key, param.player_id)
+        .zrank(&key, param.ctx.get_player_id())
         .await
         .with_api_err()?;
     let player_rank = player_rank.map(|r| r as u64 as u32);
@@ -214,13 +193,12 @@ async fn build_records_array(
     if let Some(player_rank) = player_rank {
         // The player has a record and is in top ROWS, display ROWS records
         if player_rank < TOTAL_ROWS {
-            ranked_records
-                .extend(get_range(&mut conn, (0, TOTAL_ROWS), param.map_id, param.event).await?);
+            ranked_records.extend(get_range(&mut conn, (0, TOTAL_ROWS), &param.ctx).await?);
         }
         // The player is not in the top ROWS records, display top3 and then center around the player rank
         else {
             // push top3
-            ranked_records.extend(get_range(&mut conn, (0, 3), param.map_id, param.event).await?);
+            ranked_records.extend(get_range(&mut conn, (0, 3), &param.ctx).await?);
 
             // the rest is centered around the player
             let row_minus_top3 = TOTAL_ROWS - 3;
@@ -233,7 +211,7 @@ async fn build_records_array(
                     (start, end)
                 }
             };
-            ranked_records.extend(get_range(&mut conn, range, param.map_id, param.event).await?);
+            ranked_records.extend(get_range(&mut conn, range, &param.ctx).await?);
         }
     }
     // The player has no record, so ROWS = ROWS - 1 to keep one last line for the player
@@ -242,68 +220,43 @@ async fn build_records_array(
         // So display all top ROWS records and then the last 3
         if count > NO_RECORD_ROWS {
             // top (ROWS - 1 - 3)
-            ranked_records.extend(
-                get_range(
-                    &mut conn,
-                    (0, NO_RECORD_ROWS - 3),
-                    param.map_id,
-                    param.event,
-                )
-                .await?,
-            );
+            ranked_records.extend(get_range(&mut conn, (0, NO_RECORD_ROWS - 3), &param.ctx).await?);
 
             // last 3
-            ranked_records
-                .extend(get_range(&mut conn, (count - 3, count), param.map_id, param.event).await?);
+            ranked_records.extend(get_range(&mut conn, (count - 3, count), &param.ctx).await?);
         }
         // There is enough records to display them all
         else {
-            ranked_records.extend(
-                get_range(&mut conn, (0, NO_RECORD_ROWS), param.map_id, param.event).await?,
-            );
+            ranked_records.extend(get_range(&mut conn, (0, NO_RECORD_ROWS), &param.ctx).await?);
         }
     }
 
     Ok(ranked_records)
 }
 
-pub async fn overview(
-    req_id: RequestId,
-    conn: DatabaseConnection<'_>,
-    params: OverviewParams<'_>,
-    event: OptEvent<'_, '_>,
-) -> RecordsResponse<impl Responder> {
-    let models::Map { id, linked_map, .. } = match params.map {
-        MapParam::AlreadyQueried(map) => map,
-        MapParam::Uid(uid) => &must::have_map(conn.mysql_conn, &uid)
-            .await
-            .with_api_err()
-            .fit(req_id)?,
-    };
-    let player_id = must::have_player(conn.mysql_conn, &params.login)
+pub async fn overview<C>(conn: DatabaseConnection<'_>, ctx: C) -> RecordsResult<Vec<RankedRecord>>
+where
+    C: HasPlayerLogin + HasMap,
+{
+    let player = must::have_player(conn.mysql_conn, &ctx)
         .await
-        .fit(req_id)?
-        .id;
-    let map_id = linked_map.unwrap_or(*id);
+        .with_api_err()?;
+    let ctx = ctx.with_player(&player);
 
     let ranked_records = match table_lock::locked_records(
         conn.mysql_conn,
         BuildRecordsArrayParam {
             redis_conn: conn.redis_conn,
-            map_id,
-            player_id,
-            event,
+            ctx,
         },
         build_records_array,
     )
     .await
     {
-        Ok(records) => Ok(records),
-        Err(Error::Api(e)) => Err(e),
-        Err(Error::Lib(e)) => Err(e).with_api_err(),
-    }
-    .fit(req_id)?;
+        Ok(records) => records,
+        Err(Error::Api(e)) => return Err(e),
+        Err(Error::Lib(e)) => return Err(e).with_api_err(),
+    };
 
-    let response = ranked_records;
-    utils::json(ResponseBody { response })
+    Ok(ranked_records)
 }
