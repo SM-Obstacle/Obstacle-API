@@ -7,11 +7,17 @@ use super::{
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current player login.
+        ///
+        /// Returned by the [`Ctx::with_player_login`](super::Ctx::with_player_login) method.
         struct WithPlayerLogin<'a> {
             login: &'a str,
         }
     }
     'trait {
+        /// Context trait used to retrieve the current player login.
+        ///
+        /// See the [module documentation](super) for more information.
         'a trait HasPlayerLogin.get_player_login(self) -> &str {
             self.login
         }
@@ -41,6 +47,9 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current player login, as an owned [`String`].
+        ///
+        /// Returned by the [`Ctx::with_player_login_owned`](super::Ctx::with_player_login_owned) method.
         struct WithPlayerLoginOwned {
             login: String,
         }
@@ -75,11 +84,17 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// An adaptator context type used to contain a reference to the current player.
+        ///
+        /// Returned by the [`Ctx::with_player`](super::Ctx::with_player) method.
         struct WithPlayer<'a> {
             player: &'a models::Player,
         }
     }
     'trait needs [HasPlayerId, HasPlayerLogin] {
+        /// Context trait used to retrieve a reference to the current player.
+        ///
+        /// See [the module documentation](super) for more information.
         'a trait HasPlayer.get_player(self) -> &models::Player {
             self.player
         }
@@ -117,6 +132,9 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current player, with its ownership.
+        ///
+        /// Returned by the [`Ctx::with_player_owned`](super::Ctx::with_player_owned) method.
         struct WithPlayerOwned {
             player: models::Player,
         }
@@ -157,11 +175,17 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current player ID.
+        ///
+        /// Returned by the [`Ctx::with_player_id`](super::Ctx::with_player_id) method.
         struct WithPlayerId {
             player_id: u32,
         }
     }
     'trait {
+        /// Context trait used to retrieve the current player ID.
+        ///
+        /// See the [module documentation](super) for more information.
         trait HasPlayerId.get_player_id(self) -> u32 {
             self.player_id
         }

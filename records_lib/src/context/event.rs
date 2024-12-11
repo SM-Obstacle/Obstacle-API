@@ -9,11 +9,17 @@ use super::{
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current event handle.
+        ///
+        /// Returned by the [`Ctx::with_event_handle`](super::Ctx::with_event_handle) method.
         struct WithEventHandle<'a> {
             handle: &'a str,
         }
     }
     'trait {
+        /// Context trait used to retrieve the current event handle.
+        ///
+        /// See the [module documentation](super) for more information.
         'a trait HasEventHandle.get_event_handle(self) -> &str {
             self.handle
         }
@@ -43,6 +49,9 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current event handle, with its ownership.
+        ///
+        /// Returned by the [`Ctx::with_event_handle_owned`](super::Ctx::with_event_handle_owned) method.
         struct WithEventHandleOwned {
             handle: String,
         }
@@ -75,7 +84,11 @@ new_combinator! {
     }
 }
 
+/// Context trait to get the current event and its edition.
+///
+/// See the [module documentation](super) for more information.
 pub trait HasEventEdition: HasEvent + HasEdition {
+    /// Returns a couple of references to the event and its edition.
     fn get_event(&self) -> (&models::Event, &models::EventEdition);
 }
 
@@ -85,7 +98,9 @@ impl<T: HasEvent + HasEdition> HasEventEdition for T {
     }
 }
 
+/// Context trait to get the current event ID and edition ID.
 pub trait HasEventIds: HasEventId + HasEditionId {
+    /// Returns a couple with the event ID and the edition ID.
     fn get_event_ids(&self) -> (u32, u32);
 }
 
@@ -97,11 +112,17 @@ impl<T: HasEventId + HasEditionId> HasEventIds for T {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current event ID.
+        ///
+        /// Returned by the [`Ctx::with_event_id`](super::Ctx::with_event_id) method.
         struct WithEventId {
             event_id: u32,
         }
     }
     'trait {
+        /// Context trait used to retrieve the current event ID.
+        ///
+        /// See the [module documentation](super) for more information.
         trait HasEventId.get_event_id(self) -> u32 {
             self.event_id
         }
@@ -152,11 +173,17 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current edition ID.
+        ///
+        /// Returned by the [`Ctx::with_edition_id`](super::Ctx::with_edition_id) method.
         struct WithEditionId {
             edition_id: u32,
         }
     }
     'trait {
+        /// Context trait used to retrieve the current edition ID.
+        ///
+        /// See the [module documentation](super) for more information.
         trait HasEditionId.get_edition_id(self) -> u32 {
             self.edition_id
         }
@@ -207,11 +234,17 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain a reference to the current event.
+        ///
+        /// Returned by the [`Ctx::with_event`](super::Ctx::with_event) method.
         struct WithEvent<'a> {
             event: &'a models::Event,
         }
     }
     'trait needs [HasEventHandle, HasEventId] {
+        /// Context trait used to retrieve a reference to the current event.
+        ///
+        /// See the [module documentation](super) for more information.
         'a trait HasEvent.get_event(self) -> &models::Event {
             self.event
         }
@@ -270,6 +303,9 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current event, with its ownership.
+        ///
+        /// Returned by the [`Ctx::with_event_owned`](super::Ctx::with_event_owned) method.
         struct WithEventOwned {
             event: models::Event,
         }
@@ -331,11 +367,17 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain a reference to the current edition.
+        ///
+        /// Returned by the [`Ctx::with_edition`](super::Ctx::with_edition) method.
         struct WithEdition<'a> {
             edition: &'a models::EventEdition,
         }
     }
     'trait needs [HasEventId, HasEditionId] {
+        /// Context trait used to retrieve a reference to the current edition.
+        ///
+        /// See the [module documentation](super) for more information.
         'a trait HasEdition.get_edition(self) -> &models::EventEdition {
             self.edition
         }
@@ -394,6 +436,9 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current edition, with its ownership.
+        ///
+        /// Returned by the [`Ctx::with_edition_owned`](super::Ctx::with_edition_owned) method.
         struct WithEditionOwned {
             edition:  models::EventEdition,
         }
@@ -455,6 +500,11 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to remove any current event instance from the context.
+        ///
+        /// Returned by the [`Ctx::with_no_event`](super::Ctx::with_no_event) method.
+        /// This type doesn't implement any trait related to events. It returns `None` for all the method
+        /// implementations returning an optional event/edition.
         struct WithNoEvent {}
     }
     'delegates {

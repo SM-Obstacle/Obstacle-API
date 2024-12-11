@@ -83,6 +83,7 @@ macro_rules! new_combinator {
         $(
             $(#[$($assoc_meta)*])*
             pub trait $AssociatedTrait: $crate::context::Ctx $( $(+ $subtrait)* )? {
+                #[doc = concat!("See [this trait](", stringify!($AssociatedTrait), ") documentation for more information.")]
                 fn $trait_fn(&self) -> $trait_fn_ty;
             }
 

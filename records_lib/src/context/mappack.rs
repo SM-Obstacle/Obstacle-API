@@ -9,11 +9,17 @@ use super::{
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current mappack ID.
+        ///
+        /// Returned by the [`Ctx::with_mappack`](super::Ctx::with_mappack) method.
         struct WithMappackId<'a> {
             mappack_id: AnyMappackId<'a>,
         }
     }
     'trait {
+        /// Context trait used to retrieve the current mappack ID.
+        ///
+        /// See the [module documentation](super) for more information.
         'a trait HasMappackId.get_mappack_id(self) -> AnyMappackId<'_> {
             self.mappack_id
         }

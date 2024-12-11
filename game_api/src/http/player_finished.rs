@@ -169,7 +169,7 @@ where
         return Err(RecordsErrorKind::InvalidTimes);
     }
 
-    let old_record = get_old_record(&mut db.mysql_conn, &ctx).await?;
+    let old_record = get_old_record(db.mysql_conn, &ctx).await?;
 
     let (old, new, has_improved, old_rank) =
         if let Some(models::Record { time: old, .. }) = old_record {

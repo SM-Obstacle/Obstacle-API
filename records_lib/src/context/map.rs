@@ -9,11 +9,17 @@ use super::{
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain a reference to the current map UID.
+        ///
+        /// Returned by the [`Ctx::with_map_uid`](super::Ctx::with_map_uid) method.
         struct WithMapUid<'a> {
             uid: &'a str,
         }
     }
     'trait {
+        /// Context trait used to retrieve the current event handle.
+        ///
+        /// See the [module documentation](super) for more information.
         'a trait HasMapUid.get_map_uid(self) -> &str {
             self.uid
         }
@@ -43,6 +49,9 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current map UID, as an owned [`String`].
+        ///
+        /// Returned by the [`Ctx::with_map_uid_owned`](super::Ctx::with_map_uid_owned) method.
         struct WithMapUidOwned {
             uid: String,
         }
@@ -77,11 +86,17 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain a reference to the current map.
+        ///
+        /// Returned by the [`Ctx::with_map`](super::Ctx::with_map) method.
         struct WithMap<'a> {
             map: &'a models::Map,
         }
     }
     'trait needs [HasMapId, HasMapUid] {
+        /// Context trait used to retrieve a reference to the current map.
+        ///
+        /// See the [module documentation](super) for more information.
         'a trait HasMap.get_map(self) -> &models::Map {
             self.map
         }
@@ -119,6 +134,9 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current map, with its ownership.
+        ///
+        /// Returned by the [`Ctx::with_map_owned`](super::Ctx::with_map_owned) method.
         struct WithMapOwned {
             map: models::Map,
         }
@@ -159,11 +177,15 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current map ID.
         struct WithMapId {
             map_id: u32,
         }
     }
     'trait {
+        /// Context trait used to get the current map ID.
+        ///
+        /// See the [module documentation](super) for more information.
         trait HasMapId.get_map_id(self) -> u32 {
             self.map_id
         }

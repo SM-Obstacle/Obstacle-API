@@ -39,11 +39,12 @@ pub struct RankedRecord {
     pub time: i32,
 }
 
-async fn get_range<C: HasMapId>(
+async fn extend_range<C: HasMapId>(
     conn: &mut DatabaseConnection<'_>,
+    records: &mut Vec<RankedRecord>,
     (start, end): (u32, u32),
     ctx: C,
-) -> RecordsResult<Vec<RankedRecord>> {
+) -> RecordsResult<()> {
     // transforms exclusive to inclusive range
     let end = end - 1;
     let player_ids: Vec<i32> = conn
@@ -57,8 +58,8 @@ async fn get_range<C: HasMapId>(
         .with_api_err()?;
 
     if player_ids.is_empty() {
-        // Avoids the query building to have a `AND record_player_id IN ()` fragment
-        return Ok(Vec::new());
+        // There is no player in this range
+        return Ok(());
     }
 
     let builder = ctx.sql_frag_builder();
@@ -72,36 +73,39 @@ async fn get_range<C: HasMapId>(
             map_id
         FROM records r ",
     );
-    builder.push_event_join(&mut query, "eer", "r").push(
-        "INNER JOIN players p ON r.record_player_id = p.id \
-            WHERE map_id = ? AND record_player_id IN (",
-    );
+    builder
+        .push_event_join(&mut query, "eer", "r")
+        .push(
+            "INNER JOIN players p ON r.record_player_id = p.id \
+            WHERE map_id = ",
+        )
+        .push_bind(ctx.get_map_id())
+        .push(" AND record_player_id IN (");
     let mut sep = query.separated(", ");
     for id in player_ids {
         sep.push_bind(id);
     }
-    let query = builder
+    query.push(") ");
+    let result = builder
         .push_event_filter(&mut query, "eer")
         .push(" GROUP BY record_player_id ORDER BY time, record_date ASC")
-        .build_query_as();
-
-    let records: Vec<RecordQueryRow> = query
+        .build_query_as::<RecordQueryRow>()
         .fetch_all(&mut **conn.mysql_conn)
         .await
         .with_api_err()?;
 
-    let mut out = Vec::with_capacity(records.len());
+    records.reserve(result.len());
 
-    for r in records {
-        out.push(RankedRecord {
+    for r in result {
+        records.push(RankedRecord {
             rank: get_rank(conn, Ctx::with_player_id(&ctx, r.player_id), r.time).await? as _,
             login: r.login,
             nickname: r.nickname,
             time: r.time,
-        });
+        })
     }
 
-    Ok(out)
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -193,12 +197,12 @@ where
     if let Some(player_rank) = player_rank {
         // The player has a record and is in top ROWS, display ROWS records
         if player_rank < TOTAL_ROWS {
-            ranked_records.extend(get_range(&mut conn, (0, TOTAL_ROWS), &param.ctx).await?);
+            extend_range(&mut conn, &mut ranked_records, (0, TOTAL_ROWS), &param.ctx).await?;
         }
         // The player is not in the top ROWS records, display top3 and then center around the player rank
         else {
             // push top3
-            ranked_records.extend(get_range(&mut conn, (0, 3), &param.ctx).await?);
+            extend_range(&mut conn, &mut ranked_records, (0, 3), &param.ctx).await?;
 
             // the rest is centered around the player
             let row_minus_top3 = TOTAL_ROWS - 3;
@@ -211,7 +215,7 @@ where
                     (start, end)
                 }
             };
-            ranked_records.extend(get_range(&mut conn, range, &param.ctx).await?);
+            extend_range(&mut conn, &mut ranked_records, range, &param.ctx).await?;
         }
     }
     // The player has no record, so ROWS = ROWS - 1 to keep one last line for the player
@@ -220,14 +224,32 @@ where
         // So display all top ROWS records and then the last 3
         if count > NO_RECORD_ROWS {
             // top (ROWS - 1 - 3)
-            ranked_records.extend(get_range(&mut conn, (0, NO_RECORD_ROWS - 3), &param.ctx).await?);
+            extend_range(
+                &mut conn,
+                &mut ranked_records,
+                (0, NO_RECORD_ROWS - 3),
+                &param.ctx,
+            )
+            .await?;
 
             // last 3
-            ranked_records.extend(get_range(&mut conn, (count - 3, count), &param.ctx).await?);
+            extend_range(
+                &mut conn,
+                &mut ranked_records,
+                (count - 3, count),
+                &param.ctx,
+            )
+            .await?;
         }
         // There is enough records to display them all
         else {
-            ranked_records.extend(get_range(&mut conn, (0, NO_RECORD_ROWS), &param.ctx).await?);
+            extend_range(
+                &mut conn,
+                &mut ranked_records,
+                (0, NO_RECORD_ROWS),
+                &param.ctx,
+            )
+            .await?;
         }
     }
 

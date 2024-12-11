@@ -7,11 +7,17 @@ use super::{
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current Redis pool.
+        ///
+        /// Returned by the [`Ctx::with_redis_pool`](super::Ctx::with_redis_pool) method.
         struct WithRedisPool {
             pool: RedisPool
         }
     }
     'trait {
+        /// Context trait used to retrieve the current Redis pool.
+        ///
+        /// See the [module documentation](super) for more information.
         trait HasRedisPool.get_redis_pool(self) -> RedisPool {
             self.pool.clone()
         }
@@ -41,11 +47,17 @@ new_combinator! {
 
 new_combinator! {
     'combinator {
+        /// Adaptator context type used to contain the current MariaDB pool.
+        ///
+        /// Returned by the [`Ctx::with_mysql_pool`](super::Ctx::with_mysql_pool) method.
         struct WithMySqlPool {
             pool: MySqlPool,
         }
     }
     'trait {
+        /// Context trait used to retrieve the current MariaDB pool.
+        ///
+        /// See the [module documentation](super) for more information.
         trait HasMySqlPool.get_mysql_pool(self) -> MySqlPool {
             self.pool.clone()
         }
@@ -73,7 +85,11 @@ new_combinator! {
     }
 }
 
+/// Context trait used to retrieve all the database pools.
+///
+/// See the [module documentation](super) for more information.
 pub trait HasDbPool: HasRedisPool + HasMySqlPool {
+    /// Returns all the database pools as an instance of the [`Database`] type.
     fn get_pool(&self) -> Database {
         Database {
             mysql_pool: <Self as HasMySqlPool>::get_mysql_pool(self),

@@ -8,8 +8,10 @@ use crate::{
     models,
 };
 
+/// Utility type definition for optional events.
 pub type OptEvent<'ev, 'ed> = Option<(&'ev models::Event, &'ed models::EventEdition)>;
 
+/// Utility type definition for optional event ID and edition ID.
 pub type OptEventIds = Option<(u32, u32)>;
 
 /// Represents an item in the event list.
