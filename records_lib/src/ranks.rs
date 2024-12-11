@@ -59,50 +59,6 @@ use crate::{
 use deadpool_redis::redis::{self, AsyncCommands};
 use futures::TryStreamExt;
 use itertools::{EitherOrBoth, Itertools};
-use std::collections::HashSet;
-use std::future::Future;
-use std::sync::LazyLock;
-use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
-
-mod lock {
-    use super::*;
-
-    const WAIT_UNLOCK_TIMEOUT: Duration = Duration::from_secs(10);
-
-    static LB_LOCK: LazyLock<RwLock<HashSet<u32>>> = LazyLock::new(Default::default);
-
-    pub(super) async fn within<F, Fut, R>(map_id: u32, f: F) -> R
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = R>,
-    {
-        wait_unlock(map_id).await;
-        LB_LOCK.write().await.insert(map_id);
-        let r = f().await;
-        LB_LOCK.write().await.remove(&map_id);
-        r
-    }
-
-    async fn wait_unlock(map_id: u32) {
-        let i = Instant::now();
-
-        while i.elapsed() < WAIT_UNLOCK_TIMEOUT {
-            if !LB_LOCK.read().await.contains(&map_id) {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-
-        #[cfg(feature = "tracing")]
-        tracing::warn!(
-            "Waiting for unlock of {map_id} exceeded {WAIT_UNLOCK_TIMEOUT:?}, unlocking it"
-        );
-        LB_LOCK.write().await.remove(&map_id);
-        #[cfg(feature = "tracing")]
-        tracing::debug!("Unlocked {map_id}");
-    }
-}
 
 /// Updates the rank of a player on a map.
 ///
@@ -121,15 +77,13 @@ pub async fn update_rank<C>(conn: &mut RedisConnection, ctx: C, time: i32) -> Re
 where
     C: HasMapId + HasPlayerId,
 {
-    let _: () = lock::within(ctx.get_map_id(), || async {
-        conn.zadd(
+    let (): _ = conn
+        .zadd(
             map_key(ctx.get_map_id(), ctx.get_opt_event_edition()),
             ctx.get_player_id(),
             time,
         )
-        .await
-    })
-    .await?;
+        .await?;
 
     Ok(())
 }
@@ -209,47 +163,38 @@ pub async fn force_update<C: HasMapId>(
 
     let key = map_key(ctx.get_map_id(), ctx.get_opt_event_edition()).to_string();
 
-    lock::within(ctx.get_map_id(), || async {
-        pipe.del(&key);
+    pipe.del(&key);
 
-        get_mariadb_lb_query(&ctx)
-            .build_query_as()
-            .fetch(&mut **conn.mysql_conn)
-            .map_ok(|(player_id, time): (u32, i32)| {
-                pipe.zadd(&key, player_id, time);
-            })
-            .try_collect::<()>()
-            .await?;
+    get_mariadb_lb_query(&ctx)
+        .build_query_as()
+        .fetch(&mut **conn.mysql_conn)
+        .map_ok(|(player_id, time): (u32, i32)| {
+            pipe.zadd(&key, player_id, time);
+        })
+        .try_collect::<()>()
+        .await?;
 
-        let _: () = pipe.query_async(conn.redis_conn).await?;
-
-        RecordsResult::Ok(())
-    })
-    .await?;
+    let _: () = pipe.query_async(conn.redis_conn).await?;
 
     Ok(())
 }
 
 async fn get_rank_impl(
     redis_conn: &mut RedisConnection,
-    map_id: u32,
     key: &MapKey<'_>,
     time: i32,
 ) -> RecordsResult<Option<i32>> {
-    lock::within(map_id, || async {
-        let player_ids: Vec<u32> = redis_conn
-            .zrangebyscore_limit(key, time, time, 0, 1)
-            .await?;
+    let player_ids: Vec<u32> = redis_conn
+        .zrangebyscore_limit(key, time, time, 0, 1)
+        .await?;
 
-        match player_ids.first() {
-            Some(id) => {
-                let rank: Option<i32> = redis_conn.zrank(key, *id).await?;
-                Ok(rank.map(|rank| rank + 1))
-            }
-            None => Ok(None),
+    match player_ids.first() {
+        Some(id) => {
+            let rank: Option<i32> = redis_conn.zrank(key, *id).await?;
+            Ok(rank.map(|rank| rank + 1))
         }
-    })
-    .await
+        None => Ok(None),
+    }
 }
 
 /// Gets the rank of a player in a map, or fully updates its leaderboard if not found.
@@ -273,7 +218,7 @@ where
         force_update(db, &ctx).await?;
     }
 
-    match get_rank_impl(db.redis_conn, ctx.get_map_id(), &key, time).await? {
+    match get_rank_impl(db.redis_conn, &key, time).await? {
         Some(r) => Ok(r),
         None => Err(get_rank_failed(db, ctx, time).await?),
     }
