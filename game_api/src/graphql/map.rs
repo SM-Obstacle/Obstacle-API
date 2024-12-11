@@ -105,8 +105,6 @@ impl Map {
             query.push(" limit 100");
         }
 
-        println!("QUERY: {}", query.sql());
-
         let mut records = query.build_query_as::<Record>().fetch(&db.mysql_pool);
 
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
