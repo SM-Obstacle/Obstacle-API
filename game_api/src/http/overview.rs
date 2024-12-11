@@ -1,10 +1,9 @@
 use crate::{RecordsResult, RecordsResultExt};
 use actix_web::web::Query;
 use deadpool_redis::redis::AsyncCommands;
-use records_lib::context::{Ctx, HasMap, HasMapId, HasPlayer, HasPlayerId, HasPlayerLogin};
-use records_lib::ranks::force_update;
+use records_lib::context::{Ctx, HasMap, HasMapId, HasPlayer, HasPlayerLogin};
 use records_lib::{
-    must, player,
+    must,
     ranks::{get_rank, update_leaderboard},
     redis_key::map_key,
     DatabaseConnection,
@@ -114,36 +113,6 @@ pub struct ResponseBody {
     pub response: Vec<RankedRecord>,
 }
 
-/// Checks that the time of the player registered in MariaDB and Redis are the same, and updates
-/// the Redis leaderboard otherwise.
-async fn check_update_redis_lb<C>(conn: &mut DatabaseConnection<'_>, ctx: C) -> RecordsResult<()>
-where
-    C: HasMapId + HasPlayerId,
-{
-    // Get the time of the player on this map
-    let mdb_time = player::get_time_on_map(conn.mysql_conn, &ctx).await?;
-
-    // Get the one in Redis
-    let r_time: Option<i32> = conn
-        .redis_conn
-        .zscore(
-            map_key(ctx.get_map_id(), ctx.get_opt_event_edition()),
-            ctx.get_player_id(),
-        )
-        .await
-        .with_api_err()?;
-
-    // Update the Redis leaderboard if they're different
-    if mdb_time
-        .zip(r_time)
-        .is_some_and(|(mdb_time, r_time)| mdb_time != r_time)
-    {
-        force_update(conn, &ctx).await.with_api_err()?;
-    }
-
-    Ok(())
-}
-
 #[derive(thiserror::Error, Debug)]
 enum Error {
     #[error(transparent)]
@@ -178,8 +147,6 @@ where
     // Update redis if needed
     let key = map_key(param.ctx.get_map().id, param.ctx.get_opt_event_edition());
     let count = update_leaderboard(&mut conn, &param.ctx).await? as u32;
-
-    check_update_redis_lb(&mut conn, &param.ctx).await?;
 
     let mut ranked_records = vec![];
 
