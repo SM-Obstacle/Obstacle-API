@@ -1,11 +1,9 @@
-use actix_web::{web::Query, Responder};
+use crate::{RecordsResult, RecordsResultExt};
+use actix_web::web::Query;
 use futures::StreamExt;
-use records_lib::{event::OptEvent, Database};
+use records_lib::context::{HasMapUid, HasMySqlPool, HasPlayerLogin};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use tracing_actix_web::RequestId;
-
-use crate::{utils::json, FitRequestId, RecordsResponse, RecordsResultExt, Res};
 
 #[derive(Deserialize)]
 pub struct PbBody {
@@ -15,7 +13,7 @@ pub struct PbBody {
 pub type PbReq = Query<PbBody>;
 
 #[derive(Serialize, Default)]
-struct PbResponse {
+pub struct PbResponse {
     rs_count: i32,
     cps_times: Vec<PbCpTimesResponseItem>,
 }
@@ -33,36 +31,28 @@ struct PbCpTimesResponseItem {
     time: i32,
 }
 
-pub async fn pb(
-    login: String,
-    req_id: RequestId,
-    db: Res<Database>,
-    PbBody { map_uid }: PbBody,
-    event: OptEvent<'_, '_>,
-) -> RecordsResponse<impl Responder> {
-    let (view_name, and_event) = event.get_view();
+pub async fn pb<C>(ctx: C) -> RecordsResult<PbResponse>
+where
+    C: HasPlayerLogin + HasMapUid + HasMySqlPool,
+{
+    let builder = ctx.sql_frag_builder();
 
-    let query = format!(
+    let mut query = sqlx::QueryBuilder::new(
         "select r.respawn_count as rs_count, ct.cp_num as cp_num, ct.time as time
-        from {view_name} r
-        inner join maps m on m.id = r.map_id
-        inner join players p on r.record_player_id = p.id
-        inner join checkpoint_times ct on r.record_id = ct.record_id
-        where m.game_id = ? and p.login = ?
-        {and_event}"
+        from ",
     );
+    builder.push_event_view_name(&mut query, "r").push(
+        " inner join maps m on m.id = r.map_id \
+            inner join players p on r.record_player_id = p.id \
+            inner join checkpoint_times ct on r.record_id = ct.record_id \
+            where m.game_id = ? and p.login = ? ",
+    );
+    let query = builder
+        .push_event_filter(&mut query, "r")
+        .build_query_as::<PbResponseItem>();
 
-    let query = sqlx::query_as::<_, PbResponseItem>(&query)
-        .bind(map_uid)
-        .bind(login);
-
-    let query = if let Some((event, edition)) = event.0 {
-        query.bind(event.id).bind(edition.id)
-    } else {
-        query
-    };
-
-    let mut times = query.fetch(&db.mysql_pool);
+    let pool = ctx.get_mysql_pool();
+    let mut times = query.fetch(&pool);
 
     let mut res = PbResponse {
         rs_count: 0,
@@ -73,11 +63,11 @@ pub async fn pb(
         rs_count,
         cp_num,
         time,
-    }) = times.next().await.transpose().with_api_err().fit(req_id)?
+    }) = times.next().await.transpose().with_api_err()?
     {
         res.rs_count = rs_count;
         res.cps_times.push(PbCpTimesResponseItem { cp_num, time });
     }
 
-    json(res)
+    Ok(res)
 }

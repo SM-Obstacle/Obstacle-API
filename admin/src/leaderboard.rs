@@ -3,8 +3,13 @@ use std::fmt;
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
-    acquire, map, must, player, ranks::get_rank, redis_key::map_key, time::Time, Database,
-    DatabaseConnection,
+    acquire,
+    context::{Context, Ctx, HasPlayerId},
+    map, must, player,
+    ranks::get_rank,
+    redis_key::map_key,
+    time::Time,
+    Database, DatabaseConnection,
 };
 
 #[derive(clap::Subcommand)]
@@ -144,13 +149,20 @@ async fn redis_lb(
 
     table.add_row(prettytable::row!["#", "Rank", "Player", "Time"]);
 
+    let ctx = Context::default();
+
     for (i, row) in ranks.chunks_exact(2).enumerate().map(|(i, r)| (i + 1, r)) {
         let [player_id, time] = *row else {
             continue;
         };
 
-        let player = player::get_player_from_id(&mut **db.mysql_conn, player_id as _).await?;
-        let rank = get_rank(db, map_id, player_id as _, time as _, Default::default()).await?;
+        let ctx = ctx
+            .by_ref()
+            .with_player_id(player_id as _)
+            .with_map_id(map_id);
+
+        let player = player::get_player_from_id(db.mysql_conn, ctx.get_player_id()).await?;
+        let rank = get_rank(db, ctx, time as _).await?;
 
         table.add_row(prettytable::row![
             i + offset.unwrap_or_default() as usize,
@@ -169,7 +181,9 @@ async fn redis_lb(
 async fn full(db: &mut DatabaseConnection<'_>, cmd: FullCmd) -> anyhow::Result<()> {
     let map = match cmd.map {
         Map::MapId { map_id } => map::get_map_from_id(db.mysql_conn, map_id).await?,
-        Map::MapUid { map_uid } => must::have_map(db.mysql_conn, &map_uid).await?,
+        Map::MapUid { map_uid } => {
+            must::have_map(db.mysql_conn, Context::default().with_map_uid(&map_uid)).await?
+        }
     };
 
     match cmd.source {

@@ -5,7 +5,9 @@ use deadpool_redis::redis::AsyncCommands as _;
 use futures::{stream, StreamExt as _, TryStreamExt};
 use itertools::Itertools as _;
 use records_lib::{
-    acquire, event, map,
+    acquire,
+    context::{Context, Ctx, HasEditionId, HasEventId, HasMapUid},
+    event, map,
     mappack::{self, AnyMappackId},
     models, must,
     redis_key::mappack_key,
@@ -91,10 +93,17 @@ async fn insert_mx_maps(
 
     let mut inserted_count = 0;
 
+    let ctx = Context::default();
+
     for mx_map in mx_maps {
-        let author = must::have_player(&mut mysql_conn, &mx_map.author_login).await?;
+        let ctx = ctx
+            .by_ref()
+            .with_player_login(&mx_map.author_login)
+            .with_map_uid(&mx_map.map_uid);
+
+        let author = must::have_player(&mut mysql_conn, &ctx).await?;
         // Skip if we already know this map
-        if let Some(map) = map::get_map_from_uid(&mut mysql_conn, &mx_map.map_uid).await? {
+        if let Some(map) = map::get_map_from_uid(&mut mysql_conn, ctx.get_map_uid()).await? {
             out.push((mx_map.mx_id, map));
             continue;
         }
@@ -199,6 +208,7 @@ async fn populate_mx_maps(
     Ok(mx_ids.into_iter().flatten().collect())
 }
 
+// TODO: use a SQL transaction
 pub async fn populate(
     client: reqwest::Client,
     db: Database,
@@ -209,12 +219,20 @@ pub async fn populate(
     }: PopulateCommand,
 ) -> anyhow::Result<()> {
     let mut conn = acquire!(db?);
+    let ctx = Context::default()
+        .with_event_handle(&event_handle)
+        .with_edition_id(event_edition);
 
-    let (event, edition) =
-        must::have_event_edition(conn.mysql_conn, &event_handle, event_edition).await?;
+    let (event, edition) = must::have_event_edition(conn.mysql_conn, &ctx).await?;
 
-    let categories =
-        event::get_categories_by_edition_id(conn.mysql_conn, event.id, edition.id).await?;
+    let ctx = ctx.with_event(&event).with_edition(&edition);
+
+    let categories = event::get_categories_by_edition_id(
+        conn.mysql_conn,
+        ctx.get_event_id(),
+        ctx.get_edition_id(),
+    )
+    .await?;
 
     if !categories.is_empty() {
         tracing::info!(
@@ -251,8 +269,14 @@ pub async fn populate(
             tracing::info!("Found {} map(s) in MX mappack with ID {mx_id}", maps.len());
 
             for map in maps {
-                let player = must::have_player(conn.mysql_conn, &map.AuthorLogin).await?;
-                let map_id = match map::get_map_from_uid(conn.mysql_conn, &map.TrackUID).await? {
+                let ctx = ctx
+                    .by_ref()
+                    .with_player_login(&map.AuthorLogin)
+                    .with_map_uid(&map.TrackUID);
+
+                let player = must::have_player(conn.mysql_conn, &ctx).await?;
+                let map_id = match map::get_map_from_uid(conn.mysql_conn, ctx.get_map_uid()).await?
+                {
                     Some(map) => map.id,
                     None => sqlx::query_scalar(
                         "insert into maps (game_id, player_id, name) values (?, ?, ?) returning id",
@@ -320,7 +344,10 @@ pub async fn populate(
     ) in rows
     {
         let (mx_id, map) = match id {
-            Id::MapUid { map_uid } => (None, must::have_map(conn.mysql_conn, &map_uid).await?),
+            Id::MapUid { map_uid } => (
+                None,
+                must::have_map(conn.mysql_conn, ctx.by_ref().with_map_uid(&map_uid)).await?,
+            ),
             Id::MxId { mx_id } => (
                 Some(mx_id),
                 mx_maps
@@ -334,7 +361,13 @@ pub async fn populate(
             Some(id) => match id {
                 OriginalId::MapUid { original_map_uid } => (
                     None,
-                    Some(must::have_map(conn.mysql_conn, &original_map_uid).await?),
+                    Some(
+                        must::have_map(
+                            conn.mysql_conn,
+                            ctx.by_ref().with_map_uid(&original_map_uid),
+                        )
+                        .await?,
+                    ),
                 ),
                 OriginalId::MxId { original_mx_id } => (
                     Some(original_mx_id),
@@ -402,7 +435,7 @@ pub async fn populate(
 
     tracing::info!("Filling mappack in the Redis database...");
 
-    mappack::update_mappack(mappack, &mut conn).await?;
+    mappack::update_mappack(Context::default().with_mappack(mappack), &mut conn).await?;
 
     tracing::info!("Done");
 

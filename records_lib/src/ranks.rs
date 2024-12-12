@@ -51,59 +51,14 @@
 //! This is why the [`get_rank`] function requires the time of the player.
 
 use crate::{
+    context::{HasMapId, HasPlayerId},
     error::{RecordsError, RecordsResult},
-    event::OptEvent,
     redis_key::{map_key, MapKey},
     DatabaseConnection, RedisConnection,
 };
 use deadpool_redis::redis::{self, AsyncCommands};
-use futures::{Stream, TryStreamExt};
+use futures::TryStreamExt;
 use itertools::{EitherOrBoth, Itertools};
-use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
-use std::collections::HashSet;
-use std::future::Future;
-use std::sync::LazyLock;
-use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
-
-mod lock {
-    use super::*;
-
-    const WAIT_UNLOCK_TIMEOUT: Duration = Duration::from_secs(10);
-
-    static LB_LOCK: LazyLock<RwLock<HashSet<u32>>> = LazyLock::new(Default::default);
-
-    pub(super) async fn within<F, Fut, R>(map_id: u32, f: F) -> R
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = R>,
-    {
-        wait_unlock(map_id).await;
-        LB_LOCK.write().await.insert(map_id);
-        let r = f().await;
-        LB_LOCK.write().await.remove(&map_id);
-        r
-    }
-
-    async fn wait_unlock(map_id: u32) {
-        let i = Instant::now();
-
-        while i.elapsed() < WAIT_UNLOCK_TIMEOUT {
-            if !LB_LOCK.read().await.contains(&map_id) {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-
-        #[cfg(feature = "tracing")]
-        tracing::warn!(
-            "Waiting for unlock of {map_id} exceeded {WAIT_UNLOCK_TIMEOUT:?}, unlocking it"
-        );
-        LB_LOCK.write().await.remove(&map_id);
-        #[cfg(feature = "tracing")]
-        tracing::debug!("Unlocked {map_id}");
-    }
-}
 
 /// Updates the rank of a player on a map.
 ///
@@ -118,46 +73,39 @@ mod lock {
 /// * `player_id`: The ID of the player
 /// * `time`: The time of the player on this map
 /// * `event`: The event context if provided
-pub async fn update_rank(
-    redis_conn: &mut RedisConnection,
-    map_id: u32,
-    player_id: u32,
-    time: i32,
-    event: OptEvent<'_, '_>,
-) -> RecordsResult<()> {
-    let _: () = lock::within(map_id, || async {
-        redis_conn
-            .zadd(map_key(map_id, event), player_id, time)
-            .await
-    })
-    .await?;
+pub async fn update_rank<C>(conn: &mut RedisConnection, ctx: C, time: i32) -> RecordsResult<()>
+where
+    C: HasMapId + HasPlayerId,
+{
+    let (): _ = conn
+        .zadd(
+            map_key(ctx.get_map_id(), ctx.get_opt_event_edition()),
+            ctx.get_player_id(),
+            time,
+        )
+        .await?;
 
     Ok(())
 }
 
-async fn count_records_map(
-    db: &mut MySqlConnection,
-    map_id: u32,
-    event: OptEvent<'_, '_>,
+async fn count_records_map<C: HasMapId>(
+    conn: &mut sqlx::MySqlConnection,
+    ctx: C,
 ) -> RecordsResult<i64> {
-    let (join_event, and_event) = event.get_join();
+    let builder = ctx.sql_frag_builder();
 
-    let q = &format!(
-        "SELECT COUNT(*)
-        FROM (SELECT r.* FROM records r {join_event}
-        WHERE map_id = ? {and_event}
-        GROUP BY record_player_id) r",
-    );
+    let mut query = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM (SELECT r.* FROM records r ");
+    builder
+        .push_event_join(&mut query, "eer", "r")
+        .push(" where map_id = ")
+        .push_bind(ctx.get_map_id())
+        .push(" ");
+    let query = builder
+        .push_event_filter(&mut query, "eer")
+        .push(" group by record_player_id) r")
+        .build_query_scalar();
 
-    let q = sqlx::query_scalar(q).bind(map_id);
-
-    let q = if let Some((ev, ed)) = event.0 {
-        q.bind(ev.id).bind(ed.id)
-    } else {
-        q
-    };
-
-    q.fetch_one(db).await.map_err(Into::into)
+    query.fetch_one(conn).await.map_err(Into::into)
 }
 
 /// Checks if the Redis leaderboard for the map with the provided ID has a different count
@@ -166,105 +114,87 @@ async fn count_records_map(
 /// This is a check to avoid differences between the MariaDB and the Redis leaderboards.
 ///
 /// It returns the number of records in the map.
-pub async fn update_leaderboard(
-    db: &mut DatabaseConnection<'_>,
-    map_id: u32,
-    event: OptEvent<'_, '_>,
+pub async fn update_leaderboard<C: HasMapId>(
+    conn: &mut DatabaseConnection<'_>,
+    ctx: C,
 ) -> RecordsResult<i64> {
-    let redis_count: i64 = db
-        .redis_conn
-        .zcount(map_key(map_id, event), "-inf", "+inf")
-        .await?;
-    let mysql_count: i64 = count_records_map(db.mysql_conn, map_id, event).await?;
+    let key = map_key(ctx.get_map_id(), ctx.get_opt_event_edition());
+
+    let redis_count: i64 = conn.redis_conn.zcount(key, "-inf", "+inf").await?;
+    let mysql_count: i64 = count_records_map(conn.mysql_conn, &ctx).await?;
 
     if redis_count != mysql_count {
-        force_update(map_id, event, db).await?;
+        force_update(conn, ctx).await?;
     }
 
     Ok(mysql_count)
 }
 
-fn get_mariadb_lb_query(event: OptEvent<'_, '_>) -> String {
-    let (join_event, and_event) = event.get_join();
+fn get_mariadb_lb_query<C: HasMapId>(ctx: C) -> sqlx::QueryBuilder<'static, sqlx::MySql> {
+    let builder = ctx.sql_frag_builder();
 
-    format!(
-        "SELECT record_player_id, min(time) AS time
-            FROM records r
-            {join_event}
-                WHERE map_id = ?
-                    {and_event}
-                GROUP BY record_player_id
-                ORDER BY time, record_player_id ASC",
-    )
-}
+    let mut q = sqlx::QueryBuilder::new(
+        "select record_player_id, min(time) as time \
+        from records r ",
+    );
 
-fn get_mariadb_lb<'a>(
-    db: &'a mut PoolConnection<MySql>,
-    event: OptEvent<'_, '_>,
-    map_id: u32,
-    query: &'a str,
-) -> impl Stream<Item = sqlx::Result<(u32, i32)>> + 'a {
-    let mut query = sqlx::query_as(query).bind(map_id);
-    if let Some((event, edition)) = event.0 {
-        query = query.bind(event.id).bind(edition.id);
-    }
+    builder
+        .push_event_join(&mut q, "eer", "r")
+        .push(" where map_id = ")
+        .push_bind(ctx.get_map_id())
+        .push(" ");
+    builder
+        .push_event_filter(&mut q, "eer")
+        .push("group by record_player_id order by time, record_player_id asc");
 
-    query.fetch(&mut **db)
+    q
 }
 
 /// Updates the Redis leaderboard for a map.
 ///
 /// This function deletes the Redis key and reinserts all the records from the MariaDB database.
 /// All this is done in a single transaction.
-pub async fn force_update(
-    map_id: u32,
-    event: OptEvent<'_, '_>,
-    db: &mut DatabaseConnection<'_>,
+pub async fn force_update<C: HasMapId>(
+    conn: &mut DatabaseConnection<'_>,
+    ctx: C,
 ) -> RecordsResult<()> {
     let mut pipe = redis::pipe();
     let pipe = pipe.atomic();
 
-    let key = map_key(map_id, event);
+    let key = map_key(ctx.get_map_id(), ctx.get_opt_event_edition()).to_string();
 
-    lock::within(map_id, || async {
-        pipe.del(&key);
+    pipe.del(&key);
 
-        get_mariadb_lb(db.mysql_conn, event, map_id, &get_mariadb_lb_query(event))
-            .map_ok(|(player_id, time): (u32, i32)| {
-                pipe.zadd(&key, player_id, time);
-            })
-            .try_collect::<()>()
-            .await?;
+    get_mariadb_lb_query(&ctx)
+        .build_query_as()
+        .fetch(&mut **conn.mysql_conn)
+        .map_ok(|(player_id, time): (u32, i32)| {
+            pipe.zadd(&key, player_id, time);
+        })
+        .try_collect::<()>()
+        .await?;
 
-        let _: () = pipe.query_async(&mut **db.redis_conn).await?;
-
-        RecordsResult::Ok(())
-    })
-    .await?;
+    let _: () = pipe.query_async(conn.redis_conn).await?;
 
     Ok(())
 }
 
 async fn get_rank_impl(
     redis_conn: &mut RedisConnection,
-    map_id: u32,
     key: &MapKey<'_>,
     time: i32,
 ) -> RecordsResult<Option<i32>> {
-    lock::within(map_id, || async {
-        let player_ids: Vec<u32> = redis_conn
-            .zrangebyscore_limit(key, time, time, 0, 1)
-            .await?;
+    let player_ids: Vec<u32> = redis_conn
+        .zrangebyscore_limit(key, time, time, 0, 1)
+        .await?;
 
-        match player_ids.first() {
-            Some(id) => {
-                let rank: Option<i32> = redis_conn.zrank(key, *id).await?;
-                Ok(rank.map(|rank| rank + 1))
-            }
-            None => Ok(None),
+    match player_ids.first() {
+        Some(id) => {
+            let rank: Option<i32> = redis_conn.zrank(key, *id).await?;
+            Ok(rank.map(|rank| rank + 1))
         }
-    })
-    .await
+        None => Ok(None),
+    }
 }
 
 /// Gets the rank of a player in a map, or fully updates its leaderboard if not found.
@@ -276,24 +206,21 @@ async fn get_rank_impl(
 /// The ranking type is the standard competition ranking (1224).
 ///
 /// See the [module documentation](super) for more information.
-pub async fn get_rank(
-    db: &mut DatabaseConnection<'_>,
-    map_id: u32,
-    player_id: u32,
-    time: i32,
-    event: OptEvent<'_, '_>,
-) -> RecordsResult<i32> {
-    let key = map_key(map_id, event);
+pub async fn get_rank<C>(db: &mut DatabaseConnection<'_>, ctx: C, time: i32) -> RecordsResult<i32>
+where
+    C: HasMapId + HasPlayerId,
+{
+    let key = map_key(ctx.get_map_id(), ctx.get_opt_event_edition());
 
     // Get the time of the player saved in Redis and update it if inconsistent
-    let score: Option<i32> = db.redis_conn.zscore(&key, player_id).await?;
+    let score: Option<i32> = db.redis_conn.zscore(&key, ctx.get_player_id()).await?;
     if score.is_none_or(|t| t != time) {
-        force_update(map_id, event, db).await?;
+        force_update(db, &ctx).await?;
     }
 
-    match get_rank_impl(db.redis_conn, map_id, &key, time).await? {
+    match get_rank_impl(db.redis_conn, &key, time).await? {
         Some(r) => Ok(r),
-        None => Err(get_rank_failed(db, player_id, time, event, map_id).await?),
+        None => Err(get_rank_failed(db, ctx, time).await?),
     }
 }
 
@@ -301,13 +228,14 @@ pub async fn get_rank(
 ///
 /// The `O` generic parameter is used to return the same type as the [`get_rank`] function.
 #[cold]
-async fn get_rank_failed(
+async fn get_rank_failed<C>(
     db: &mut DatabaseConnection<'_>,
-    player_id: u32,
+    ctx: C,
     time: i32,
-    event: OptEvent<'_, '_>,
-    map_id: u32,
-) -> RecordsResult<RecordsError> {
+) -> RecordsResult<RecordsError>
+where
+    C: HasPlayerId + HasMapId,
+{
     use std::fmt::Write as _;
 
     fn num_digits<N>(n: N) -> usize
@@ -317,11 +245,16 @@ async fn get_rank_failed(
         (f64::from(n).log10() + 1.) as _
     }
 
-    let key = &map_key(map_id, event);
+    let event = ctx.get_opt_event_edition();
+    let player_id = ctx.get_player_id();
+    let map_id = ctx.get_map_id();
+
+    let key = &map_key(ctx.get_map_id(), event);
     let redis_lb: Vec<i64> = db.redis_conn.zrange_withscores(key, 0, -1).await?;
 
-    let mariadb_lb = get_mariadb_lb(db.mysql_conn, event, map_id, &get_mariadb_lb_query(event))
-        .try_collect::<Vec<_>>()
+    let mariadb_lb = get_mariadb_lb_query(&ctx)
+        .build_query_as::<(u32, i32)>()
+        .fetch_all(&mut **db.mysql_conn)
         .await?;
 
     let lb = redis_lb
@@ -398,6 +331,7 @@ async fn get_rank_failed(
         }
     }
 
+    #[cfg(feature = "tracing")]
     tracing::error!("missing player rank ({player_id} on map {map_id} with time {time})\n{msg}");
 
     Ok(RecordsError::Internal)

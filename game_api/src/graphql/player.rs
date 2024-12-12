@@ -1,9 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
-use async_graphql::{connection, dataloader::Loader, Context, Enum, ID};
+use async_graphql::{connection, dataloader::Loader, Enum, ID};
 use futures::StreamExt;
 use records_lib::{
     acquire,
+    context::{Context, Ctx as _},
     models::{self, Role},
     Database,
 };
@@ -75,7 +76,10 @@ impl Player {
         self.inner.zone_path.as_deref()
     }
 
-    async fn banishments(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Banishment>> {
+    async fn banishments(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<Banishment>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         Ok(
             sqlx::query_as("SELECT * FROM banishments WHERE player_id = ?")
@@ -178,15 +182,17 @@ impl Player {
 
         let mut conn = acquire!(db?);
 
+        let ctx = Context::default();
+
         while let Some(record) = records.next().await {
             let record = record?;
 
             let rank = get_rank(
                 &mut conn,
-                record.map_id,
-                record.record_player_id,
+                ctx.by_ref()
+                    .with_map_id(record.map_id)
+                    .with_player_id(record.record_player_id),
                 record.time,
-                Default::default(),
             )
             .await?;
 

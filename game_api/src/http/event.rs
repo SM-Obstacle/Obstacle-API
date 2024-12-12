@@ -6,8 +6,9 @@ use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{
     acquire,
+    context::{Context, Ctx as _, HasEditionId, HasEventId},
     error::RecordsError,
-    event::{self, EventMap, OptEvent},
+    event::{self, EventMap},
     models, player, Database, NullableInteger, NullableText,
 };
 use serde::Serialize;
@@ -15,8 +16,9 @@ use sqlx::{FromRow, MySqlConnection};
 use tracing_actix_web::RequestId;
 
 use crate::{
-    auth::MPAuthGuard, utils::json, FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult,
-    RecordsResultExt, Res,
+    auth::MPAuthGuard,
+    utils::{self, json},
+    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
 };
 
 use super::{overview, pb, player::PlayerInfoNetBody, player_finished as pf};
@@ -171,8 +173,9 @@ async fn event_editions(
     let event_handle = event_handle.into_inner();
 
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let ctx = Context::default().with_event_handle(&event_handle);
 
-    let id = records_lib::must::have_event_handle(&mut mysql_conn, &event_handle)
+    let id = records_lib::must::have_event_handle(&mut mysql_conn, &ctx)
         .await
         .fit(req_id)?
         .id;
@@ -225,11 +228,15 @@ async fn edition(
     let (event_handle, edition_id) = path.into_inner();
 
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let ctx = Context::default()
+        .with_event_handle(&event_handle)
+        .with_edition_id(edition_id);
 
-    let (models::Event { id: event_id, .. }, edition) =
-        records_lib::must::have_event_edition(&mut mysql_conn, &event_handle, edition_id)
-            .await
-            .fit(req_id)?;
+    let (event, edition) = records_lib::must::have_event_edition(&mut mysql_conn, &ctx)
+        .await
+        .fit(req_id)?;
+
+    let ctx = ctx.with_event_edition(&event, &edition);
 
     // The edition is not yet released
     if chrono::Utc::now() < edition.start_date.and_utc() {
@@ -238,16 +245,20 @@ async fn edition(
             .fit(req_id);
     }
 
-    let maps = get_maps_by_edition_id(&db, event_id, edition_id)
+    let maps = get_maps_by_edition_id(&db, event.id, edition_id)
         .await
         .fit(req_id)?
         .into_iter()
         .chunk_by(|m| m.category_id);
     let maps = maps.into_iter();
 
-    let mut cat = event::get_categories_by_edition_id(&mut mysql_conn, event_id, edition.id)
-        .await
-        .fit(req_id)?;
+    let mut cat = event::get_categories_by_edition_id(
+        &mut mysql_conn,
+        ctx.get_event_id(),
+        ctx.get_edition_id(),
+    )
+    .await
+    .fit(req_id)?;
 
     let mut categories = Vec::with_capacity(cat.len());
 
@@ -280,7 +291,7 @@ async fn edition(
                         and eer.event_id = ? and eer.edition_id = ?
                     where p.login = ? and r.map_id = ?",
                 )
-                .bind(event_id)
+                .bind(event.id)
                 .bind(edition_id)
                 .bind(login)
                 .bind(map.id)
@@ -308,7 +319,7 @@ async fn edition(
                 )
                 .bind(login)
                 .bind(map.id)
-                .bind(event_id)
+                .bind(event.id)
                 .bind(edition_id)
                 .fetch_optional(&db.mysql_pool)
                 .await
@@ -334,7 +345,7 @@ async fn edition(
             };
 
             let medal_times =
-                event::get_medal_times_of(&db.mysql_pool, event_id, edition_id, map.id)
+                event::get_medal_times_of(&mut mysql_conn, ctx.by_ref().with_map_id(map.id))
                     .await
                     .with_api_err()
                     .fit(req_id)?;
@@ -390,14 +401,14 @@ async fn edition(
             .map(|d| d.and_utc().timestamp() as _)
             .into(),
         id: edition.id,
-        name: edition.name,
-        subtitle: edition.subtitle.unwrap_or_default(),
-        authors: event::get_admins_of(&mut mysql_conn, edition.event_id, edition.id)
+        authors: event::get_admins_of(&mut mysql_conn, ctx.get_event_id(), ctx.get_edition_id())
             .map_ok(|p| p.name)
             .try_collect()
             .await
             .with_api_err()
             .fit(req_id)?,
+        name: edition.name,
+        subtitle: edition.subtitle.unwrap_or_default(),
         start_date: edition.start_date.and_utc().timestamp() as _,
         banner_img_url: edition.banner_img_url.unwrap_or_default(),
         banner2_img_url: edition.banner2_img_url.unwrap_or_default(),
@@ -417,27 +428,30 @@ async fn edition_overview(
 ) -> RecordsResponse<impl Responder> {
     let conn = acquire!(db.with_api_err().fit(req_id)?);
     let (event, edition) = path.into_inner();
-    let (event, edition, EventMap { map, .. }) = records_lib::must::have_event_edition_with_map(
-        conn.mysql_conn,
-        &query.map_uid,
-        event,
-        edition,
-    )
-    .await
-    .with_api_err()
-    .fit(req_id)?;
+    let ctx = Context::default()
+        .with_event_handle(&event)
+        .with_edition_id(edition)
+        .with_map_uid(&query.map_uid)
+        .with_player_login(&query.login);
+
+    let (event, edition, EventMap { map, .. }) =
+        records_lib::must::have_event_edition_with_map(conn.mysql_conn, &ctx)
+            .await
+            .with_api_err()
+            .fit(req_id)?;
 
     if edition.has_expired() {
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    overview::overview(
-        req_id,
+    let res = overview::overview(
         conn,
-        query.0.into_params(Some(&map)),
-        OptEvent::new(&event, &edition),
+        ctx.with_event_edition(&event, &edition).with_map(&map),
     )
     .await
+    .fit(req_id)?;
+
+    utils::json(res)
 }
 
 #[inline(always)]
@@ -471,6 +485,12 @@ pub async fn edition_finished_at(
 
     let (event_handle, edition_id) = path.into_inner();
 
+    let ctx = Context::default()
+        .with_event_handle(&event_handle)
+        .with_edition_id(edition_id)
+        .with_map_uid(&body.map_uid)
+        .with_player_login(&login);
+
     // We first check that the event and its edition exist
     // and that the map is registered on it.
     let (
@@ -480,14 +500,11 @@ pub async fn edition_finished_at(
             map,
             original_map_id,
         },
-    ) = records_lib::must::have_event_edition_with_map(
-        conn.mysql_conn,
-        &body.map_uid,
-        event_handle,
-        edition_id,
-    )
-    .await
-    .fit(req_id)?;
+    ) = records_lib::must::have_event_edition_with_map(conn.mysql_conn, &ctx)
+        .await
+        .fit(req_id)?;
+
+    let ctx = ctx.with_event_edition(&event, &edition).with_map(&map);
 
     if edition.has_expired()
         && !(edition.start_date <= at && edition.expire_date().filter(|date| at > *date).is_none())
@@ -495,42 +512,29 @@ pub async fn edition_finished_at(
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    let opt_event = OptEvent::new(&event, &edition);
-
-    let params = body.into_params(Some(&map));
-    let rest = params.rest.clone();
-
     // Then we insert the record for the global records
-    let res = pf::finished(login.clone(), &mut conn, params, opt_event, at)
+    let res = pf::finished(&mut conn, &ctx, body.rest.clone(), at)
         .await
         .fit(req_id)?;
 
     if let Some(original_map_id) = original_map_id {
+        let ctx = ctx
+            .with_player_id(res.player_id)
+            .with_map_id(original_map_id)
+            .with_no_event();
+
         // Get the previous time of the player on the original map to check if it's a PB
-        let time_on_previous = player::get_time_on_map(
-            conn.mysql_conn,
-            res.player_id,
-            original_map_id,
-            Default::default(),
-        )
-        .await
-        .with_api_err()
-        .fit(req_id)?;
-        let is_pb = time_on_previous.is_none() || time_on_previous.is_some_and(|t| t > rest.time);
+        let time_on_previous = player::get_time_on_map(conn.mysql_conn, &ctx)
+            .await
+            .with_api_err()
+            .fit(req_id)?;
+        let is_pb =
+            time_on_previous.is_none() || time_on_previous.is_some_and(|t| t > body.rest.time);
 
         // Here, we don't provide the event instances, because we don't want to save in event mode.
-        pf::insert_record(
-            &mut conn,
-            original_map_id,
-            res.player_id,
-            rest,
-            Default::default(),
-            Some(res.record_id),
-            at,
-            is_pb,
-        )
-        .await
-        .fit(req_id)?;
+        pf::insert_record(&mut conn, &ctx, body.rest, Some(res.record_id), at, is_pb)
+            .await
+            .fit(req_id)?;
     }
 
     // Then we insert it for the event edition records.
@@ -571,25 +575,30 @@ async fn edition_pb(
     body: pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
+    let ctx = Context::default()
+        .with_event_handle(&event_handle)
+        .with_edition_id(edition_id)
+        .with_map_uid(&body.map_uid);
 
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let (event, edition, EventMap { map, .. }) = records_lib::must::have_event_edition_with_map(
-        &mut mysql_conn,
-        &body.map_uid,
-        event_handle,
-        edition_id,
-    )
-    .await
-    .fit(req_id)?;
+    let (event, edition, EventMap { map, .. }) =
+        records_lib::must::have_event_edition_with_map(&mut mysql_conn, &ctx)
+            .await
+            .fit(req_id)?;
 
     if edition.has_expired() {
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    let body = pb::PbBody {
-        map_uid: map.game_id,
-    };
+    let res = pb::pb(
+        Context::default()
+            .with_map(&map)
+            .with_player_login(&login)
+            .with_mysql_pool(db.0.mysql_pool),
+    )
+    .await
+    .fit(req_id)?;
 
-    pb::pb(login, req_id, db, body, OptEvent::new(&event, &edition)).await
+    utils::json(res)
 }

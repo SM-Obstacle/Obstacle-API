@@ -12,6 +12,7 @@ mod env;
 mod modeversion;
 mod mptypes;
 
+pub mod context;
 pub mod error;
 pub mod event;
 pub mod leaderboard;
@@ -26,7 +27,7 @@ pub mod table_lock;
 pub mod time;
 
 /// The MySQL/MariaDB pool type.
-pub type MySqlPool = sqlx::Pool<sqlx::MySql>;
+pub type MySqlPool = sqlx::MySqlPool;
 /// The Redis pool type.
 pub type RedisPool = deadpool_redis::Pool;
 /// The type of a Redis connection.
@@ -53,7 +54,6 @@ pub struct Database {
     pub redis_pool: RedisPool,
 }
 
-// TODO: remove this after doing the tests
 #[allow(missing_docs)]
 #[macro_export]
 macro_rules! acquire {

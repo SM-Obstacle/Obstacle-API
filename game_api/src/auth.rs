@@ -57,6 +57,7 @@ use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
 use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
 use futures::Future;
+use records_lib::context::{Context, Ctx as _};
 use records_lib::models::ApiStatusKind;
 use records_lib::redis_key::{mp_token_key, web_token_key};
 use records_lib::{acquire, Database};
@@ -286,7 +287,11 @@ async fn inner_check_auth_for(
         return Err(RecordsErrorKind::Unauthorized);
     }
 
-    let player = records_lib::must::have_player(conn.mysql_conn, login).await?;
+    let player = records_lib::must::have_player(
+        conn.mysql_conn,
+        Context::default().with_player_login(login),
+    )
+    .await?;
 
     if let Some(ban) = player::check_banned(conn.mysql_conn, player.id).await? {
         return Err(RecordsErrorKind::BannedPlayer(ban));

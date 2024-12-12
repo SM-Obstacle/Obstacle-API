@@ -2,9 +2,14 @@
 
 use std::fmt;
 
-use futures::{Stream, TryStreamExt};
+use sqlx::QueryBuilder;
 
-use crate::{acquire, error::RecordsResult, event::OptEvent, ranks::get_rank, Database};
+use crate::{
+    context::{Ctx, HasMapId},
+    error::RecordsResult,
+    ranks::get_rank,
+    DatabaseConnection,
+};
 
 /// The type returned by the [`compet_rank_by_key`](CompetRankingByKeyIter::compet_rank_by_key)
 /// method.
@@ -125,52 +130,7 @@ pub struct Row {
     pub time: i32,
 }
 
-/// Returns the SQL query to be used as the `query` parameter of the [`leaderboard`] function.
-pub fn sql_query(event: OptEvent<'_, '_>, offset: Option<isize>, limit: Option<isize>) -> String {
-    struct Offset(Option<isize>);
-
-    impl fmt::Display for Offset {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self.0 {
-                Some(offset) => write!(f, "offset {offset}"),
-                None => Ok(()),
-            }
-        }
-    }
-
-    struct Limit(Option<isize>);
-
-    impl fmt::Display for Limit {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self.0 {
-                Some(limit) => write!(f, "limit {limit}"),
-                None => Ok(()),
-            }
-        }
-    }
-
-    let (view_name, and_event) = event.get_view();
-
-    format!(
-        "select
-            p.id as player_id,
-            p.login as player,
-            r.time as time
-        from {view_name} r
-        inner join players p on p.id = r.record_player_id
-        where r.map_id = ? {and_event}
-        order by r.time
-        {limit} {offset}",
-        limit = Limit(limit),
-        offset = Offset(offset),
-    )
-}
-
 /// Returns a stream of the leaderboard of a map from its ID.
-///
-/// The `query` parameter must be a call to [`sql_query`].
-///
-/// > The signature of this function is likely to change.
 ///
 /// ## Example
 ///
@@ -193,23 +153,72 @@ pub fn sql_query(event: OptEvent<'_, '_>, offset: Option<isize>, limit: Option<i
 /// .await;
 /// # }
 /// ```
-pub fn leaderboard<'a>(
-    db: &'a Database,
-    map_id: u32,
-    event: OptEvent<'a, 'a>,
-    query: &'a str,
-) -> impl Stream<Item = RecordsResult<Row>> + 'a {
-    sqlx::query_as::<_, RawRow>(query)
-        .bind(map_id)
-        .fetch(&db.mysql_pool)
-        .map_err(From::from)
-        .and_then(move |row| async move {
-            let mut conn = acquire!(db?);
-            let rank = get_rank(&mut conn, map_id, row.player_id, row.time, event).await?;
-            Ok(Row {
-                rank,
-                player: row.player,
-                time: row.time,
-            })
-        })
+pub async fn leaderboard<C: HasMapId>(
+    conn: &mut DatabaseConnection<'_>,
+    ctx: C,
+    offset: Option<isize>,
+    limit: Option<isize>,
+) -> RecordsResult<Vec<Row>> {
+    struct Offset(Option<isize>);
+
+    impl fmt::Display for Offset {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self.0 {
+                Some(offset) => write!(f, "offset {offset}"),
+                None => Ok(()),
+            }
+        }
+    }
+
+    struct Limit(Option<isize>);
+
+    impl fmt::Display for Limit {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self.0 {
+                Some(limit) => write!(f, "limit {limit}"),
+                None => Ok(()),
+            }
+        }
+    }
+
+    let builder = ctx.sql_frag_builder();
+
+    let mut query = QueryBuilder::new(
+        "select
+            p.id as player_id,
+            p.login as player,
+            r.time as time
+        from ",
+    );
+    builder
+        .push_event_view_name(&mut query, "r")
+        .push(
+            " r inner join players p on p.id = r.record_player_id \
+        where r.map_id = ",
+        )
+        .push_bind(ctx.get_map_id())
+        .push(" ");
+    let query = builder
+        .push_event_filter(&mut query, "r")
+        .push(" order by r.time ")
+        .push(Limit(limit))
+        .push(" ")
+        .push(Offset(offset))
+        .build_query_as();
+
+    let rows: Vec<RawRow> = query.fetch_all(&mut **conn.mysql_conn).await?;
+
+    let mut out = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let ctx = Ctx::with_player_id(&ctx, row.player_id);
+        let rank = get_rank(conn, ctx, row.time).await?;
+        out.push(Row {
+            rank,
+            player: row.player,
+            time: row.time,
+        });
+    }
+
+    Ok(out)
 }

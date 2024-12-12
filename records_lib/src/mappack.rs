@@ -5,8 +5,8 @@ use std::{fmt, time::SystemTime};
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
 
 use crate::{
+    context::{Ctx as _, HasMappackId},
     error::RecordsResult,
-    event::OptEvent,
     models, must,
     ranks::get_rank,
     redis_key::{
@@ -114,14 +114,6 @@ impl AnyMappackId<'_> {
         MappackIdDisp { mappack_id: self }
     }
 
-    /// Returns the related optional event.
-    fn get_event(&self) -> OptEvent<'_, '_> {
-        match self {
-            Self::Event(event, edition) => OptEvent::new(event, edition),
-            Self::Id(_) => Default::default(),
-        }
-    }
-
     /// Returns whether the mappack has a time-to-live or not.
     ///
     /// Only regular MX mappacks have a time-to-live.
@@ -145,13 +137,16 @@ impl AnyMappackId<'_> {
 /// * `mappack`: the mappack.
 /// * `mysql_conn`: a connection to the MySQL/MariaDB database, to fetch the records.
 /// * `redis_conn`: a connection to the Redis database, to store the scores.
-#[cfg_attr(feature = "tracing", tracing::instrument(skip(db), err))]
-pub async fn update_mappack(
-    mappack: AnyMappackId<'_>,
+#[cfg_attr(
+    feature = "tracing",
+    tracing::instrument(skip(db, ctx), fields(mappack = %ctx.get_mappack_id().mappack_id()), err)
+)]
+pub async fn update_mappack<C: HasMappackId>(
+    ctx: C,
     db: &mut DatabaseConnection<'_>,
 ) -> RecordsResult<usize> {
     // Calculate the scores
-    let scores = calc_scores(mappack, db).await?;
+    let scores = calc_scores(&ctx, db).await?;
 
     // Early return if the mappack has expired
     let Some(scores) = scores else {
@@ -159,6 +154,8 @@ pub async fn update_mappack(
     };
 
     let total_scores = scores.scores.len();
+
+    let mappack = ctx.get_mappack_id();
 
     // Then save them to the Redis database for cache-handling
     save(mappack, scores, db.redis_conn).await?;
@@ -325,18 +322,21 @@ async fn save(
 }
 
 /// Returns an `Option` because the mappack may have expired.
-#[cfg_attr(feature = "tracing", tracing::instrument(skip(db)))]
-async fn calc_scores(
-    mappack: AnyMappackId<'_>,
+#[cfg_attr(
+    feature = "tracing",
+    tracing::instrument(skip(db, ctx), fields(mappack = %ctx.get_mappack_id().mappack_id()))
+)]
+async fn calc_scores<C>(
+    ctx: C,
     db: &mut DatabaseConnection<'_>,
-) -> RecordsResult<Option<MappackScores>> {
-    let mappack_key = mappack_key(mappack);
+) -> RecordsResult<Option<MappackScores>>
+where
+    C: HasMappackId,
+{
+    let mappack_key = mappack_key(ctx.get_mappack_id());
     let mappack_uids: Vec<String> = db.redis_conn.smembers(&mappack_key).await?;
 
     let mut maps = Vec::with_capacity(mappack_uids.len().max(5));
-
-    let event = mappack.get_event();
-    let (view_name, and_event) = event.get_view();
 
     let mappack = if mappack_uids.is_empty() {
         // If the mappack is empty, it means either that it's an invalid/unknown mappack ID,
@@ -345,13 +345,15 @@ async fn calc_scores(
         // be deleted too.
         let _: i32 = db
             .redis_conn
-            .srem(mappacks_key(), mappack.mappack_id())
+            .srem(mappacks_key(), ctx.get_mappack_id().mappack_id())
             .await?;
         return Ok(None);
     } else {
         let mut out = Vec::with_capacity(mappack_uids.len());
+
         for map_uid in &mappack_uids {
-            let map = must::have_map(db.mysql_conn, map_uid).await?;
+            let map =
+                must::have_map(db.mysql_conn, ctx.by_ref().with_map_uid(map_uid.as_str())).await?;
             maps.push(MappackMap {
                 map_id: map.game_id.clone(),
                 last_rank: 0,
@@ -365,21 +367,21 @@ async fn calc_scores(
     let mut scores = Vec::<PlayerScore>::with_capacity(mappack.len());
 
     for (i, map) in mappack.iter().enumerate() {
-        let query = format!(
-            "SELECT r.*, p.id as player_id2, p.login as player_login, p.name as player_name
-            FROM {view_name} r
-            INNER JOIN players p ON p.id = r.record_player_id
-            WHERE map_id = ?
-            {and_event}
-            ORDER BY time ASC",
-        );
+        let builder = ctx.sql_frag_builder();
 
-        let query = sqlx::query_as::<_, RecordRow>(&query).bind(map.id);
-        let query = if let Some((event, edition)) = event.0 {
-            query.bind(event.id).bind(edition.id)
-        } else {
-            query
-        };
+        let mut query = sqlx::QueryBuilder::new(
+            "SELECT r.*, p.id as player_id2, p.login as player_login, p.name as player_name
+            FROM ",
+        );
+        builder
+            .push_event_view_name(&mut query, "r")
+            .push(" INNER JOIN players p ON p.id = r.record_player_id WHERE map_id = ")
+            .push_bind(map.id)
+            .push(" ");
+        let query = builder
+            .push_event_filter(&mut query, "r")
+            .push(" order by time asc")
+            .build_query_as::<RecordRow>();
 
         let res = query.fetch_all(&mut **db.mysql_conn).await?;
 
@@ -400,10 +402,10 @@ async fn calc_scores(
             let record = RankedRecordRow {
                 rank: get_rank(
                     db,
-                    map.id,
-                    record.record.record_player_id,
+                    ctx.by_ref()
+                        .with_map_id(map.id)
+                        .with_player_id(record.record.record_player_id),
                     record.record.time,
-                    event,
                 )
                 .await?,
                 record,

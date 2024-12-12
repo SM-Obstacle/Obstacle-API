@@ -1,7 +1,11 @@
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
-    acquire, mappack::AnyMappackId, models, must, redis_key::mappack_key, Database,
-    DatabaseConnection,
+    acquire,
+    context::{Context, Ctx},
+    mappack::AnyMappackId,
+    models, must,
+    redis_key::mappack_key,
+    Database, DatabaseConnection,
 };
 
 #[derive(clap::Args)]
@@ -39,8 +43,13 @@ pub async fn clear(
 ) -> anyhow::Result<()> {
     let mut conn = acquire!(db?);
 
-    let (event, edition) =
-        must::have_event_edition(conn.mysql_conn, &event_handle, event_edition).await?;
+    let (event, edition) = must::have_event_edition(
+        conn.mysql_conn,
+        Context::default()
+            .with_event_handle(&event_handle)
+            .with_edition_id(event_edition),
+    )
+    .await?;
 
     clear_content(&mut conn, &event, &edition).await?;
 

@@ -8,7 +8,7 @@ use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
     acquire,
-    event::OptEvent,
+    context::{Context, Ctx},
     models::{self, Record},
     ranks::{get_rank, update_leaderboard},
     redis_key::alone_map_key,
@@ -39,19 +39,20 @@ impl From<models::Map> for Map {
 }
 
 impl Map {
-    pub(super) async fn get_records(
+    pub(super) async fn get_records<C: Ctx>(
         &self,
-        ctx: &async_graphql::Context<'_>,
+        gql_ctx: &async_graphql::Context<'_>,
+        ctx: C,
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
-        event: OptEvent<'_, '_>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
-        let db = ctx.data_unchecked::<Database>();
+        let ctx = ctx.with_map(&self.inner);
+        let db = gql_ctx.data_unchecked::<Database>();
         let mut conn = acquire!(db?);
 
         let key = alone_map_key(self.inner.id);
 
-        update_leaderboard(&mut conn, self.inner.id, event).await?;
+        update_leaderboard(&mut conn, &ctx).await?;
 
         let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
         let record_ids: Vec<i32> = if to_reverse {
@@ -64,63 +65,56 @@ impl Map {
             return Ok(Vec::new());
         }
 
-        let player_ids_query = record_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let builder = ctx.sql_frag_builder();
 
-        let (and_player_id_in, order_by_clause) = if let Some(s) = date_sort_by.as_ref() {
-            let date_sort_by = if *s == SortState::Reverse {
-                "ASC".to_owned()
+        let mut query = sqlx::QueryBuilder::new("SELECT * FROM ");
+        builder
+            .push_event_view_name(&mut query, "r")
+            .push(" where r.map_id = ")
+            .push_bind(self.inner.id)
+            .push(" ");
+
+        if let Some(ref s) = date_sort_by {
+            query.push("order by");
+            if let SortState::Reverse = s {
+                query.push(" asc");
             } else {
-                "DESC".to_owned()
-            };
-            (String::new(), format!("r.record_date {date_sort_by}"))
+                query.push(" desc");
+            }
+            query.push(", r.record_date asc");
         } else {
-            (
-                format!("AND r.record_player_id IN ({player_ids_query})"),
-                format!(
-                    "r.time {order}, r.record_date ASC",
-                    order = if to_reverse { "DESC" } else { "ASC" }
-                ),
-            )
-        };
-
-        let (view_name, and_event) = event.get_view();
-
-        // Query the records with these ids
-        let query = format!(
-            "SELECT * FROM {view_name} r
-            WHERE map_id = ? {and_player_id_in}
-            {and_event}
-            ORDER BY {order_by_clause}
-            {limit}",
-            limit = if date_sort_by.is_some() || rank_sort_by.is_some() {
-                "LIMIT 100"
+            let mut sep = builder
+                .push_event_filter(&mut query, "r")
+                .push(" and r.record_player_id in (")
+                .separated(", ");
+            for id in record_ids {
+                sep.push_bind(id);
+            }
+            query.push(") order by r.time");
+            if to_reverse {
+                query.push(" desc");
             } else {
-                ""
+                query.push(" asc");
             }
-        );
-
-        let mut query = sqlx::query_as::<_, Record>(&query).bind(self.inner.id);
-        if date_sort_by.is_none() {
-            for id in &record_ids {
-                query = query.bind(id);
-            }
+            query.push(", r.record_date asc");
         }
 
-        if let Some((event, edition)) = event.0 {
-            query = query.bind(event.id).bind(edition.id);
+        // "SELECT * FROM global_edition_records r where r.map_id = ? and r.record_player_id in (r.event_id = ? and r.edition_id = ??, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) order by r.time asc, r.record_date asc"
+
+        if date_sort_by.is_some() {
+            query.push(" limit 100");
         }
 
-        let mut records = query.fetch(&db.mysql_pool);
+        let mut records = query.build_query_as::<Record>().fetch(&db.mysql_pool);
+
         let mut ranked_records = Vec::with_capacity(records.size_hint().0);
 
         while let Some(record) = records.next().await {
             let record = record?;
             let rank = get_rank(
                 &mut conn,
-                self.inner.id,
-                record.record_player_id,
+                ctx.by_ref().with_player_id(record.record_player_id),
                 record.time,
-                event,
             )
             .await?;
 
@@ -268,7 +262,7 @@ impl Map {
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
-        self.get_records(ctx, rank_sort_by, date_sort_by, Default::default())
+        self.get_records(ctx, Context::default(), rank_sort_by, date_sort_by)
             .await
     }
 }

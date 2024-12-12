@@ -28,7 +28,7 @@ where
     F: for<'a> TableLockGuardFunc<'a, Param, Output = Result<T, E>>,
     E: From<sqlx::Error>,
 {
-    sqlx::query(&format!("start transaction read only"))
+    sqlx::query("start transaction read only")
         .execute(&mut **mysql_conn)
         .await?;
     let ret = f(mysql_conn, args).await;

@@ -2,7 +2,10 @@ use actix_web::{
     web::{self, Json, Query},
     HttpResponse, Responder, Scope,
 };
-use records_lib::Database;
+use records_lib::{
+    context::{Context, Ctx},
+    Database,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{mysql::MySqlRow, FromRow, Row};
 use tracing_actix_web::RequestId;
@@ -134,8 +137,9 @@ pub async fn banishments(
     Query(body): Query<BanishmentsBody>,
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let ctx = Context::default().with_player_login(&body.player_login);
 
-    let player_id = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
+    let player_id = records_lib::must::have_player(&mut mysql_conn, &ctx)
         .await
         .fit(req_id)?
         .id;
@@ -182,15 +186,19 @@ pub async fn ban(
     Json(body): Json<BanBody>,
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let ctx = Context::default().with_player_login(&body.player_login);
 
-    let player_id = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
+    let player = records_lib::must::have_player(&mut mysql_conn, &ctx)
         .await
-        .fit(req_id)?
-        .id;
-    let admin_id = records_lib::must::have_player(&mut mysql_conn, &login)
-        .await
-        .fit(req_id)?
-        .id;
+        .fit(req_id)?;
+
+    let ctx = ctx.with_player(&player);
+
+    let admin_id =
+        records_lib::must::have_player(&mut mysql_conn, ctx.by_ref().with_player_login(&login))
+            .await
+            .fit(req_id)?
+            .id;
 
     let was_reprieved =
         sqlx::query_as::<_, Banishment>("SELECT * FROM banishments WHERE player_id = ?")
@@ -210,7 +218,7 @@ pub async fn ban(
     .bind(body.duration)
     .bind(was_reprieved)
     .bind(body.reason)
-    .bind(player_id)
+    .bind(player.id)
     .bind(admin_id)
     .fetch_one(&mut *mysql_conn)
     .await
@@ -264,8 +272,9 @@ pub async fn unban(
     Json(body): Json<UnbanBody>,
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let ctx = Context::default().with_player_login(&body.player_login);
 
-    let player_id = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
+    let player_id = records_lib::must::have_player(&mut mysql_conn, &ctx)
         .await
         .fit(req_id)?
         .id;
@@ -316,8 +325,9 @@ pub async fn player_note(
     Json(body): Json<PlayerNoteBody>,
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let ctx = Context::default().with_player_login(&body.player_login);
 
-    let admins_note = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
+    let admins_note = records_lib::must::have_player(&mut mysql_conn, &ctx)
         .await
         .fit(req_id)?
         .admins_note;
