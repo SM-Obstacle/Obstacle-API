@@ -208,6 +208,7 @@ async fn populate_mx_maps(
     Ok(mx_ids.into_iter().flatten().collect())
 }
 
+// TODO: use a SQL transaction
 pub async fn populate(
     client: reqwest::Client,
     db: Database,
