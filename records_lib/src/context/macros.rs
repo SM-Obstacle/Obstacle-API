@@ -1,7 +1,7 @@
 macro_rules! impl_ctx {
     () => {
         #[inline(always)]
-        fn get_opt_event(&self) -> Option<&models::Event> {
+        fn get_opt_event(&self) -> Option<&$crate::models::Event> {
             <E as $crate::context::Ctx>::get_opt_event(&self.extra)
         }
 
@@ -11,7 +11,7 @@ macro_rules! impl_ctx {
         }
 
         #[inline(always)]
-        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+        fn get_opt_edition(&self) -> Option<&$crate::models::EventEdition> {
             <E as $crate::context::Ctx>::get_opt_edition(&self.extra)
         }
 
@@ -21,7 +21,7 @@ macro_rules! impl_ctx {
         }
 
         #[inline(always)]
-        fn get_opt_event_edition(&self) -> Option<(&models::Event, &models::EventEdition)> {
+        fn get_opt_event_edition(&self) -> Option<(&$crate::models::Event, &$crate::models::EventEdition)> {
             <E as $crate::context::Ctx>::get_opt_event_edition(&self.extra)
         }
 

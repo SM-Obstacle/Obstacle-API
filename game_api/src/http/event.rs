@@ -6,10 +6,14 @@ use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{
     acquire,
-    context::{Context, Ctx as _, HasEditionId, HasEventId},
+    context::{
+        Context, Ctx as _, HasEditionId, HasEventId, HasEventIds, HasMap, HasPlayerLogin,
+        ReadWrite, Transactional,
+    },
     error::RecordsError,
     event::{self, EventMap},
-    models, player, Database, NullableInteger, NullableText,
+    models, player, transaction, Database, DatabaseConnection, NullableInteger, NullableText,
+    RedisConnection,
 };
 use serde::Serialize;
 use sqlx::{FromRow, MySqlConnection};
@@ -473,6 +477,64 @@ async fn edition_finished(
     .await
 }
 
+struct EditionFinishedParams<'a> {
+    redis_conn: &'a mut RedisConnection,
+    original_map_id: Option<u32>,
+    at: chrono::NaiveDateTime,
+    body: pf::HasFinishedBody,
+}
+
+async fn edition_finished_impl<C>(
+    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    ctx: C,
+    EditionFinishedParams {
+        redis_conn,
+        original_map_id,
+        at,
+        body,
+    }: EditionFinishedParams<'_>,
+) -> RecordsResult<pf::FinishedOutput>
+where
+    C: HasPlayerLogin + HasMap + HasEventIds + Transactional<Mode = ReadWrite>,
+{
+    let mut conn = DatabaseConnection {
+        mysql_conn,
+        redis_conn,
+    };
+
+    // Then we insert the record for the global records
+    let res = pf::finished(&mut conn, &ctx, body.rest.clone(), at).await?;
+
+    if let Some(original_map_id) = original_map_id {
+        let ctx = ctx
+            .by_ref()
+            .with_player_id(res.player_id)
+            .with_map_id(original_map_id)
+            .with_no_event();
+
+        // Get the previous time of the player on the original map to check if it's a PB
+        let time_on_previous = player::get_time_on_map(conn.mysql_conn, &ctx)
+            .await
+            .with_api_err()?;
+        let is_pb =
+            time_on_previous.is_none() || time_on_previous.is_some_and(|t| t > body.rest.time);
+
+        // Here, we don't provide the event instances, because we don't want to save in event mode.
+        pf::insert_record(&mut conn, &ctx, &body.rest, Some(res.record_id), at, is_pb).await?;
+    }
+
+    // Then we insert it for the event edition records.
+    insert_event_record(
+        conn.mysql_conn,
+        res.record_id,
+        ctx.get_event_id(),
+        ctx.get_edition_id(),
+    )
+    .await?;
+
+    Ok(res)
+}
+
 pub async fn edition_finished_at(
     login: String,
     req_id: RequestId,
@@ -481,14 +543,13 @@ pub async fn edition_finished_at(
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
-    let mut conn = acquire!(db.with_api_err().fit(req_id)?);
+    let conn = acquire!(db.with_api_err().fit(req_id)?);
 
     let (event_handle, edition_id) = path.into_inner();
 
     let ctx = Context::default()
         .with_event_handle(&event_handle)
         .with_edition_id(edition_id)
-        .with_map_uid(&body.map_uid)
         .with_player_login(&login);
 
     // We first check that the event and its edition exist
@@ -500,9 +561,12 @@ pub async fn edition_finished_at(
             map,
             original_map_id,
         },
-    ) = records_lib::must::have_event_edition_with_map(conn.mysql_conn, &ctx)
-        .await
-        .fit(req_id)?;
+    ) = records_lib::must::have_event_edition_with_map(
+        conn.mysql_conn,
+        ctx.by_ref().with_map_uid(&body.map_uid),
+    )
+    .await
+    .fit(req_id)?;
 
     let ctx = ctx.with_event_edition(&event, &edition).with_map(&map);
 
@@ -512,37 +576,20 @@ pub async fn edition_finished_at(
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    // Then we insert the record for the global records
-    let res = pf::finished(&mut conn, &ctx, body.rest.clone(), at)
-        .await
-        .fit(req_id)?;
-
-    if let Some(original_map_id) = original_map_id {
-        let ctx = ctx
-            .with_player_id(res.player_id)
-            .with_map_id(original_map_id)
-            .with_no_event();
-
-        // Get the previous time of the player on the original map to check if it's a PB
-        let time_on_previous = player::get_time_on_map(conn.mysql_conn, &ctx)
-            .await
-            .with_api_err()
-            .fit(req_id)?;
-        let is_pb =
-            time_on_previous.is_none() || time_on_previous.is_some_and(|t| t > body.rest.time);
-
-        // Here, we don't provide the event instances, because we don't want to save in event mode.
-        pf::insert_record(&mut conn, &ctx, body.rest, Some(res.record_id), at, is_pb)
-            .await
-            .fit(req_id)?;
-    }
-
-    // Then we insert it for the event edition records.
-    // This is not part of the transaction, because we don't want to roll back
-    // the insertion of the record if this query fails.
-    insert_event_record(conn.mysql_conn, res.record_id, event.id, edition.id)
-        .await
-        .fit(req_id)?;
+    let res = transaction::within_transaction(
+        conn.mysql_conn,
+        ctx.with_event_edition(&event, &edition).with_map(&map),
+        ReadWrite,
+        EditionFinishedParams {
+            redis_conn: conn.redis_conn,
+            original_map_id,
+            at,
+            body,
+        },
+        edition_finished_impl,
+    )
+    .await
+    .fit(req_id)?;
 
     json(res.res)
 }

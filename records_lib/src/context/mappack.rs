@@ -3,8 +3,9 @@ use sqlx::MySqlPool;
 use crate::{mappack::AnyMappackId, models, RedisPool};
 
 use super::{
-    macros::new_combinator, HasEdition, HasEditionId, HasEvent, HasEventHandle, HasEventId, HasMap,
-    HasMapId, HasMapUid, HasMySqlPool, HasPlayer, HasPlayerId, HasPlayerLogin, HasRedisPool,
+    macros::new_combinator, persistent::HasPersistentMode, HasEdition, HasEditionId, HasEvent,
+    HasEventHandle, HasEventId, HasMap, HasMapId, HasMapUid, HasMySqlPool, HasPlayer, HasPlayerId,
+    HasPlayerLogin, HasRedisPool, Transactional,
 };
 
 new_combinator! {
@@ -25,6 +26,8 @@ new_combinator! {
         }
     }
     'delegates {
+        'a HasPersistentMode.__do_nothing -> (),
+
         'a HasRedisPool.get_redis_pool -> RedisPool,
         'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -43,4 +46,8 @@ new_combinator! {
         'a HasEventId.get_event_id -> u32,
         'a HasEditionId.get_edition_id -> u32,
     }
+}
+
+impl<E: Transactional> Transactional for WithMappackId<'_, E> {
+    type Mode = <E as Transactional>::Mode;
 }

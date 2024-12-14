@@ -1,8 +1,9 @@
 use crate::{mappack::AnyMappackId, models, MySqlPool, RedisPool};
 
 use super::{
-    macros::new_combinator, HasEdition, HasEditionId, HasEvent, HasEventHandle, HasEventId, HasMap,
-    HasMapId, HasMapUid, HasMappackId, HasMySqlPool, HasRedisPool,
+    macros::new_combinator, persistent::HasPersistentMode, HasEdition, HasEditionId, HasEvent,
+    HasEventHandle, HasEventId, HasMap, HasMapId, HasMapUid, HasMappackId, HasMySqlPool,
+    HasRedisPool, Transactional,
 };
 
 new_combinator! {
@@ -23,6 +24,8 @@ new_combinator! {
         }
     }
     'delegates {
+        'a HasPersistentMode.__do_nothing -> (),
+
         'a HasRedisPool.get_redis_pool -> RedisPool,
         'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -45,6 +48,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithPlayerLogin<'_, E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain the current player login, as an owned [`String`].
@@ -55,6 +62,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -82,6 +91,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithPlayerLoginOwned<E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// An adaptator context type used to contain a reference to the current player.
@@ -100,6 +113,8 @@ new_combinator! {
         }
     }
     'delegates {
+        'a HasPersistentMode.__do_nothing -> (),
+
         'a HasRedisPool.get_redis_pool -> RedisPool,
         'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -130,6 +145,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithPlayer<'_, E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain the current player, with its ownership.
@@ -140,6 +159,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -173,6 +194,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithPlayerOwned<E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain the current player ID.
@@ -191,6 +216,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -211,4 +238,8 @@ new_combinator! {
         HasEdition.get_edition -> &models::EventEdition,
         HasEditionId.get_edition_id -> u32,
     }
+}
+
+impl<E: Transactional> Transactional for WithPlayerId<E> {
+    type Mode = <E as Transactional>::Mode;
 }

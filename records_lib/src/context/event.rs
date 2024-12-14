@@ -3,8 +3,9 @@ use sqlx::MySqlPool;
 use crate::{mappack::AnyMappackId, models, RedisPool};
 
 use super::{
-    macros::new_combinator, HasMap, HasMapId, HasMapUid, HasMappackId, HasMySqlPool, HasPlayer,
-    HasPlayerId, HasPlayerLogin, HasRedisPool,
+    macros::new_combinator, persistent::HasPersistentMode, HasMap, HasMapId, HasMapUid,
+    HasMappackId, HasMySqlPool, HasPlayer, HasPlayerId, HasPlayerLogin, HasRedisPool,
+    Transactional,
 };
 
 new_combinator! {
@@ -25,6 +26,8 @@ new_combinator! {
         }
     }
     'delegates {
+        'a HasPersistentMode.__do_nothing -> (),
+
         'a HasRedisPool.get_redis_pool -> RedisPool,
         'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -47,6 +50,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithEventHandle<'_, E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain the current event handle, with its ownership.
@@ -57,6 +64,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -82,6 +91,10 @@ new_combinator! {
             &self.handle
         }
     }
+}
+
+impl<E: Transactional> Transactional for WithEventHandleOwned<E> {
+    type Mode = <E as Transactional>::Mode;
 }
 
 /// Context trait to get the current event and its edition.
@@ -128,6 +141,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -171,6 +186,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithEventId<E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain the current edition ID.
@@ -189,6 +208,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -232,6 +253,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithEditionId<E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain a reference to the current event.
@@ -250,6 +275,8 @@ new_combinator! {
         }
     }
     'delegates {
+        'a HasPersistentMode.__do_nothing -> (),
+
         'a HasRedisPool.get_redis_pool -> RedisPool,
         'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -301,6 +328,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithEvent<'_, E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain the current event, with its ownership.
@@ -311,6 +342,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -365,6 +398,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithEventOwned<E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain a reference to the current edition.
@@ -383,6 +420,8 @@ new_combinator! {
         }
     }
     'delegates {
+        'a HasPersistentMode.__do_nothing -> (),
+
         'a HasRedisPool.get_redis_pool -> RedisPool,
         'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -434,6 +473,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithEdition<'_, E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain the current edition, with its ownership.
@@ -444,6 +487,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -498,6 +543,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithEditionOwned<E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to remove any current event instance from the context.
@@ -508,6 +557,8 @@ new_combinator! {
         struct WithNoEvent {}
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -549,4 +600,8 @@ new_combinator! {
             None
         }
     }
+}
+
+impl<E: Transactional> Transactional for WithNoEvent<E> {
+    type Mode = <E as Transactional>::Mode;
 }

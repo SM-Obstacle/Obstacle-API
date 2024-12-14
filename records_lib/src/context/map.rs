@@ -3,8 +3,9 @@ use sqlx::MySqlPool;
 use crate::{mappack::AnyMappackId, models, RedisPool};
 
 use super::{
-    macros::new_combinator, HasEdition, HasEditionId, HasEvent, HasEventHandle, HasEventId,
-    HasMappackId, HasMySqlPool, HasPlayer, HasPlayerId, HasPlayerLogin, HasRedisPool,
+    macros::new_combinator, persistent::HasPersistentMode, HasEdition, HasEditionId, HasEvent,
+    HasEventHandle, HasEventId, HasMappackId, HasMySqlPool, HasPlayer, HasPlayerId, HasPlayerLogin,
+    HasRedisPool, Transactional,
 };
 
 new_combinator! {
@@ -25,6 +26,8 @@ new_combinator! {
         }
     }
     'delegates {
+        'a HasPersistentMode.__do_nothing -> (),
+
         'a HasRedisPool.get_redis_pool -> RedisPool,
         'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -47,6 +50,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithMapUid<'_, E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain the current map UID, as an owned [`String`].
@@ -57,6 +64,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -84,6 +93,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithMapUidOwned<E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain a reference to the current map.
@@ -102,6 +115,8 @@ new_combinator! {
         }
     }
     'delegates {
+        'a HasPersistentMode.__do_nothing -> (),
+
         'a HasRedisPool.get_redis_pool -> RedisPool,
         'a HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -132,6 +147,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithMap<'_, E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain the current map, with its ownership.
@@ -142,6 +161,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -175,6 +196,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithMapOwned<E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain the current map ID.
@@ -191,6 +216,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -211,4 +238,8 @@ new_combinator! {
         HasEdition.get_edition -> &models::EventEdition,
         HasEditionId.get_edition_id -> u32,
     }
+}
+
+impl<E: Transactional> Transactional for WithMapId<E> {
+    type Mode = <E as Transactional>::Mode;
 }

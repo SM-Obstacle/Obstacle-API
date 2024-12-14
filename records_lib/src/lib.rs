@@ -23,8 +23,8 @@ pub mod must;
 pub mod player;
 pub mod ranks;
 pub mod redis_key;
-pub mod table_lock;
 pub mod time;
+pub mod transaction;
 
 /// The MySQL/MariaDB pool type.
 pub type MySqlPool = sqlx::MySqlPool;

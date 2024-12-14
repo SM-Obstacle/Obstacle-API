@@ -105,6 +105,12 @@ impl RecordsErrorKind {
     }
 }
 
+impl From<sqlx::Error> for RecordsErrorKind {
+    fn from(value: sqlx::Error) -> Self {
+        Self::Lib(value.into())
+    }
+}
+
 impl<T> From<SendError<T>> for RecordsErrorKind {
     fn from(value: SendError<T>) -> Self {
         Self::Unknown(format!("send error: {value:?}"))

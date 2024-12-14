@@ -77,7 +77,7 @@ pub async fn update_rank<C>(conn: &mut RedisConnection, ctx: C, time: i32) -> Re
 where
     C: HasMapId + HasPlayerId,
 {
-    let (): _ = conn
+    let _: () = conn
         .zadd(
             map_key(ctx.get_map_id(), ctx.get_opt_event_edition()),
             ctx.get_player_id(),
@@ -220,7 +220,7 @@ where
 
     match get_rank_impl(db.redis_conn, &key, time).await? {
         Some(r) => Ok(r),
-        None => Err(get_rank_failed(db, ctx, time).await?),
+        None => Err(get_rank_failed(db, ctx, time, score).await?),
     }
 }
 
@@ -232,6 +232,7 @@ async fn get_rank_failed<C>(
     db: &mut DatabaseConnection<'_>,
     ctx: C,
     time: i32,
+    tested_time: Option<i32>,
 ) -> RecordsResult<RecordsError>
 where
     C: HasPlayerId + HasMapId,
@@ -332,7 +333,7 @@ where
     }
 
     #[cfg(feature = "tracing")]
-    tracing::error!("missing player rank ({player_id} on map {map_id} with time {time})\n{msg}");
+    tracing::error!("missing player rank ({player_id} on map {map_id} with time {time}); tested time: {tested_time:?}\n{msg}");
 
     Ok(RecordsError::Internal)
 }

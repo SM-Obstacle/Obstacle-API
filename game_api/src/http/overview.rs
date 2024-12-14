@@ -1,14 +1,16 @@
 use crate::{RecordsResult, RecordsResultExt};
 use actix_web::web::Query;
 use deadpool_redis::redis::AsyncCommands;
-use records_lib::context::{Ctx, HasMap, HasMapId, HasPlayer, HasPlayerLogin};
+use records_lib::context::{
+    Ctx, HasMap, HasMapId, HasPersistentMode, HasPlayer, HasPlayerLogin, ReadOnly, Transactional,
+};
 use records_lib::{
     must,
     ranks::{get_rank, update_leaderboard},
     redis_key::map_key,
     DatabaseConnection,
 };
-use records_lib::{table_lock, RedisConnection};
+use records_lib::{transaction, RedisConnection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -113,40 +115,22 @@ pub struct ResponseBody {
     pub response: Vec<RankedRecord>,
 }
 
-#[derive(thiserror::Error, Debug)]
-enum Error {
-    #[error(transparent)]
-    Lib(#[from] records_lib::error::RecordsError),
-    #[error(transparent)]
-    Api(#[from] crate::RecordsErrorKind),
-}
-
-impl From<sqlx::Error> for Error {
-    fn from(value: sqlx::Error) -> Self {
-        Self::Lib(value.into())
-    }
-}
-
-struct BuildRecordsArrayParam<'a, C> {
-    redis_conn: &'a mut RedisConnection,
-    ctx: C,
-}
-
 async fn build_records_array<C>(
     mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
-    param: BuildRecordsArrayParam<'_, C>,
-) -> Result<Vec<RankedRecord>, Error>
+    ctx: C,
+    redis_conn: &mut RedisConnection,
+) -> RecordsResult<Vec<RankedRecord>>
 where
-    C: HasPlayer + HasMap,
+    C: HasPlayer + HasMap + Transactional<Mode = ReadOnly>,
 {
     let mut conn = DatabaseConnection {
         mysql_conn,
-        redis_conn: param.redis_conn,
+        redis_conn,
     };
 
     // Update redis if needed
-    let key = map_key(param.ctx.get_map().id, param.ctx.get_opt_event_edition());
-    let count = update_leaderboard(&mut conn, &param.ctx).await? as u32;
+    let key = map_key(ctx.get_map().id, ctx.get_opt_event_edition());
+    let count = update_leaderboard(&mut conn, &ctx).await? as u32;
 
     let mut ranked_records = vec![];
 
@@ -156,7 +140,7 @@ where
 
     let player_rank: Option<i64> = conn
         .redis_conn
-        .zrank(&key, param.ctx.get_player_id())
+        .zrank(&key, ctx.get_player_id())
         .await
         .with_api_err()?;
     let player_rank = player_rank.map(|r| r as u64 as u32);
@@ -164,12 +148,12 @@ where
     if let Some(player_rank) = player_rank {
         // The player has a record and is in top ROWS, display ROWS records
         if player_rank < TOTAL_ROWS {
-            extend_range(&mut conn, &mut ranked_records, (0, TOTAL_ROWS), &param.ctx).await?;
+            extend_range(&mut conn, &mut ranked_records, (0, TOTAL_ROWS), &ctx).await?;
         }
         // The player is not in the top ROWS records, display top3 and then center around the player rank
         else {
             // push top3
-            extend_range(&mut conn, &mut ranked_records, (0, 3), &param.ctx).await?;
+            extend_range(&mut conn, &mut ranked_records, (0, 3), &ctx).await?;
 
             // the rest is centered around the player
             let row_minus_top3 = TOTAL_ROWS - 3;
@@ -182,7 +166,7 @@ where
                     (start, end)
                 }
             };
-            extend_range(&mut conn, &mut ranked_records, range, &param.ctx).await?;
+            extend_range(&mut conn, &mut ranked_records, range, &ctx).await?;
         }
     }
     // The player has no record, so ROWS = ROWS - 1 to keep one last line for the player
@@ -195,57 +179,40 @@ where
                 &mut conn,
                 &mut ranked_records,
                 (0, NO_RECORD_ROWS - 3),
-                &param.ctx,
+                &ctx,
             )
             .await?;
 
             // last 3
-            extend_range(
-                &mut conn,
-                &mut ranked_records,
-                (count - 3, count),
-                &param.ctx,
-            )
-            .await?;
+            extend_range(&mut conn, &mut ranked_records, (count - 3, count), &ctx).await?;
         }
         // There is enough records to display them all
         else {
-            extend_range(
-                &mut conn,
-                &mut ranked_records,
-                (0, NO_RECORD_ROWS),
-                &param.ctx,
-            )
-            .await?;
+            extend_range(&mut conn, &mut ranked_records, (0, NO_RECORD_ROWS), &ctx).await?;
         }
     }
 
     Ok(ranked_records)
 }
 
-pub async fn overview<C>(conn: DatabaseConnection<'_>, ctx: C) -> RecordsResult<Vec<RankedRecord>>
+pub async fn overview<C>(conn: DatabaseConnection<'_>, ctx: C) -> RecordsResult<ResponseBody>
 where
-    C: HasPlayerLogin + HasMap,
+    C: HasPlayerLogin + HasMap + HasPersistentMode,
 {
     let player = must::have_player(conn.mysql_conn, &ctx)
         .await
         .with_api_err()?;
-    let ctx = ctx.with_player(&player);
 
-    let ranked_records = match table_lock::locked_records(
+    let ranked_records = transaction::within_transaction(
         conn.mysql_conn,
-        BuildRecordsArrayParam {
-            redis_conn: conn.redis_conn,
-            ctx,
-        },
+        ctx.with_player(&player),
+        ReadOnly,
+        conn.redis_conn,
         build_records_array,
     )
-    .await
-    {
-        Ok(records) => records,
-        Err(Error::Api(e)) => return Err(e),
-        Err(Error::Lib(e)) => return Err(e).with_api_err(),
-    };
+    .await?;
 
-    Ok(ranked_records)
+    Ok(ResponseBody {
+        response: ranked_records,
+    })
 }

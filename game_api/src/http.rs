@@ -198,8 +198,8 @@ async fn overview(
         .with_api_err()
         .fit(req_id)?;
 
-    let records = overview::overview(conn, ctx.with_player(&player).with_map(&map))
+    let res = overview::overview(conn, ctx.with_player(&player).with_map(&map))
         .await
         .fit(req_id)?;
-    utils::json(overview::ResponseBody { response: records })
+    utils::json(res)
 }

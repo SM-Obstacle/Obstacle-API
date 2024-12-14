@@ -1,8 +1,9 @@
 use crate::{mappack::AnyMappackId, models, Database, MySqlPool, RedisPool};
 
 use super::{
-    macros::new_combinator, HasEdition, HasEditionId, HasEvent, HasEventHandle, HasEventId, HasMap,
-    HasMapId, HasMapUid, HasMappackId, HasPlayer, HasPlayerId, HasPlayerLogin,
+    macros::new_combinator, persistent::HasPersistentMode, HasEdition, HasEditionId, HasEvent,
+    HasEventHandle, HasEventId, HasMap, HasMapId, HasMapUid, HasMappackId, HasPlayer, HasPlayerId,
+    HasPlayerLogin, Transactional,
 };
 
 new_combinator! {
@@ -23,6 +24,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         // HasRedisPool.get_redis_pool -> RedisPool,
         HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -45,6 +48,10 @@ new_combinator! {
     }
 }
 
+impl<E: Transactional> Transactional for WithRedisPool<E> {
+    type Mode = <E as Transactional>::Mode;
+}
+
 new_combinator! {
     'combinator {
         /// Adaptator context type used to contain the current MariaDB pool.
@@ -63,6 +70,8 @@ new_combinator! {
         }
     }
     'delegates {
+        HasPersistentMode.__do_nothing -> (),
+
         HasRedisPool.get_redis_pool -> RedisPool,
         // HasMySqlPool.get_mysql_pool -> MySqlPool,
 
@@ -83,6 +92,10 @@ new_combinator! {
         HasEdition.get_edition -> &models::EventEdition,
         HasEditionId.get_edition_id -> u32,
     }
+}
+
+impl<E: Transactional> Transactional for WithMySqlPool<E> {
+    type Mode = <E as Transactional>::Mode;
 }
 
 /// Context trait used to retrieve all the database pools.

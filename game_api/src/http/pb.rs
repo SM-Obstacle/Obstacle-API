@@ -41,12 +41,18 @@ where
         "select r.respawn_count as rs_count, ct.cp_num as cp_num, ct.time as time
         from ",
     );
-    builder.push_event_view_name(&mut query, "r").push(
-        " inner join maps m on m.id = r.map_id \
+    builder
+        .push_event_view_name(&mut query, "r")
+        .push(
+            " inner join maps m on m.id = r.map_id \
             inner join players p on r.record_player_id = p.id \
             inner join checkpoint_times ct on r.record_id = ct.record_id \
-            where m.game_id = ? and p.login = ? ",
-    );
+            where m.game_id = ",
+        )
+        .push_bind(ctx.get_map_uid())
+        .push(" and p.login = ")
+        .push_bind(ctx.get_player_login())
+        .push(" ");
     let query = builder
         .push_event_filter(&mut query, "r")
         .build_query_as::<PbResponseItem>();

@@ -28,12 +28,14 @@ mod macros;
 mod event;
 mod map;
 mod mappack;
+mod persistent;
 mod player;
 mod pool;
 
 pub use self::event::*;
 pub use self::map::*;
 pub use self::mappack::*;
+pub use self::persistent::*;
 pub use self::player::*;
 pub use self::pool::*;
 
@@ -117,6 +119,20 @@ pub trait Ctx {
         Self: Sized,
     {
         SqlFragmentBuilder { ctx: self }
+    }
+
+    /// Wraps this context to become in transactional mode.
+    ///
+    /// Transactional mode means that the context is being used along with an active SQL-transaction.
+    /// The [`WithTransactionMode`] implements the [`Transactional`] trait.
+    ///
+    /// The returned context doesn't implement the [`HasPersistentMode`] trait anymore.
+    fn with_transaction_mode<Mode>(self, mode: Mode) -> WithTransactionMode<Self, Mode>
+    where
+        Self: Sized,
+        Mode: TransactionMode,
+    {
+        WithTransactionMode::new(self, mode)
     }
 
     /// Wraps this context with a type that removes the implementation of the event traits.
@@ -403,6 +419,13 @@ pub struct Context {
 }
 
 impl Ctx for Context {}
+
+impl HasPersistentMode for Context {
+    #[cold]
+    #[doc(hidden)]
+    #[inline(always)]
+    fn __do_nothing(&self) {}
+}
 
 /// The SQL fragment builder, based on the context.
 ///
