@@ -3,7 +3,7 @@ use sqlx::MySqlPool;
 use crate::{mappack::AnyMappackId, models, RedisPool};
 
 use super::{
-    macros::new_combinator, persistent::HasPersistentMode, HasEdition, HasEditionId, HasEvent,
+    macros::new_combinator, transaction::HasPersistentMode, HasEdition, HasEditionId, HasEvent,
     HasEventHandle, HasEventId, HasMappackId, HasMySqlPool, HasPlayer, HasPlayerId, HasPlayerLogin,
     HasRedisPool, Transactional,
 };

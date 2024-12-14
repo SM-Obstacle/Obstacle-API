@@ -41,7 +41,7 @@ where
         .build()
         .execute(&mut **mysql_conn)
         .await?;
-    match f(mysql_conn, ctx.with_transaction_mode(mode), args).await {
+    match f(mysql_conn, WithTransactionMode::new(ctx, mode), args).await {
         Ok(ret) => {
             sqlx::query("commit").execute(&mut **mysql_conn).await?;
             Ok(ret)

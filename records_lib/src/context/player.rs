@@ -1,7 +1,7 @@
 use crate::{mappack::AnyMappackId, models, MySqlPool, RedisPool};
 
 use super::{
-    macros::new_combinator, persistent::HasPersistentMode, HasEdition, HasEditionId, HasEvent,
+    macros::new_combinator, transaction::HasPersistentMode, HasEdition, HasEditionId, HasEvent,
     HasEventHandle, HasEventId, HasMap, HasMapId, HasMapUid, HasMappackId, HasMySqlPool,
     HasRedisPool, Transactional,
 };

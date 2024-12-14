@@ -101,14 +101,14 @@ impl<T: Transactional> Transactional for &mut T {
 ///
 /// This type removes the implementation of the [`HasPersistentMode`] trait.
 ///
-/// Returned by the [`Ctx::with_transaction_mode`](Ctx::with_transaction_mode) method.
+/// This type is used with the [`within_transaction`](crate::transaction::within_transaction) function.
 pub struct WithTransactionMode<E, M> {
     _mode: M,
     extra: E,
 }
 
 impl<E, M> WithTransactionMode<E, M> {
-    pub(super) fn new(extra: E, mode: M) -> Self {
+    pub(crate) fn new(extra: E, mode: M) -> Self {
         Self { extra, _mode: mode }
     }
 }
