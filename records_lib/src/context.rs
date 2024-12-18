@@ -420,7 +420,7 @@ pub struct SqlFragmentBuilder<'ctx, C> {
     ctx: &'ctx C,
 }
 
-impl<'ctx, C: Ctx> SqlFragmentBuilder<'ctx, C> {
+impl<C: Ctx> SqlFragmentBuilder<'_, C> {
     /// Pushes the SQL view name to the provided query builder, based on the optional
     /// event the context has.
     ///
