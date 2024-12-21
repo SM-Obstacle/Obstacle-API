@@ -84,7 +84,7 @@ impl TransactionMode for ReadWrite {
 /// For now, it only contains the transaction mode (whether it is in read only or read write mode).
 ///
 /// See the [module documentation](super) for more information.
-pub trait Transactional {
+pub trait Transactional: Ctx {
     /// The transaction mode of the context. For example, this can be [`ReadWrite`] or [`ReadOnly`].
     type Mode: TransactionMode;
 }

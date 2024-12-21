@@ -57,7 +57,7 @@
 //! and minimize inconsistencies between Redis and MariaDB.
 
 use crate::{
-    context::{HasMapId, HasPlayerId},
+    context::{HasMapId, HasPlayerId, ReadOnly, Transactional},
     error::{RecordsError, RecordsResult},
     redis_key::{map_key, MapKey},
     DatabaseConnection, RedisConnection,
@@ -137,10 +137,10 @@ where
     Ok(())
 }
 
-async fn count_records_map<C: HasMapId>(
-    conn: &mut sqlx::MySqlConnection,
-    ctx: C,
-) -> RecordsResult<i64> {
+async fn count_records_map<C>(conn: &mut sqlx::MySqlConnection, ctx: C) -> RecordsResult<i64>
+where
+    C: HasMapId + Transactional,
+{
     let builder = ctx.sql_frag_builder();
 
     let mut query = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM (SELECT r.* FROM records r ");
@@ -163,10 +163,10 @@ async fn count_records_map<C: HasMapId>(
 /// This is a check to avoid differences between the MariaDB and the Redis leaderboards.
 ///
 /// It returns the number of records in the map.
-pub async fn update_leaderboard<C: HasMapId>(
-    conn: &mut DatabaseConnection<'_>,
-    ctx: C,
-) -> RecordsResult<i64> {
+pub async fn update_leaderboard<C>(conn: &mut DatabaseConnection<'_>, ctx: C) -> RecordsResult<i64>
+where
+    C: HasMapId + Transactional,
+{
     let mysql_count: i64 = count_records_map(conn.mysql_conn, &ctx).await?;
 
     lock::within(ctx.get_map_id(), || async move {
@@ -176,6 +176,7 @@ pub async fn update_leaderboard<C: HasMapId>(
         if redis_count != mysql_count {
             force_update(conn, ctx).await?;
         }
+
         RecordsResult::Ok(())
     })
     .await?;
