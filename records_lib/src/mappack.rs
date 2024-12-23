@@ -137,6 +137,10 @@ impl AnyMappackId<'_> {
 /// * `mappack`: the mappack.
 /// * `mysql_conn`: a connection to the MySQL/MariaDB database, to fetch the records.
 /// * `redis_conn`: a connection to the Redis database, to store the scores.
+#[cfg_attr(
+    feature = "tracing",
+    tracing::instrument(skip(db, ctx), fields(mappack = %ctx.get_mappack_id().mappack_id()), err)
+)]
 pub async fn update_mappack<C>(ctx: C, db: &mut DatabaseConnection<'_>) -> RecordsResult<usize>
 where
     C: HasMappackId + HasPersistentMode,
