@@ -392,9 +392,49 @@ pub trait Ctx: Send + Sync {
     }
 }
 
-impl<T: Ctx> Ctx for &T {}
+impl<T: Ctx> Ctx for &T {
+    #[inline(always)]
+    fn get_opt_event(&self) -> Option<&models::Event> {
+        <T as Ctx>::get_opt_event(self)
+    }
 
-impl<T: Ctx> Ctx for &mut T {}
+    #[inline(always)]
+    fn get_opt_event_id(&self) -> Option<u32> {
+        <T as Ctx>::get_opt_event_id(self)
+    }
+
+    #[inline(always)]
+    fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+        <T as Ctx>::get_opt_edition(self)
+    }
+
+    #[inline(always)]
+    fn get_opt_edition_id(&self) -> Option<u32> {
+        <T as Ctx>::get_opt_edition_id(self)
+    }
+}
+
+impl<T: Ctx> Ctx for &mut T {
+    #[inline(always)]
+    fn get_opt_event(&self) -> Option<&models::Event> {
+        <T as Ctx>::get_opt_event(self)
+    }
+
+    #[inline(always)]
+    fn get_opt_event_id(&self) -> Option<u32> {
+        <T as Ctx>::get_opt_event_id(self)
+    }
+
+    #[inline(always)]
+    fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+        <T as Ctx>::get_opt_edition(self)
+    }
+
+    #[inline(always)]
+    fn get_opt_edition_id(&self) -> Option<u32> {
+        <T as Ctx>::get_opt_edition_id(self)
+    }
+}
 
 /// The default context type.
 ///

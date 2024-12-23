@@ -46,6 +46,27 @@ new_combinator! {
         'a HasEdition.get_edition -> &models::EventEdition,
         'a HasEditionId.get_edition_id -> u32,
     }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            <E as super::Ctx>::get_opt_event(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            <E as super::Ctx>::get_opt_event_id(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            <E as super::Ctx>::get_opt_edition(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            <E as super::Ctx>::get_opt_edition_id(&self.extra)
+        }
+    }
 }
 
 impl<E: Transactional> Transactional for WithPlayerLogin<'_, E> {
@@ -83,6 +104,27 @@ new_combinator! {
 
         HasEdition.get_edition -> &models::EventEdition,
         HasEditionId.get_edition_id -> u32,
+    }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            <E as super::Ctx>::get_opt_event(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            <E as super::Ctx>::get_opt_event_id(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            <E as super::Ctx>::get_opt_edition(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            <E as super::Ctx>::get_opt_edition_id(&self.extra)
+        }
     }
     'addon_impls {
         HasPlayerLogin.get_player_login(self) -> &str {
@@ -135,6 +177,27 @@ new_combinator! {
         'a HasEdition.get_edition -> &models::EventEdition,
         'a HasEditionId.get_edition_id -> u32,
     }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            <E as super::Ctx>::get_opt_event(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            <E as super::Ctx>::get_opt_event_id(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            <E as super::Ctx>::get_opt_edition(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            <E as super::Ctx>::get_opt_edition_id(&self.extra)
+        }
+    }
     'addon_impls {
         'a HasPlayerLogin.get_player_login(self) -> &str {
             &self.player.login
@@ -180,6 +243,27 @@ new_combinator! {
 
         HasEdition.get_edition -> &models::EventEdition,
         HasEditionId.get_edition_id -> u32,
+    }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            <E as super::Ctx>::get_opt_event(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            <E as super::Ctx>::get_opt_event_id(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            <E as super::Ctx>::get_opt_edition(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            <E as super::Ctx>::get_opt_edition_id(&self.extra)
+        }
     }
     'addon_impls {
         HasPlayer.get_player(self) -> &models::Player {
@@ -237,6 +321,27 @@ new_combinator! {
 
         HasEdition.get_edition -> &models::EventEdition,
         HasEditionId.get_edition_id -> u32,
+    }
+    'ctx_impl {
+        #[inline(always)]
+        fn get_opt_event(&self) -> Option<&models::Event> {
+            <E as super::Ctx>::get_opt_event(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_event_id(&self) -> Option<u32> {
+            <E as super::Ctx>::get_opt_event_id(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition(&self) -> Option<&models::EventEdition> {
+            <E as super::Ctx>::get_opt_edition(&self.extra)
+        }
+
+        #[inline(always)]
+        fn get_opt_edition_id(&self) -> Option<u32> {
+            <E as super::Ctx>::get_opt_edition_id(&self.extra)
+        }
     }
 }
 
