@@ -2,15 +2,14 @@ use crate::{RecordsResult, RecordsResultExt};
 use actix_web::web::Query;
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::context::{
-    Ctx, HasMap, HasMapId, HasPersistentMode, HasPlayer, HasPlayerLogin, ReadOnly, Transactional,
+    Ctx, HasMap, HasMapId, HasPersistentMode, HasPlayerLogin, ReadOnly, Transactional,
 };
+use records_lib::{player, transaction, RedisConnection};
 use records_lib::{
-    must,
     ranks::{get_rank, update_leaderboard},
     redis_key::map_key,
     DatabaseConnection,
 };
-use records_lib::{transaction, RedisConnection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -124,12 +123,16 @@ async fn build_records_array<C>(
     redis_conn: &mut RedisConnection,
 ) -> RecordsResult<Vec<RankedRecord>>
 where
-    C: HasPlayer + HasMap + Transactional<Mode = ReadOnly>,
+    C: HasPlayerLogin + HasMap + Transactional<Mode = ReadOnly>,
 {
     let mut conn = DatabaseConnection {
         mysql_conn,
         redis_conn,
     };
+
+    let player = player::get_player_from_login(conn.mysql_conn, ctx.get_player_login())
+        .await
+        .with_api_err()?;
 
     // Update redis if needed
     let key = map_key(ctx.get_map().id, ctx.get_opt_event_edition());
@@ -141,11 +144,14 @@ where
     const TOTAL_ROWS: u32 = 15;
     const NO_RECORD_ROWS: u32 = TOTAL_ROWS - 1;
 
-    let player_rank: Option<i64> = conn
-        .redis_conn
-        .zrank(&key, ctx.get_player_id())
-        .await
-        .with_api_err()?;
+    let player_rank: Option<i64> = match player {
+        Some(ref player) => conn
+            .redis_conn
+            .zrank(&key, player.id)
+            .await
+            .with_api_err()?,
+        None => None,
+    };
     let player_rank = player_rank.map(|r| r as u64 as u32);
 
     if let Some(player_rank) = player_rank {
@@ -200,15 +206,11 @@ where
 
 pub async fn overview<C>(conn: DatabaseConnection<'_>, ctx: C) -> RecordsResult<ResponseBody>
 where
-    C: HasPlayerLogin + HasMap + HasPersistentMode + Send + Sync,
+    C: HasPlayerLogin + HasMap + HasPersistentMode,
 {
-    let player = must::have_player(conn.mysql_conn, &ctx)
-        .await
-        .with_api_err()?;
-
     let ranked_records = transaction::within_transaction(
         conn.mysql_conn,
-        ctx.with_player_owned(player),
+        ctx,
         ReadOnly,
         conn.redis_conn,
         build_records_array,
