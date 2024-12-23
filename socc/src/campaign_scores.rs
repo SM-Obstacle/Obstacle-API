@@ -3,7 +3,9 @@ use std::time::Duration;
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
     acquire,
-    context::{Context, Ctx, HasEditionId, HasEventHandle, HasEventId, HasMappackId},
+    context::{
+        Context, Ctx, HasEditionId, HasEventHandle, HasEventId, HasMappackId, HasPersistentMode,
+    },
     event,
     mappack::{self, AnyMappackId},
     redis_key::{mappack_key, mappacks_key},
@@ -14,7 +16,7 @@ const PROCESS_DURATION_SECS: u64 = 3600 * 24; // Every day
 pub const PROCESS_DURATION: Duration = Duration::from_secs(PROCESS_DURATION_SECS);
 
 #[tracing::instrument(skip(conn, ctx), fields(mappack = %ctx.get_mappack_id().mappack_id()))]
-async fn update_mappack<C: HasMappackId>(
+async fn update_mappack<C: HasMappackId + HasPersistentMode>(
     conn: &mut DatabaseConnection<'_>,
     ctx: C,
 ) -> anyhow::Result<()> {

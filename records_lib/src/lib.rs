@@ -33,9 +33,23 @@ pub type RedisPool = deadpool_redis::Pool;
 /// The type of a Redis connection.
 pub type RedisConnection = deadpool_redis::Connection;
 
+use std::future::Future;
+
 pub use env::*;
 pub use modeversion::*;
 pub use mptypes::*;
+
+/// Asserts that the type of the provided future is Send, and returns an opaque type from it.
+///
+/// This helps the compiler to correctly type the values of some await points, and helps
+/// to trace the root of weird errors.
+#[inline(always)]
+pub fn assert_future_send<T, R>(t: T) -> impl Future<Output = R> + Send
+where
+    T: Future<Output = R> + Send,
+{
+    t
+}
 
 /// Represents a connection to the API database, both MariaDB and Redis.
 pub struct DatabaseConnection<'a> {

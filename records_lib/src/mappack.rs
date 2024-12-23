@@ -5,7 +5,7 @@ use std::{fmt, time::SystemTime};
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
 
 use crate::{
-    context::{Ctx as _, HasMappackId},
+    context::{Ctx as _, HasMappackId, HasPersistentMode, ReadOnly, Transactional},
     error::RecordsResult,
     models, must,
     ranks::get_rank,
@@ -14,7 +14,7 @@ use crate::{
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
-    DatabaseConnection, RedisConnection,
+    transaction, DatabaseConnection, RedisConnection,
 };
 
 #[derive(Default, Clone, Debug)]
@@ -137,25 +137,30 @@ impl AnyMappackId<'_> {
 /// * `mappack`: the mappack.
 /// * `mysql_conn`: a connection to the MySQL/MariaDB database, to fetch the records.
 /// * `redis_conn`: a connection to the Redis database, to store the scores.
-#[cfg_attr(
-    feature = "tracing",
-    tracing::instrument(skip(db, ctx), fields(mappack = %ctx.get_mappack_id().mappack_id()), err)
-)]
-pub async fn update_mappack<C: HasMappackId>(
-    ctx: C,
-    db: &mut DatabaseConnection<'_>,
-) -> RecordsResult<usize> {
+pub async fn update_mappack<C>(ctx: C, db: &mut DatabaseConnection<'_>) -> RecordsResult<usize>
+where
+    C: HasMappackId + HasPersistentMode,
+{
     // Calculate the scores
-    let scores = calc_scores(&ctx, db).await?;
+    let scores = crate::assert_future_send(transaction::within_transaction(
+        db.mysql_conn,
+        &ctx,
+        ReadOnly,
+        CalcScoresParam {
+            redis_conn: db.redis_conn,
+        },
+        calc_scores,
+    ))
+    .await?;
 
     // Early return if the mappack has expired
     let Some(scores) = scores else {
         return Ok(0);
     };
 
-    let total_scores = scores.scores.len();
-
     let mappack = ctx.get_mappack_id();
+
+    let total_scores = scores.scores.len();
 
     // Then save them to the Redis database for cache-handling
     save(mappack, scores, db.redis_conn).await?;
@@ -321,18 +326,28 @@ async fn save(
     Ok(())
 }
 
+struct CalcScoresParam<'a> {
+    redis_conn: &'a mut RedisConnection,
+}
+
 /// Returns an `Option` because the mappack may have expired.
 #[cfg_attr(
     feature = "tracing",
-    tracing::instrument(skip(db, ctx), fields(mappack = %ctx.get_mappack_id().mappack_id()))
+    tracing::instrument(skip(mysql_conn, ctx, redis_conn), fields(mappack = %ctx.get_mappack_id().mappack_id()))
 )]
 async fn calc_scores<C>(
+    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
     ctx: C,
-    db: &mut DatabaseConnection<'_>,
+    CalcScoresParam { redis_conn }: CalcScoresParam<'_>,
 ) -> RecordsResult<Option<MappackScores>>
 where
-    C: HasMappackId,
+    C: HasMappackId + Transactional,
 {
+    let db = &mut DatabaseConnection {
+        mysql_conn,
+        redis_conn,
+    };
+
     let mappack_key = mappack_key(ctx.get_mappack_id());
     let mappack_uids: Vec<String> = db.redis_conn.smembers(&mappack_key).await?;
 

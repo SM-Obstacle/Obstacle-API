@@ -5,10 +5,10 @@ use async_graphql::{
     ID,
 };
 use deadpool_redis::redis::AsyncCommands;
-use futures::{stream, StreamExt, TryStreamExt};
+use futures::StreamExt;
 use records_lib::{
     acquire,
-    context::{Context, Ctx, HasMapId, HasPersistentMode, ReadOnly, ReadWrite, Transactional},
+    context::{Context, Ctx, HasMapId, HasPersistentMode, ReadOnly, Transactional},
     models::{self, Record},
     ranks::{get_rank, update_leaderboard},
     redis_key::alone_map_key,
@@ -145,10 +145,10 @@ impl Map {
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let ctx = ctx.with_map(&self.inner);
         let db = gql_ctx.data_unchecked::<Database>();
-        let mut conn = acquire!(db?);
+        let conn = acquire!(db?);
 
-        transaction::within_transaction(
-            &mut conn.mysql_conn,
+        records_lib::assert_future_send(transaction::within_transaction(
+            conn.mysql_conn,
             ctx,
             ReadOnly,
             GetMapRecordsParams {
@@ -158,7 +158,7 @@ impl Map {
                 date_sort_by,
             },
             get_map_records,
-        )
+        ))
         .await
     }
 }

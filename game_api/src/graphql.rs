@@ -6,10 +6,9 @@ use async_graphql::extensions::ApolloTracing;
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use async_graphql::{connection, Enum, ErrorExtensionValues, Object, Value, ID};
 use async_graphql_actix_web::GraphQLRequest;
-use futures::StreamExt as _;
-use records_lib::context::{Context, Ctx};
+use records_lib::context::{Context, Ctx, ReadOnly, Transactional};
 use records_lib::ranks::get_rank;
-use records_lib::{acquire, models};
+use records_lib::{acquire, models, transaction, DatabaseConnection, RedisConnection};
 use records_lib::{must, Database};
 use reqwest::Client;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
@@ -373,31 +372,19 @@ impl QueryRoot {
         record_id: u32,
     ) -> async_graphql::Result<RankedRecord> {
         let db = ctx.data_unchecked::<Database>();
-        let mut conn = acquire!(db?);
+        let conn = acquire!(db?);
 
-        let Some(record) =
-            sqlx::query_as::<_, models::Record>("select * from records where record_id = ?")
-                .bind(record_id)
-                .fetch_optional(&db.mysql_pool)
-                .await?
-        else {
-            return Err(async_graphql::Error::new("Record not found."));
-        };
-
-        let out = models::RankedRecord {
-            rank: get_rank(
-                &mut conn,
-                Context::default()
-                    .with_player_id(record.record_player_id)
-                    .with_map_id(record.map_id),
-                record.time,
-            )
-            .await?,
-            record,
-        }
-        .into();
-
-        Ok(out)
+        transaction::within_transaction(
+            conn.mysql_conn,
+            Context::default(),
+            ReadOnly,
+            GetRecordParam {
+                redis_conn: conn.redis_conn,
+                record_id,
+            },
+            get_record,
+        )
+        .await
     }
 
     async fn map(
@@ -431,39 +418,112 @@ impl QueryRoot {
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
+        let conn = acquire!(db?);
 
-        let date_sort_by = SortState::sql_order_by(&date_sort_by);
+        transaction::within_transaction(
+            conn.mysql_conn,
+            Context::default(),
+            ReadOnly,
+            GetRecordsParam {
+                redis_conn: conn.redis_conn,
+                date_sort_by,
+            },
+            get_records,
+        )
+        .await
+    }
+}
 
-        let query = format!(
-            "SELECT * FROM global_records r
+struct GetRecordParam<'a> {
+    redis_conn: &'a mut RedisConnection,
+    record_id: u32,
+}
+
+async fn get_record<C>(
+    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    ctx: C,
+    GetRecordParam {
+        redis_conn,
+        record_id,
+    }: GetRecordParam<'_>,
+) -> async_graphql::Result<RankedRecord>
+where
+    C: Transactional,
+{
+    let mut conn = DatabaseConnection {
+        mysql_conn,
+        redis_conn,
+    };
+
+    let Some(record) =
+        sqlx::query_as::<_, models::Record>("select * from records where record_id = ?")
+            .bind(record_id)
+            .fetch_optional(&mut **conn.mysql_conn)
+            .await?
+    else {
+        return Err(async_graphql::Error::new("Record not found."));
+    };
+
+    let out = models::RankedRecord {
+        rank: get_rank(
+            &mut conn,
+            ctx.with_map_id(record.map_id)
+                .with_player_id(record.record_player_id),
+            record.time,
+        )
+        .await?,
+        record,
+    }
+    .into();
+
+    Ok(out)
+}
+
+struct GetRecordsParam<'a> {
+    redis_conn: &'a mut RedisConnection,
+    date_sort_by: Option<SortState>,
+}
+
+async fn get_records<C: Transactional>(
+    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    ctx: C,
+    GetRecordsParam {
+        redis_conn,
+        date_sort_by,
+    }: GetRecordsParam<'_>,
+) -> async_graphql::Result<Vec<RankedRecord>> {
+    let mut conn = DatabaseConnection {
+        mysql_conn,
+        redis_conn,
+    };
+
+    let date_sort_by = SortState::sql_order_by(&date_sort_by);
+
+    let query = format!(
+        "SELECT * FROM global_records r
             ORDER BY record_date {date_sort_by}
             LIMIT 100"
-        );
+    );
 
-        let mut records = sqlx::query_as::<_, models::Record>(&query).fetch(&db.mysql_pool);
-        let mut ranked_records = Vec::with_capacity(records.size_hint().0);
+    let records = sqlx::query_as::<_, models::Record>(&query)
+        .fetch_all(&mut **conn.mysql_conn)
+        .await?;
+    let mut ranked_records = Vec::with_capacity(records.len());
 
-        let mut conn = acquire!(db?);
+    for record in records {
+        let rank = get_rank(
+            &mut conn,
+            ctx.by_ref()
+                .with_map_id(record.map_id)
+                .with_player_id(record.record_player_id),
+            record.time,
+        )
+        .await?;
 
-        let ctx = Context::default();
-
-        while let Some(record) = records.next().await {
-            let record = record?;
-
-            let rank = get_rank(
-                &mut conn,
-                ctx.by_ref()
-                    .with_map_id(record.map_id)
-                    .with_player_id(record.record_player_id),
-                record.time,
-            )
-            .await?;
-
-            ranked_records.push(models::RankedRecord { rank, record }.into());
-        }
-
-        Ok(ranked_records)
+        ranked_records.push(models::RankedRecord { rank, record }.into());
     }
+
+    Ok(ranked_records)
 }
 
 struct MutationRoot;

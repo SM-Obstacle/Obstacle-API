@@ -39,7 +39,7 @@ impl<T: HasPersistentMode> HasPersistentMode for &mut T {
 /// Trait used to identify the various modes of SQL-transactions.
 ///
 /// See the [`Transactional`] trait documentation for more information.
-pub trait TransactionMode: std::fmt::Debug + Copy {
+pub trait TransactionMode: std::fmt::Debug + Copy + Send + Sync {
     /// Pushes the SQL query fragment that depends on this transaction mode.
     ///
     /// For example, the [`ReadOnly`] mode would write "`read only`".
@@ -79,7 +79,7 @@ impl TransactionMode for ReadWrite {
     }
 }
 
-/// Context trait used to contain the transaction state of the context.
+/// Context trait used to indicate that the context is currently in a database transaction mode.
 ///
 /// For now, it only contains the transaction mode (whether it is in read only or read write mode).
 ///

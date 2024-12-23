@@ -42,7 +42,7 @@ pub use self::transaction::*;
 /// The context trait.
 ///
 /// See [the module documentation](self) for more information.
-pub trait Ctx {
+pub trait Ctx: Send + Sync {
     /// Borrows the context type, rather than consuming it.
     ///
     /// This is useful to allow applying adapters to the context while still having the ownership

@@ -5,10 +5,10 @@ use std::fmt;
 use sqlx::QueryBuilder;
 
 use crate::{
-    context::{Ctx, HasMapId},
+    context::{Ctx, HasMapId, HasPersistentMode, ReadOnly, Transactional},
     error::RecordsResult,
     ranks::get_rank,
-    DatabaseConnection,
+    transaction, DatabaseConnection, RedisConnection,
 };
 
 /// The type returned by the [`compet_rank_by_key`](CompetRankingByKeyIter::compet_rank_by_key)
@@ -130,35 +130,24 @@ pub struct Row {
     pub time: i32,
 }
 
-/// Returns a stream of the leaderboard of a map from its ID.
-///
-/// ## Example
-///
-/// ```no_run
-/// # use records_lib::leaderboard as lb;
-/// # use futures::TryStreamExt as _;
-/// # #[tokio::main] async fn main() {
-/// # let env = <records_lib::DbEnv as mkenv::Env>::get();
-/// # let db = records_lib::Database {
-/// #   mysql_pool: records_lib::get_mysql_pool(env.db_url.db_url).await.unwrap(),
-/// #   redis_pool: records_lib::get_redis_pool(env.redis_url.redis_url).unwrap(),
-/// # };
-/// let lb = lb::leaderboard(
-///     &db,
-///     60830,
-///     Default::default(),
-///     &lb::sql_query(Default::default(), None, None)
-/// )
-/// .try_collect::<Vec<_>>()
-/// .await;
-/// # }
-/// ```
-pub async fn leaderboard<C: HasMapId>(
-    conn: &mut DatabaseConnection<'_>,
-    ctx: C,
+struct LeaderboardImplParam<'a> {
+    redis_conn: &'a mut RedisConnection,
     offset: Option<isize>,
     limit: Option<isize>,
-) -> RecordsResult<Vec<Row>> {
+}
+
+async fn leaderboard_impl<C>(
+    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    ctx: C,
+    LeaderboardImplParam {
+        redis_conn,
+        offset,
+        limit,
+    }: LeaderboardImplParam<'_>,
+) -> RecordsResult<Vec<Row>>
+where
+    C: HasMapId + Transactional,
+{
     struct Offset(Option<isize>);
 
     impl fmt::Display for Offset {
@@ -180,6 +169,11 @@ pub async fn leaderboard<C: HasMapId>(
             }
         }
     }
+
+    let conn = &mut DatabaseConnection {
+        redis_conn,
+        mysql_conn,
+    };
 
     let builder = ctx.sql_frag_builder();
 
@@ -221,4 +215,28 @@ pub async fn leaderboard<C: HasMapId>(
     }
 
     Ok(out)
+}
+
+/// Returns a list of the leaderboard of a map from its ID.
+pub async fn leaderboard<C>(
+    conn: &mut DatabaseConnection<'_>,
+    ctx: C,
+    offset: Option<isize>,
+    limit: Option<isize>,
+) -> RecordsResult<Vec<Row>>
+where
+    C: HasMapId + HasPersistentMode,
+{
+    transaction::within_transaction(
+        conn.mysql_conn,
+        ctx,
+        ReadOnly,
+        LeaderboardImplParam {
+            redis_conn: conn.redis_conn,
+            offset,
+            limit,
+        },
+        leaderboard_impl,
+    )
+    .await
 }

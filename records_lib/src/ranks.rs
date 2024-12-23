@@ -57,7 +57,7 @@
 //! and minimize inconsistencies between Redis and MariaDB.
 
 use crate::{
-    context::{HasMapId, HasPlayerId, ReadOnly, Transactional},
+    context::{HasMapId, HasPlayerId, Transactional},
     error::{RecordsError, RecordsResult},
     redis_key::{map_key, MapKey},
     DatabaseConnection, RedisConnection,
@@ -272,7 +272,7 @@ async fn get_rank_impl(
 /// See the [module documentation](super) for more information.
 pub async fn get_rank<C>(db: &mut DatabaseConnection<'_>, ctx: C, time: i32) -> RecordsResult<i32>
 where
-    C: HasMapId + HasPlayerId,
+    C: HasMapId + HasPlayerId + Transactional,
 {
     lock::within(ctx.get_map_id(), || async move {
         let key = map_key(ctx.get_map_id(), ctx.get_opt_event_edition());

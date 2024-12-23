@@ -40,12 +40,15 @@ pub struct RankedRecord {
     pub time: i32,
 }
 
-async fn extend_range<C: HasMapId>(
+async fn extend_range<C>(
     conn: &mut DatabaseConnection<'_>,
     records: &mut Vec<RankedRecord>,
     (start, end): (u32, u32),
     ctx: C,
-) -> RecordsResult<()> {
+) -> RecordsResult<()>
+where
+    C: HasMapId + Transactional,
+{
     // transforms exclusive to inclusive range
     let end = end - 1;
     let player_ids: Vec<i32> = conn
@@ -197,7 +200,7 @@ where
 
 pub async fn overview<C>(conn: DatabaseConnection<'_>, ctx: C) -> RecordsResult<ResponseBody>
 where
-    C: HasPlayerLogin + HasMap + HasPersistentMode,
+    C: HasPlayerLogin + HasMap + HasPersistentMode + Send + Sync,
 {
     let player = must::have_player(conn.mysql_conn, &ctx)
         .await
@@ -205,7 +208,7 @@ where
 
     let ranked_records = transaction::within_transaction(
         conn.mysql_conn,
-        ctx.with_player(&player),
+        ctx.with_player_owned(player),
         ReadOnly,
         conn.redis_conn,
         build_records_array,

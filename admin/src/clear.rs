@@ -1,7 +1,7 @@
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
     acquire,
-    context::{Context, Ctx},
+    context::{Context, Ctx as _},
     mappack::AnyMappackId,
     models, must,
     redis_key::mappack_key,
