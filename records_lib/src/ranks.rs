@@ -279,15 +279,12 @@ where
 
         // We update the Redis leaderboard if it doesn't have the requested `time`.
         let score: Option<i32> = db.redis_conn.zscore(&key, ctx.get_player_id()).await?;
+        // We keep track of the previous Redis time if it's lower than ours.
         let newest_time = match score {
             Some(t) if t == time => None,
-            Some(t) if t < time => {
+            other => {
                 let _: () = db.redis_conn.zadd(&key, ctx.get_player_id(), time).await?;
-                Some(t)
-            }
-            _ => {
-                let _: () = db.redis_conn.zadd(&key, ctx.get_player_id(), time).await?;
-                None
+                other.filter(|t| *t < time)
             }
         };
 
