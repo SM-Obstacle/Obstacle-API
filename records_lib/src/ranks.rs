@@ -174,7 +174,7 @@ where
 
         let redis_count: i64 = conn.redis_conn.zcount(key, "-inf", "+inf").await?;
         if redis_count != mysql_count {
-            force_update(conn, ctx).await?;
+            force_update_locked(conn, ctx).await?;
         }
 
         RecordsResult::Ok(())
