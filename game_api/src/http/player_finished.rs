@@ -139,7 +139,7 @@ where
         .push(" ");
     builder
         .push_event_filter(&mut query, "eer")
-        .push("order by time limit 1")
+        .push(" order by time limit 1")
         .build_query_as::<models::Record>()
         .fetch_optional(db)
         .await

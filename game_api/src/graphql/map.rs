@@ -87,13 +87,11 @@ where
         .push(" ");
 
     if let Some(ref s) = date_sort_by {
-        query.push("order by");
-        if let SortState::Reverse = s {
-            query.push(" asc");
-        } else {
-            query.push(" desc");
-        }
-        query.push(", r.record_date asc");
+        query.push("order by r.record_date ");
+        query.push(match s {
+            SortState::Reverse => "asc",
+            SortState::Sort => "desc",
+        });
     } else {
         let mut sep = builder
             .push_event_filter(&mut query, "r")

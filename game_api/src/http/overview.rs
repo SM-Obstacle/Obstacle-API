@@ -80,7 +80,7 @@ where
     builder
         .push_event_join(&mut query, "eer", "r")
         .push(
-            "INNER JOIN players p ON r.record_player_id = p.id \
+            " INNER JOIN players p ON r.record_player_id = p.id
             WHERE map_id = ",
         )
         .push_bind(ctx.get_map_id())

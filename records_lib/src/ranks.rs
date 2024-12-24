@@ -199,7 +199,7 @@ fn get_mariadb_lb_query<C: HasMapId>(ctx: C) -> sqlx::QueryBuilder<'static, sqlx
         .push(" ");
     builder
         .push_event_filter(&mut q, "eer")
-        .push("group by record_player_id order by time, record_player_id asc");
+        .push(" group by record_player_id order by time, record_player_id asc");
 
     q
 }
