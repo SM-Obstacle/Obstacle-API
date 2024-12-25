@@ -189,16 +189,12 @@ async fn overview(
         .with_player_login(&query.login)
         .with_map_uid(&query.map_uid);
 
-    let player = records_lib::must::have_player(conn.mysql_conn, &ctx)
-        .await
-        .with_api_err()
-        .fit(req_id)?;
     let map = records_lib::must::have_map(conn.mysql_conn, &ctx)
         .await
         .with_api_err()
         .fit(req_id)?;
 
-    let res = overview::overview(conn, ctx.with_player(&player).with_map(&map))
+    let res = overview::overview(conn, ctx.with_map(&map))
         .await
         .fit(req_id)?;
     utils::json(res)
