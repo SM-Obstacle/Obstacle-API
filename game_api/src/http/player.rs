@@ -330,7 +330,7 @@ pub async fn get_token(
                 body.state.clone()
             );
             state.remove_state(body.state).await;
-            return Err(RecordsErrorKind::Timeout).fit(req_id);
+            return Err(RecordsErrorKind::Timeout(TIMEOUT)).fit(req_id);
         }
     };
 

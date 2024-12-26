@@ -225,7 +225,7 @@ impl AuthState {
                 },
                 _ => {
                     tracing::event!(Level::WARN, "Token state `{}` timed out", state);
-                    return Err(RecordsErrorKind::Timeout);
+                    return Err(RecordsErrorKind::Timeout(TIMEOUT));
                 }
             }
         } else {
