@@ -211,8 +211,9 @@ impl AuthState {
         let mut state_map = self.states_map.lock().await;
 
         let web_token = if let Some(TokenState { tx, rx, .. }) = state_map.remove(&state) {
-            tx.send(Message::MPCode(code))
-                .expect("/player/get_token rx should not be dropped at this point");
+            if let Err(_) = tx.send(Message::MPCode(code)) {
+                return Err(RecordsErrorKind::MissingGetTokenReq);
+            }
 
             match timeout(TIMEOUT, rx).await {
                 Ok(Ok(res)) => match res {
