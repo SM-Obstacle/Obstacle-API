@@ -288,15 +288,21 @@ where
             }
         };
 
-        match get_rank_impl(db.redis_conn, &key, time).await? {
-            Some(r) => {
-                if let Some(time) = newest_time {
-                    let _: () = db.redis_conn.zadd(key, ctx.get_player_id(), time).await?;
+        for _ in 0..3 {
+            match get_rank_impl(db.redis_conn, &key, time).await? {
+                Some(r) => {
+                    if let Some(time) = newest_time {
+                        let _: () = db.redis_conn.zadd(key, ctx.get_player_id(), time).await?;
+                    }
+                    return Ok(r);
                 }
-                Ok(r)
+                None => {
+                    let _: () = db.redis_conn.zadd(&key, ctx.get_player_id(), time).await?;
+                }
             }
-            None => Err(get_rank_failed(db, ctx, time, score).await?),
         }
+
+        Err(get_rank_failed(db, ctx, time, score).await?)
     })
     .await
 }
