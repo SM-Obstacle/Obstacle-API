@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["game_api", "records_lib", "socc", "admin"]
+members = ["game_api", "records_lib", "socc", "admin", "auth"]
 
 [workspace.dependencies]
 thiserror = "2.0.3"

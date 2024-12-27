@@ -18,8 +18,6 @@ use anyhow::Context;
 use game_api_lib::{
     api_route, graphql_route, AuthState, FitRequestId, RecordsErrorKind, RecordsResponse,
 };
-use records_lib::{get_mysql_pool, get_redis_pool, Database};
-use reqwest::Client;
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId, RootSpanBuilder, TracingLogger};
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -27,7 +25,7 @@ struct CustomRootSpanBuilder;
 
 impl RootSpanBuilder for CustomRootSpanBuilder {
     fn on_request_start(request: &actix_web::dev::ServiceRequest) -> tracing::Span {
-        let db = request.app_data::<Database>().unwrap();
+        let db = request.app_data::<records_lib::Database>().unwrap();
         tracing_actix_web::root_span!(
             request,
             pool_size = db.mysql_pool.size(),
@@ -53,19 +51,20 @@ async fn not_found(req_id: RequestId) -> RecordsResponse<impl Responder> {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
     let env = game_api_lib::init_env()?;
+    auth::init();
 
-    let mysql_pool = get_mysql_pool(env.db_env.db_url.db_url)
+    let mysql_pool = records_lib::create_mysql_pool(env.db_env.db_url.db_url)
         .await
         .context("Cannot create MySQL pool")?;
-    let redis_pool =
-        get_redis_pool(env.db_env.redis_url.redis_url).context("Cannot create Redis pool")?;
+    let redis_pool = records_lib::create_redis_pool(env.db_env.redis_url.redis_url)
+        .context("Cannot create Redis pool")?;
 
-    let db = Database {
+    let db = records_lib::Database {
         mysql_pool,
         redis_pool,
     };
 
-    let client = Client::new();
+    let client = reqwest::Client::new();
 
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::CLOSE)

@@ -121,8 +121,7 @@ struct RecordQueryRow {
 }
 
 /// The type yielded by the [`leaderboard`] function.
-#[derive(Debug, serde::Serialize)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Row {
     /// The rank of the record.
     pub rank: i32,

@@ -22,6 +22,7 @@ use crate::{
 use actix_web::Responder;
 
 use self::admin::admin_scope;
+use self::auth::auth_scope;
 use self::event::event_scope;
 use self::map::map_scope;
 use self::player::player_scope;
@@ -32,6 +33,7 @@ pub mod event;
 pub mod map;
 pub mod player;
 
+mod auth;
 mod overview;
 mod pb;
 mod player_finished;
@@ -74,6 +76,7 @@ pub fn api_route() -> Scope<
         .route("/info", web::get().to(info))
         .route("/overview", web::get().to(overview))
         .route("/report", web::post().to(report_error))
+        .service(auth_scope())
         .service(staggered_scope())
         .service(player_scope())
         .service(map_scope())

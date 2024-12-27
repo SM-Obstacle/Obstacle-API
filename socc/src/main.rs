@@ -52,10 +52,10 @@ async fn main() -> anyhow::Result<()> {
     let env = Env::try_get()?;
     records_lib::init_env(env.lib_env);
 
-    let mysql_pool = records_lib::get_mysql_pool(env.db_env.db_url.db_url)
+    let mysql_pool = records_lib::create_mysql_pool(env.db_env.db_url.db_url)
         .await
         .context("When creating MySQL pool")?;
-    let redis_pool = records_lib::get_redis_pool(env.db_env.redis_url.redis_url)
+    let redis_pool = records_lib::create_redis_pool(env.db_env.redis_url.redis_url)
         .context("When creating Redis pool")?;
 
     let db = Database {

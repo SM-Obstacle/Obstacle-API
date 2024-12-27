@@ -37,8 +37,7 @@ where
     Ok(())
 }
 
-#[derive(serde::Serialize)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct ResponseBody {
     pub response: Vec<Row>,
 }

@@ -1,6 +1,6 @@
 use crate::init_env;
 use anyhow::Context;
-use records_lib::{get_mysql_pool, get_redis_pool, Database};
+use records_lib::{create_mysql_pool, create_redis_pool, Database};
 
 pub async fn init_db() -> anyhow::Result<Database> {
     match dotenvy::dotenv() {
@@ -11,8 +11,8 @@ pub async fn init_db() -> anyhow::Result<Database> {
     let env = init_env()?;
 
     Ok(Database {
-        mysql_pool: get_mysql_pool(env.db_env.db_url.db_url).await?,
-        redis_pool: get_redis_pool(env.db_env.redis_url.redis_url)?,
+        mysql_pool: create_mysql_pool(env.db_env.db_url.db_url).await?,
+        redis_pool: create_redis_pool(env.db_env.redis_url.redis_url)?,
     })
 }
 

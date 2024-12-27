@@ -1,0 +1,54 @@
+sequenceDiagram
+    autonumber
+
+    participant A as Obstacle Gamemode (game endpoint)
+    participant B as Obstacle API
+
+    A ->> B: requests an authentication
+    activate A
+    B -->> A: returns a unique authentication state ID
+    deactivate A
+
+    par Waiting for browser endpoint's ManiaPlanet OAuth2 access token
+        A ->> B: waits for the browser endpoint response
+        activate A
+        activate B
+    and Asking the player to log in with their ManiaPlanet account
+        create participant C as Website (browser endpoint)
+        A ->> C: opens the ManiaPlanet OAuth2 login page
+        C ->> C: the player logs in
+        C ->> B: gives the ManiaPlanet OAuth2 access token
+        activate C
+        B ->> B: validates it
+	break when the access token is invalid
+	    B -->> A: returns an error
+	    B -->> C: returns an error
+	end
+        B -->> A: returns "100 Continue" HTTP code
+        deactivate A
+        B -->> C: returns a numeric code to be displayed
+        deactivate C
+        deactivate B
+    end
+    par Waiting for game endpoint's numeric code
+        C ->> B: waits for the game endpoint response
+        activate C
+        activate B
+    and Asking the player to enter the code in game
+        A ->> B: the player enters the code
+        activate A
+	loop 3 times while the entered code is incorrect
+	    B ->> B: validates it
+	    alt is incorrect
+	        B -->> A: returns an error
+		alt exceeded 3 tries
+		    B -->> C: returns an error
+		end
+	    end
+	end
+        B -->> A: returns a "200 OK" HTTP response with the Obstacle token
+        deactivate A
+        B -->> C: returns a "204 No Content" HTTP response with a Set-Cookie header
+        deactivate C
+        deactivate B
+    end

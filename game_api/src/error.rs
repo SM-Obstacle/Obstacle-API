@@ -56,8 +56,12 @@ pub enum RecordsErrorKind {
     AccessTokenErr(AccessTokenErr) = 206,
     #[error("invalid ManiaPlanet code on /player/give_token request")]
     InvalidMPCode = 207,
-    #[error("timeout exceeded")]
+    #[error("timeout exceeded (max {0:?})")]
     Timeout(std::time::Duration) = 208,
+    #[error(transparent)]
+    AuthLib(#[from] auth::CommonEndpointErr) = 209,
+    #[error("invalid code")]
+    InvalidAuthCode = 210,
 
     // --------
     // --- Logical errors
@@ -188,6 +192,8 @@ impl actix_web::ResponseError for RecordsError {
             R::AccessTokenErr(_) => HttpResponse::BadRequest().json(self.to_err_res()),
             R::InvalidMPCode => HttpResponse::BadRequest().json(self.to_err_res()),
             R::Timeout(_) => HttpResponse::RequestTimeout().json(self.to_err_res()),
+            R::AuthLib(_) => HttpResponse::Unauthorized().json(self.to_err_res()),
+            R::InvalidAuthCode => HttpResponse::Unauthorized().json(self.to_err_res()),
 
             // --- Logical errors
 

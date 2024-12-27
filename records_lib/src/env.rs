@@ -82,7 +82,7 @@ pub fn env() -> &'static LibEnv {
 }
 
 /// Creates and returns the MySQL/MariaDB pool with the provided URL.
-pub async fn get_mysql_pool(url: String) -> anyhow::Result<MySqlPool> {
+pub async fn create_mysql_pool(url: String) -> anyhow::Result<MySqlPool> {
     let mysql_pool = sqlx::mysql::MySqlPoolOptions::new()
         .max_connections(20)
         .acquire_timeout(Duration::from_secs(10))
@@ -92,7 +92,7 @@ pub async fn get_mysql_pool(url: String) -> anyhow::Result<MySqlPool> {
 }
 
 /// Creates and returns the Redis pool with the provided URL.
-pub fn get_redis_pool(url: String) -> anyhow::Result<RedisPool> {
+pub fn create_redis_pool(url: String) -> anyhow::Result<RedisPool> {
     let cfg = deadpool_redis::Config {
         url: Some(url),
         connection: None,
