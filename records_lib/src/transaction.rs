@@ -9,7 +9,7 @@ use crate::{
 
 /// An [`FnOnce`] which takes 3 arguments, returning a [`Future`].
 ///
-/// This trait is used as a bound in the [`within_transaction`] function.
+/// This trait is used as a bound in the [`within`] function.
 pub trait AsyncFnOnce<Arg0, Arg1, Arg2>: FnOnce(Arg0, Arg1, Arg2) -> Self::OutputFuture {
     /// The type of the returned future.
     type OutputFuture: Future<Output = <Self as AsyncFnOnce<Arg0, Arg1, Arg2>>::Output> + Send;
