@@ -12,11 +12,11 @@ use records_lib::{
     },
     error::RecordsError,
     event::{self, EventMap},
-    models, player, transaction, Database, DatabaseConnection, NullableInteger, NullableText,
-    RedisConnection,
+    models, player, transaction, Database, DatabaseConnection, MySqlConnection, NullableInteger,
+    NullableText, RedisConnection,
 };
 use serde::Serialize;
-use sqlx::{FromRow, MySqlConnection};
+use sqlx::FromRow;
 use tracing_actix_web::RequestId;
 
 use crate::{
@@ -485,7 +485,7 @@ struct EditionFinishedParams<'a> {
 }
 
 async fn edition_finished_impl<C>(
-    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    mysql_conn: MySqlConnection<'_>,
     ctx: C,
     EditionFinishedParams {
         redis_conn,
@@ -576,7 +576,7 @@ pub async fn edition_finished_at(
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    let res = transaction::within_transaction(
+    let res = transaction::within(
         conn.mysql_conn,
         ctx.with_event_edition(&event, &edition).with_map(&map),
         ReadWrite,
@@ -595,7 +595,7 @@ pub async fn edition_finished_at(
 }
 
 pub async fn insert_event_record(
-    conn: &mut MySqlConnection,
+    conn: &mut sqlx::MySqlConnection,
     record_id: u32,
     event_id: u32,
     edition_id: u32,

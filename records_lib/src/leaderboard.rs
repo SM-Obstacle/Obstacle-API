@@ -8,7 +8,7 @@ use crate::{
     context::{Ctx, HasMapId, HasPersistentMode, ReadOnly, Transactional},
     error::RecordsResult,
     ranks::get_rank,
-    transaction, DatabaseConnection, RedisConnection,
+    transaction, DatabaseConnection, MySqlConnection, RedisConnection,
 };
 
 /// The type returned by the [`compet_rank_by_key`](CompetRankingByKeyIter::compet_rank_by_key)
@@ -137,7 +137,7 @@ struct LeaderboardImplParam<'a> {
 }
 
 async fn leaderboard_impl<C>(
-    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    mysql_conn: MySqlConnection<'_>,
     ctx: C,
     LeaderboardImplParam {
         redis_conn,
@@ -227,7 +227,7 @@ pub async fn leaderboard<C>(
 where
     C: HasMapId + HasPersistentMode,
 {
-    transaction::within_transaction(
+    transaction::within(
         conn.mysql_conn,
         ctx,
         ReadOnly,

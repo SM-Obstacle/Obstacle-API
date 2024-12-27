@@ -4,7 +4,7 @@ use deadpool_redis::redis::AsyncCommands;
 use records_lib::context::{
     Ctx, HasMap, HasMapId, HasPersistentMode, HasPlayerLogin, ReadOnly, Transactional,
 };
-use records_lib::{player, ranks, transaction, RedisConnection};
+use records_lib::{player, ranks, transaction, MySqlConnection, RedisConnection};
 use records_lib::{ranks::get_rank, redis_key::map_key, DatabaseConnection};
 use serde::{Deserialize, Serialize};
 
@@ -114,7 +114,7 @@ pub struct ResponseBody {
 }
 
 async fn build_records_array<C>(
-    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    mysql_conn: MySqlConnection<'_>,
     ctx: C,
     redis_conn: &mut RedisConnection,
 ) -> RecordsResult<Vec<RankedRecord>>
@@ -203,7 +203,7 @@ pub async fn overview<C>(conn: DatabaseConnection<'_>, ctx: C) -> RecordsResult<
 where
     C: HasPlayerLogin + HasMap + HasPersistentMode,
 {
-    let ranked_records = transaction::within_transaction(
+    let ranked_records = transaction::within(
         conn.mysql_conn,
         ctx,
         ReadOnly,

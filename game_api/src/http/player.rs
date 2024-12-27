@@ -9,11 +9,11 @@ use records_lib::{
     context::{Context, Ctx, HasMap, HasMapId, HasPlayerLogin, ReadWrite, Transactional},
     event::{self},
     models::Banishment,
-    must, player, transaction, Database, DatabaseConnection, RedisConnection,
+    must, player, transaction, Database, DatabaseConnection, MySqlConnection, RedisConnection,
 };
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, MySqlConnection};
+use sqlx::FromRow;
 use tokio::time::timeout;
 use tracing::Level;
 use tracing_actix_web::RequestId;
@@ -118,7 +118,7 @@ pub async fn update_player(
 }
 
 pub async fn check_banned(
-    db: &mut MySqlConnection,
+    db: &mut sqlx::MySqlConnection,
     player_id: u32,
 ) -> Result<Option<Banishment>, RecordsErrorKind> {
     let r = sqlx::query_as("SELECT * FROM current_bans WHERE player_id = ?")
@@ -204,7 +204,7 @@ struct FinishedImplParams<'a> {
 }
 
 async fn finished_impl<C>(
-    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    mysql_conn: MySqlConnection<'_>,
     ctx: C,
     FinishedImplParams {
         redis_conn,
@@ -268,7 +268,7 @@ pub async fn finished_at(
         .fit(req_id)?;
     let ctx = ctx.with_map(&map);
 
-    let res = transaction::within_transaction(
+    let res = transaction::within(
         conn.mysql_conn,
         ctx,
         ReadWrite,

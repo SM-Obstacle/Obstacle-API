@@ -14,7 +14,7 @@ use crate::{
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
-    transaction, DatabaseConnection, RedisConnection,
+    transaction, DatabaseConnection, MySqlConnection, RedisConnection,
 };
 
 #[derive(Default, Clone, Debug)]
@@ -146,7 +146,7 @@ where
     C: HasMappackId + HasPersistentMode,
 {
     // Calculate the scores
-    let scores = crate::assert_future_send(transaction::within_transaction(
+    let scores = crate::assert_future_send(transaction::within(
         db.mysql_conn,
         &ctx,
         ReadOnly,
@@ -340,7 +340,7 @@ struct CalcScoresParam<'a> {
     tracing::instrument(skip(mysql_conn, ctx, redis_conn), fields(mappack = %ctx.get_mappack_id().mappack_id()))
 )]
 async fn calc_scores<C>(
-    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    mysql_conn: MySqlConnection<'_>,
     ctx: C,
     CalcScoresParam { redis_conn }: CalcScoresParam<'_>,
 ) -> RecordsResult<Option<MappackScores>>

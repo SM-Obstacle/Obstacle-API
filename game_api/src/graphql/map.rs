@@ -12,7 +12,7 @@ use records_lib::{
     models::{self, Record},
     ranks::get_rank,
     redis_key::alone_map_key,
-    transaction, Database, DatabaseConnection, RedisConnection,
+    transaction, Database, DatabaseConnection, MySqlConnection, RedisConnection,
 };
 use sqlx::{mysql, FromRow, MySqlPool};
 
@@ -46,7 +46,7 @@ struct GetMapRecordsParams<'a> {
 }
 
 async fn get_map_records<C>(
-    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    mysql_conn: MySqlConnection<'_>,
     ctx: C,
     GetMapRecordsParams {
         redis_conn,
@@ -143,7 +143,7 @@ impl Map {
         let db = gql_ctx.data_unchecked::<Database>();
         let conn = acquire!(db?);
 
-        records_lib::assert_future_send(transaction::within_transaction(
+        records_lib::assert_future_send(transaction::within(
             conn.mysql_conn,
             ctx,
             ReadOnly,

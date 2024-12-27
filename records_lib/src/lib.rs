@@ -30,6 +30,8 @@ pub mod transaction;
 pub type MySqlPool = sqlx::MySqlPool;
 /// The Redis pool type.
 pub type RedisPool = deadpool_redis::Pool;
+/// A mutable reference to the connection to the database.
+pub type MySqlConnection<'a> = &'a mut sqlx::pool::PoolConnection<sqlx::MySql>;
 /// The type of a Redis connection.
 pub type RedisConnection = deadpool_redis::Connection;
 
@@ -54,7 +56,7 @@ where
 /// Represents a connection to the API database, both MariaDB and Redis.
 pub struct DatabaseConnection<'a> {
     /// The connection to the MariaDB database.
-    pub mysql_conn: &'a mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    pub mysql_conn: MySqlConnection<'a>,
     /// The connection to the Redis database.
     pub redis_conn: &'a mut RedisConnection,
 }

@@ -5,7 +5,7 @@ use records_lib::{
     acquire,
     context::{Context, Ctx as _, HasPlayerId, ReadOnly, Transactional},
     models::{self, Role},
-    transaction, Database, DatabaseConnection, RedisConnection,
+    transaction, Database, DatabaseConnection, MySqlConnection, RedisConnection,
 };
 use sqlx::{mysql, FromRow, MySqlPool, Row};
 
@@ -163,7 +163,7 @@ impl Player {
         let db = ctx.data_unchecked::<Database>();
         let conn = acquire!(db?);
 
-        records_lib::assert_future_send(transaction::within_transaction(
+        records_lib::assert_future_send(transaction::within(
             conn.mysql_conn,
             Context::default().with_player(&self.inner),
             ReadOnly,
@@ -183,7 +183,7 @@ struct GetPlayerRecordsParam<'a> {
 }
 
 async fn get_player_records<C>(
-    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    mysql_conn: MySqlConnection<'_>,
     ctx: C,
     GetPlayerRecordsParam {
         redis_conn,

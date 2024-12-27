@@ -2,9 +2,10 @@
 
 use std::future::Future;
 
-use crate::context::{HasPersistentMode, TransactionMode, WithTransactionMode};
-
-type PoolConn<'a> = &'a mut sqlx::pool::PoolConnection<sqlx::MySql>;
+use crate::{
+    context::{HasPersistentMode, TransactionMode, WithTransactionMode},
+    MySqlConnection,
+};
 
 /// An [`FnOnce`] which takes 3 arguments, returning a [`Future`].
 ///
@@ -37,12 +38,12 @@ where
 /// * `f`: the function itself.
 ///
 /// If you get some weird errors when passing the context with a borrow, try using the
-/// [`records_lib::assert_future_send`](crate::assert_future_send) function.
+/// [`assert_future_send`](crate::assert_future_send) function.
 ///
 /// [1]: crate::context::ReadOnly
 /// [2]: crate::context::ReadWrite
-pub async fn within_transaction<F, Mode, Param, T, E, C>(
-    mysql_conn: PoolConn<'_>,
+pub async fn within<F, Mode, Param, T, E, C>(
+    mysql_conn: MySqlConnection<'_>,
     ctx: C,
     mode: Mode,
     param: Param,
@@ -50,7 +51,7 @@ pub async fn within_transaction<F, Mode, Param, T, E, C>(
 ) -> Result<T, E>
 where
     F: for<'a> AsyncFnOnce<
-        PoolConn<'a>,
+        MySqlConnection<'a>,
         WithTransactionMode<C, Mode>,
         Param,
         Output = Result<T, E>,

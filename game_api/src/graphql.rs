@@ -8,7 +8,9 @@ use async_graphql::{connection, Enum, ErrorExtensionValues, Object, Value, ID};
 use async_graphql_actix_web::GraphQLRequest;
 use records_lib::context::{Context, Ctx, ReadOnly, Transactional};
 use records_lib::ranks::get_rank;
-use records_lib::{acquire, models, transaction, DatabaseConnection, RedisConnection};
+use records_lib::{
+    acquire, models, transaction, DatabaseConnection, MySqlConnection, RedisConnection,
+};
 use records_lib::{must, Database};
 use reqwest::Client;
 use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
@@ -374,7 +376,7 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<Database>();
         let conn = acquire!(db?);
 
-        transaction::within_transaction(
+        transaction::within(
             conn.mysql_conn,
             Context::default(),
             ReadOnly,
@@ -420,7 +422,7 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<Database>();
         let conn = acquire!(db?);
 
-        transaction::within_transaction(
+        transaction::within(
             conn.mysql_conn,
             Context::default(),
             ReadOnly,
@@ -440,7 +442,7 @@ struct GetRecordParam<'a> {
 }
 
 async fn get_record<C>(
-    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    mysql_conn: MySqlConnection<'_>,
     ctx: C,
     GetRecordParam {
         redis_conn,
@@ -485,7 +487,7 @@ struct GetRecordsParam<'a> {
 }
 
 async fn get_records<C: Transactional>(
-    mysql_conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    mysql_conn: MySqlConnection<'_>,
     ctx: C,
     GetRecordsParam {
         redis_conn,

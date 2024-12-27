@@ -2,7 +2,7 @@ use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
 use records_lib::{
     context::{HasMap, HasMapId, HasPlayerId, HasPlayerLogin, ReadWrite, Transactional},
-    models, ranks, DatabaseConnection, NullableInteger,
+    models, ranks, DatabaseConnection, MySqlConnection, NullableInteger,
 };
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +41,7 @@ struct SendQueryParam<'a> {
 }
 
 async fn send_query<C>(
-    db: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    db: MySqlConnection<'_>,
     ctx: C,
     SendQueryParam {
         body,
