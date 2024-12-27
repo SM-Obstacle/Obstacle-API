@@ -83,9 +83,10 @@ mod lock {
         Fut: Future<Output = R>,
     {
         wait_unlock(map_id).await;
-        LB_LOCK.write().await.insert(map_id);
+        let mut lock = LB_LOCK.write().await;
+        lock.insert(map_id);
         let r = f().await;
-        LB_LOCK.write().await.remove(&map_id);
+        lock.remove(&map_id);
         r
     }
 
@@ -283,26 +284,20 @@ where
         let newest_time = match score {
             Some(t) if t == time => None,
             other => {
-                let _: () = db.redis_conn.zadd(&key, ctx.get_player_id(), time).await?;
+                force_update_locked(db, &ctx).await?;
                 other.filter(|t| *t < time)
             }
         };
 
-        for _ in 0..3 {
-            match get_rank_impl(db.redis_conn, &key, time).await? {
-                Some(r) => {
-                    if let Some(time) = newest_time {
-                        let _: () = db.redis_conn.zadd(key, ctx.get_player_id(), time).await?;
-                    }
-                    return Ok(r);
+        match get_rank_impl(db.redis_conn, &key, time).await? {
+            Some(r) => {
+                if let Some(time) = newest_time {
+                    let _: () = db.redis_conn.zadd(key, ctx.get_player_id(), time).await?;
                 }
-                None => {
-                    let _: () = db.redis_conn.zadd(&key, ctx.get_player_id(), time).await?;
-                }
+                Ok(r)
             }
+            None => Err(get_rank_failed(db, ctx, time, score).await?),
         }
-
-        Err(get_rank_failed(db, ctx, time, score).await?)
     })
     .await
 }
