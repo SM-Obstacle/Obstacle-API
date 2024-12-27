@@ -211,7 +211,7 @@ impl AuthState {
         let mut state_map = self.states_map.lock().await;
 
         let web_token = if let Some(TokenState { tx, rx, .. }) = state_map.remove(&state) {
-            if let Err(_) = tx.send(Message::MPCode(code)) {
+            if tx.send(Message::MPCode(code)).is_err() {
                 return Err(RecordsErrorKind::MissingGetTokenReq);
             }
 
