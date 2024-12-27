@@ -4,8 +4,11 @@ use deadpool_redis::redis::AsyncCommands;
 use records_lib::context::{
     Ctx, HasMap, HasMapId, HasPersistentMode, HasPlayerLogin, ReadOnly, Transactional,
 };
-use records_lib::{player, ranks, transaction, MySqlConnection, RedisConnection};
-use records_lib::{ranks::get_rank, redis_key::map_key, DatabaseConnection};
+use records_lib::ranks::update_leaderboard;
+use records_lib::{
+    player, ranks::get_rank, redis_key::map_key, transaction, DatabaseConnection, MySqlConnection,
+    RedisConnection,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -130,8 +133,9 @@ where
         .await
         .with_api_err()?;
 
-    let count = ranks::count_records_map(conn.mysql_conn, &ctx).await?;
+    // Update redis if needed
     let key = map_key(ctx.get_map().id, ctx.get_opt_event_edition());
+    let count = update_leaderboard(&mut conn, &ctx).await? as u32;
 
     let mut ranked_records = vec![];
 

@@ -93,6 +93,8 @@ pub(super) async fn insert_record<C>(
 where
     C: HasMapId + HasPlayerId + Transactional<Mode = ReadWrite>,
 {
+    ranks::update_leaderboard(db, &ctx).await?;
+
     if update_redis_lb {
         ranks::update_rank(db.redis_conn, &ctx, body.time).await?;
     }

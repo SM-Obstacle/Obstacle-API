@@ -30,7 +30,7 @@
 //! the request B[^note2].
 //!
 //! The only solution is to make a leaderboard lock system. If you need to read the leaderboard of
-//! a map, you have to lock it, to avoid stale read issues ; and to lock a leaderboard, you need
+//! a map, you have to lock it, to avoid stale read issues ; and To lock a leaderboard, you need
 //! to wait for any other pending lock.
 //!
 //! You may think that these are very rare cases, but they actually happen quite often. Especially
@@ -129,8 +129,7 @@ where
     Ok(())
 }
 
-/// Returns the amount of records on a map.
-pub async fn count_records_map<C>(conn: &mut sqlx::MySqlConnection, ctx: C) -> RecordsResult<u32>
+async fn count_records_map<C>(conn: &mut sqlx::MySqlConnection, ctx: C) -> RecordsResult<i64>
 where
     C: HasMapId + Transactional,
 {
@@ -148,6 +147,33 @@ where
         .build_query_scalar();
 
     query.fetch_one(conn).await.map_err(Into::into)
+}
+
+/// Checks if the Redis leaderboard for the map with the provided ID has a different count
+/// than in the database, and reupdates the Redis leaderboard completly if so.
+///
+/// This is a check to avoid differences between the MariaDB and the Redis leaderboards.
+///
+/// It returns the number of records in the map.
+pub async fn update_leaderboard<C>(conn: &mut DatabaseConnection<'_>, ctx: C) -> RecordsResult<i64>
+where
+    C: HasMapId + Transactional,
+{
+    let mysql_count: i64 = count_records_map(conn.mysql_conn, &ctx).await?;
+
+    lock::within(ctx.get_map_id(), || async move {
+        let key = map_key(ctx.get_map_id(), ctx.get_opt_event_edition());
+
+        let redis_count: i64 = conn.redis_conn.zcount(key, "-inf", "+inf").await?;
+        if redis_count != mysql_count {
+            force_update_locked(conn, ctx).await?;
+        }
+
+        RecordsResult::Ok(())
+    })
+    .await?;
+
+    Ok(mysql_count)
 }
 
 fn get_mariadb_lb_query<C: HasMapId>(ctx: C) -> sqlx::QueryBuilder<'static, sqlx::MySql> {
@@ -217,7 +243,7 @@ async fn get_rank_impl(
 ///
 /// The full update means a delete of the Redis key then a reinsertion of all the records.
 /// This may be called when the SQL and Redis databases had the same amount of records on a map,
-/// but the times were not corresponding.
+/// but the times were not corresponding. It generally happens after a database migration.
 ///
 /// The ranking type is the standard competition ranking (1224).
 ///
@@ -253,8 +279,8 @@ where
     .await
 }
 
-/// Returns an error and prints a clear message of the leaderboards differences between MariaDB
-/// and Redis.
+/// Returns an error and prints a clear message of the leaderboards differences between
+/// MariaDB and Redis.
 #[cold]
 async fn get_rank_failed<C>(
     db: &mut DatabaseConnection<'_>,
@@ -303,7 +329,7 @@ where
         })
         .max()
         .unwrap_or_default()
-        .min("player".len() * 2 + "time".len() * 2 + 1);
+        .max("player".len() * 2 + "time".len() * 2 + 1);
     let w4 = width / 4;
 
     let mut msg = format!(
