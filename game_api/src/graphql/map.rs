@@ -10,7 +10,7 @@ use records_lib::{
     acquire,
     context::{Context, Ctx, HasMapId, HasPersistentMode, ReadOnly, Transactional},
     models::{self, Record},
-    ranks::{get_rank, update_leaderboard},
+    ranks::get_rank,
     redis_key::alone_map_key,
     transaction, Database, DatabaseConnection, RedisConnection,
 };
@@ -63,8 +63,6 @@ where
         redis_conn,
     };
     let key = alone_map_key(map_id);
-
-    update_leaderboard(&mut conn, &ctx).await?;
 
     let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
     let record_ids: Vec<i32> = if to_reverse {
