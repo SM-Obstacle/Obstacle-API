@@ -1,13 +1,12 @@
 //! This module contains various utility items to retrieve leaderboards information.
 
-use std::fmt;
-
-use sqlx::QueryBuilder;
+use deadpool_redis::redis::AsyncCommands as _;
 
 use crate::{
     context::{Ctx, HasMapId, HasPersistentMode, ReadOnly, Transactional},
     error::RecordsResult,
-    ranks::get_rank,
+    ranks,
+    redis_key::map_key,
     transaction, DatabaseConnection, MySqlConnection, RedisConnection,
 };
 
@@ -113,27 +112,103 @@ pub trait CompetRankingByKeyIter: Iterator {
 
 impl<I: Iterator> CompetRankingByKeyIter for I {}
 
-#[derive(sqlx::FromRow)]
-struct RawRow {
+#[derive(sqlx::FromRow, Debug, Clone)]
+struct RecordQueryRow {
     player_id: u32,
-    player: String,
+    login: String,
+    nickname: String,
     time: i32,
 }
 
 /// The type yielded by the [`leaderboard`] function.
+#[derive(Debug, serde::Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 pub struct Row {
     /// The rank of the record.
     pub rank: i32,
     /// The login of the player.
     pub player: String,
+    /// The nickname of the player.
+    pub nickname: String,
     /// The time of the record.
     pub time: i32,
 }
 
 struct LeaderboardImplParam<'a> {
     redis_conn: &'a mut RedisConnection,
-    offset: Option<isize>,
-    limit: Option<isize>,
+    start: Option<i64>,
+    end: Option<i64>,
+}
+
+/// Returns the leaderboard of a map.
+pub async fn leaderboard_txn<C>(
+    conn: &mut DatabaseConnection<'_>,
+    ctx: C,
+    start: Option<i64>,
+    end: Option<i64>,
+) -> RecordsResult<Vec<Row>>
+where
+    C: HasMapId + Transactional,
+{
+    ranks::update_leaderboard(conn, &ctx).await?;
+
+    let start = start.unwrap_or_default();
+    let end = end.unwrap_or(-1);
+    let player_ids: Vec<i32> = conn
+        .redis_conn
+        .zrange(
+            map_key(ctx.get_map_id(), ctx.get_opt_event_edition()),
+            start as isize,
+            end as isize,
+        )
+        .await?;
+
+    if player_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let builder = ctx.sql_frag_builder();
+
+    let mut query = sqlx::QueryBuilder::new(
+        "SELECT p.id AS player_id,
+            p.login AS login,
+            p.name AS nickname,
+            min(time) as time,
+            map_id
+        FROM records r ",
+    );
+    builder
+        .push_event_join(&mut query, "eer", "r")
+        .push(
+            " INNER JOIN players p ON r.record_player_id = p.id
+            WHERE map_id = ",
+        )
+        .push_bind(ctx.get_map_id())
+        .push(" AND record_player_id IN (");
+    let mut sep = query.separated(", ");
+    for id in player_ids {
+        sep.push_bind(id);
+    }
+    query.push(") ");
+    let result = builder
+        .push_event_filter(&mut query, "eer")
+        .push(" GROUP BY record_player_id ORDER BY time, record_date ASC")
+        .build_query_as::<RecordQueryRow>()
+        .fetch_all(&mut **conn.mysql_conn)
+        .await?;
+
+    let mut records = Vec::with_capacity(result.len());
+
+    for r in result {
+        records.push(Row {
+            rank: ranks::get_rank(conn, ctx.by_ref().with_player_id(r.player_id), r.time).await?,
+            player: r.login,
+            nickname: r.nickname,
+            time: r.time,
+        });
+    }
+
+    Ok(records)
 }
 
 async fn leaderboard_impl<C>(
@@ -141,88 +216,34 @@ async fn leaderboard_impl<C>(
     ctx: C,
     LeaderboardImplParam {
         redis_conn,
-        offset,
-        limit,
+        start,
+        end,
     }: LeaderboardImplParam<'_>,
 ) -> RecordsResult<Vec<Row>>
 where
     C: HasMapId + Transactional,
 {
-    struct Offset(Option<isize>);
-
-    impl fmt::Display for Offset {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self.0 {
-                Some(offset) => write!(f, "offset {offset}"),
-                None => Ok(()),
-            }
-        }
-    }
-
-    struct Limit(Option<isize>);
-
-    impl fmt::Display for Limit {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self.0 {
-                Some(limit) => write!(f, "limit {limit}"),
-                None => Ok(()),
-            }
-        }
-    }
-
-    let conn = &mut DatabaseConnection {
-        redis_conn,
-        mysql_conn,
-    };
-
-    let builder = ctx.sql_frag_builder();
-
-    let mut query = QueryBuilder::new(
-        "select
-            p.id as player_id,
-            p.login as player,
-            r.time as time
-        from ",
-    );
-    builder
-        .push_event_view_name(&mut query, "r")
-        .push(
-            " r inner join players p on p.id = r.record_player_id \
-        where r.map_id = ",
-        )
-        .push_bind(ctx.get_map_id())
-        .push(" ");
-    let query = builder
-        .push_event_filter(&mut query, "r")
-        .push(" order by r.time ")
-        .push(Limit(limit))
-        .push(" ")
-        .push(Offset(offset))
-        .build_query_as();
-
-    let rows: Vec<RawRow> = query.fetch_all(&mut **conn.mysql_conn).await?;
-
-    let mut out = Vec::with_capacity(rows.len());
-
-    for row in rows {
-        let ctx = Ctx::with_player_id(&ctx, row.player_id);
-        let rank = get_rank(conn, ctx, row.time).await?;
-        out.push(Row {
-            rank,
-            player: row.player,
-            time: row.time,
-        });
-    }
-
-    Ok(out)
+    leaderboard_txn(
+        &mut DatabaseConnection {
+            redis_conn,
+            mysql_conn,
+        },
+        ctx,
+        start,
+        end,
+    )
+    .await
 }
 
-/// Returns a list of the leaderboard of a map from its ID.
+/// Returns the leaderboard of a map.
+///
+/// This function simply makes a transaction and returns the result of
+/// the [`leaderboard_txn`]. function.
 pub async fn leaderboard<C>(
     conn: &mut DatabaseConnection<'_>,
     ctx: C,
-    offset: Option<isize>,
-    limit: Option<isize>,
+    offset: Option<i64>,
+    limit: Option<i64>,
 ) -> RecordsResult<Vec<Row>>
 where
     C: HasMapId + HasPersistentMode,
@@ -233,8 +254,8 @@ where
         ReadOnly,
         LeaderboardImplParam {
             redis_conn: conn.redis_conn,
-            offset,
-            limit,
+            start: offset,
+            end: limit.map(|x| offset.unwrap_or_default() + x),
         },
         leaderboard_impl,
     )

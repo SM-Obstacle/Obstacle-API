@@ -15,10 +15,10 @@ pub enum LbCommand {
 #[clap(name = "full")]
 pub struct FullCmd {
     #[arg(long)]
-    offset: Option<isize>,
+    offset: Option<i64>,
 
     #[arg(long, short = 'n')]
-    limit: Option<isize>,
+    limit: Option<i64>,
 
     #[clap(subcommand)]
     map: Map,
@@ -40,8 +40,8 @@ enum Map {
 async fn mariadb_lb(
     db: &mut DatabaseConnection<'_>,
     map_id: u32,
-    offset: Option<isize>,
-    limit: Option<isize>,
+    offset: Option<i64>,
+    limit: Option<i64>,
 ) -> anyhow::Result<()> {
     let leaderboard =
         leaderboard::leaderboard(db, Context::default().with_map_id(map_id), offset, limit)
