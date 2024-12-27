@@ -195,20 +195,6 @@ async fn force_update_locked<C: HasMapId>(
     Ok(())
 }
 
-/// Updates the Redis leaderboard for a map.
-///
-/// This function deletes the Redis key and reinserts all the records from the MariaDB database.
-/// All this is done in a single transaction.
-pub async fn force_update<C: HasMapId>(
-    conn: &mut DatabaseConnection<'_>,
-    ctx: C,
-) -> RecordsResult<()> {
-    lock::within(ctx.get_map_id(), || async move {
-        force_update_locked(conn, ctx).await
-    })
-    .await
-}
-
 async fn get_rank_impl(
     redis_conn: &mut RedisConnection,
     key: &MapKey<'_>,
