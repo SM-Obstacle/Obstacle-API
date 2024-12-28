@@ -2,9 +2,7 @@
 //! specific for a route segment.
 
 use std::fmt;
-use std::time::Duration;
 
-use actix_web::dev::{Service as _, ServiceFactory, ServiceRequest, ServiceResponse};
 use actix_web::web::{JsonConfig, Query};
 use actix_web::{web, HttpResponse, Scope};
 
@@ -15,10 +13,7 @@ use tracing_actix_web::RequestId;
 
 use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 use crate::utils::{self, get_api_status, json, ApiStatus};
-use crate::{
-    must, FitRequestId as _, ModeVersion, RecordsError, RecordsErrorKind, RecordsResponse,
-    RecordsResultExt, Res,
-};
+use crate::{FitRequestId as _, ModeVersion, RecordsResponse, RecordsResultExt, Res};
 use actix_web::Responder;
 
 use self::admin::admin_scope;
@@ -37,39 +32,11 @@ mod pb;
 mod player_finished;
 mod staggered;
 
-const MP_REQ_TIMEOUT: Duration = Duration::from_secs(25);
-
-pub fn api_route() -> Scope<
-    impl ServiceFactory<
-        ServiceRequest,
-        Response = ServiceResponse,
-        Error = actix_web::Error,
-        Config = (),
-        InitError = (),
-    >,
-> {
+pub fn api_route() -> Scope {
     let json_config = JsonConfig::default().limit(1024 * 16);
 
     web::scope("")
         .app_data(json_config)
-        .wrap_fn(|req, next| {
-            let uri = req.uri().clone();
-            let req_id = must::have_request_id(req.request());
-            let res = next.call(req);
-            async move {
-                let res = tokio::time::timeout(MP_REQ_TIMEOUT, res).await;
-                match res {
-                    Ok(res) => res,
-                    Err(_elapsed) => {
-                        tracing::error!("Request to {} timed out", uri);
-                        Err(actix_web::Error::from(RecordsError {
-                            request_id: req_id,
-                            kind: RecordsErrorKind::Timeout(MP_REQ_TIMEOUT),
-                        }))
-                    }
-                }
-            }
-        })
         .route("/latestnews_image", web::get().to(latestnews_image))
         .route("/info", web::get().to(info))
         .route("/overview", web::get().to(overview))
