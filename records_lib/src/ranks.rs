@@ -66,46 +66,74 @@ use deadpool_redis::redis::{self, AsyncCommands};
 use futures::TryStreamExt;
 use itertools::{EitherOrBoth, Itertools};
 
-mod lock {
-    use std::collections::HashSet;
-    use std::future::Future;
-    use std::sync::LazyLock;
-    use std::time::{Duration, Instant};
-    use tokio::sync::RwLock;
+use std::{
+    collections::HashMap,
+    future::Future,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
+use tokio::sync::{Mutex, Semaphore};
 
+/// Wraps the execution of the provided closure to guarantee that it is executed by one task
+/// at a time, based on the provided ID.
+///
+/// This is mainly used to avoid stale-read issues when processing leaderboards in Redis.
+///
+/// If many tasks wrap their procedure for the same ID, it is guaranteed that only one of them
+/// will execute at a time, implying the other tasks to wait before executing the next one.
+///
+/// Therefore, this function might block (asynchronously), with a timeout of 10 seconds.
+pub async fn lock_within<F, Fut, R>(map_id: u32, f: F) -> R
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = R>,
+{
     const WAIT_UNLOCK_TIMEOUT: Duration = Duration::from_secs(10);
 
-    static LB_LOCK: LazyLock<RwLock<HashSet<u32>>> = LazyLock::new(Default::default);
+    /// Contains the locked IDs.
+    ///
+    /// Any entry in the hash map doesn't guarantee that the ID in question is actually locked.
+    /// It is locked if and only if the associated semaphore is acquired. This is so that
+    /// we don't remove the entry from the hash map then reinsert it again if another task is running
+    /// for the same ID. The entry is removed if the associated semaphore is referenced only once.
+    ///
+    /// We use a mutex and a semaphore because they seem to be the most efficient compared to
+    /// a `RwLock` instead of the `Mutex` or a `Mutex<()>` instead of the `Semaphore`.
+    static LOCKS: LazyLock<Mutex<HashMap<u32, Arc<Semaphore>>>> = LazyLock::new(Default::default);
 
-    pub(super) async fn within<F, Fut, R>(map_id: u32, f: F) -> R
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = R>,
-    {
-        wait_unlock(map_id).await;
-        let mut lock = LB_LOCK.write().await;
-        lock.insert(map_id);
-        let r = f().await;
-        lock.remove(&map_id);
-        r
-    }
-
-    async fn wait_unlock(map_id: u32) {
-        let i = Instant::now();
-        while i.elapsed() < WAIT_UNLOCK_TIMEOUT {
-            if !LB_LOCK.read().await.contains(&map_id) {
-                return;
+    let semaphore = {
+        let mut locks = LOCKS.lock().await;
+        match locks.get(&map_id).cloned() {
+            Some(semaphore) => semaphore,
+            None => {
+                let semaphore = Arc::new(Semaphore::new(1));
+                locks.insert(map_id, semaphore.clone());
+                semaphore
             }
-            tokio::task::yield_now().await;
         }
-        #[cfg(feature = "tracing")]
-        tracing::warn!(
-            "Waiting for unlock of {map_id} exceeded {WAIT_UNLOCK_TIMEOUT:?}, unlocking it"
-        );
-        LB_LOCK.write().await.remove(&map_id);
-        #[cfg(feature = "tracing")]
-        tracing::debug!("Unlocked {map_id}");
+    };
+
+    let ret = {
+        let _permit =
+            match tokio::time::timeout(WAIT_UNLOCK_TIMEOUT, semaphore.acquire_owned()).await {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    // Remove the entry if we timeout
+                    LOCKS.lock().await.remove(&map_id);
+                    None
+                }
+            };
+
+        f().await
+    };
+
+    let mut locks = LOCKS.lock().await;
+    if let Some(1) = locks.get(&map_id).map(Arc::strong_count) {
+        // Remove the entry if we're the last
+        locks.remove(&map_id);
     }
+
+    ret
 }
 
 /// Updates the rank of a player on a map.
@@ -117,7 +145,7 @@ pub async fn update_rank<C>(conn: &mut RedisConnection, ctx: C, time: i32) -> Re
 where
     C: HasMapId + HasPlayerId,
 {
-    let _: () = lock::within(ctx.get_map_id(), || {
+    let _: () = lock_within(ctx.get_map_id(), || {
         conn.zadd(
             map_key(ctx.get_map_id(), ctx.get_opt_event_edition()),
             ctx.get_player_id(),
@@ -161,7 +189,7 @@ where
 {
     let mysql_count: i64 = count_records_map(conn.mysql_conn, &ctx).await?;
 
-    lock::within(ctx.get_map_id(), || async move {
+    lock_within(ctx.get_map_id(), || async move {
         let key = map_key(ctx.get_map_id(), ctx.get_opt_event_edition());
 
         let redis_count: i64 = conn.redis_conn.zcount(key, "-inf", "+inf").await?;
@@ -252,7 +280,7 @@ pub async fn get_rank<C>(db: &mut DatabaseConnection<'_>, ctx: C, time: i32) -> 
 where
     C: HasMapId + HasPlayerId + Transactional,
 {
-    lock::within(ctx.get_map_id(), || async move {
+    lock_within(ctx.get_map_id(), || async move {
         let key = map_key(ctx.get_map_id(), ctx.get_opt_event_edition());
 
         // We update the Redis leaderboard if it doesn't have the requested `time`.
