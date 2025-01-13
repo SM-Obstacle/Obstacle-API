@@ -162,6 +162,11 @@ where
     let ctx = ctx.with_player(&player);
     let player_id = player.id;
 
+    // Return an error if the player was banned at the time.
+    if let Some(ban) = super::player::get_ban_during(db.mysql_conn, player_id, at).await? {
+        return Err(RecordsErrorKind::BannedPlayer(ban));
+    }
+
     // We check that the cps times are coherent to the final time
     if matches!(ctx.get_map().cps_number, Some(num) if num + 1 != params.cps.len() as u32)
         || params.cps.iter().sum::<i32>() != params.time

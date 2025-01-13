@@ -117,6 +117,23 @@ pub async fn update_player(
     Ok(())
 }
 
+pub async fn get_ban_during(
+    db: &mut sqlx::MySqlConnection,
+    player_id: u32,
+    at: chrono::NaiveDateTime,
+) -> RecordsResult<Option<Banishment>> {
+    sqlx::query_as(
+        "select * from banishments where player_id = ? and date_ban < ?
+            and (duration is null or date_ban + duration > ?)",
+    )
+    .bind(player_id)
+    .bind(at)
+    .bind(at)
+    .fetch_optional(db)
+    .await
+    .map_err(From::from)
+}
+
 pub async fn check_banned(
     db: &mut sqlx::MySqlConnection,
     player_id: u32,
