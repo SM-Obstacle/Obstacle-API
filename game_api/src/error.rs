@@ -1,7 +1,7 @@
 use std::fmt;
 
 use actix_web::HttpResponse;
-use records_lib::models;
+use records_lib::{models, NullableInteger};
 use tokio::sync::mpsc::error::SendError;
 use tracing_actix_web::RequestId;
 
@@ -176,13 +176,23 @@ impl actix_web::ResponseError for RecordsError {
             R::StateAlreadyReceived(_) => HttpResponse::BadRequest().json(self.to_err_res()),
             R::BannedPlayer(ban) => {
                 #[derive(serde::Serialize)]
+                struct Ban<'a> {
+                    #[serde(flatten)]
+                    ban: &'a models::Banishment,
+                    duration: NullableInteger,
+                }
+
+                #[derive(serde::Serialize)]
                 struct BannedPlayerResponse<'a> {
                     message: String,
-                    ban: &'a models::Banishment,
+                    ban: Ban<'a>,
                 }
                 HttpResponse::Forbidden().json(BannedPlayerResponse {
                     message: ban.to_string(),
-                    ban,
+                    ban: Ban {
+                        ban,
+                        duration: NullableInteger(ban.duration.map(|x| x as _)),
+                    },
                 })
             }
             R::AccessTokenErr(_) => HttpResponse::BadRequest().json(self.to_err_res()),

@@ -283,11 +283,6 @@ async fn inner_check_auth_for(
 ) -> RecordsResult<u32> {
     let conn = acquire!(db.with_api_err()?);
 
-    let stored_token: Option<String> = conn.redis_conn.get(&key).await.with_api_err()?;
-    if !matches!(stored_token, Some(t) if t == digest(token)) {
-        return Err(RecordsErrorKind::Unauthorized);
-    }
-
     let player = records_lib::must::have_player(
         conn.mysql_conn,
         Context::default().with_player_login(login),
@@ -297,6 +292,11 @@ async fn inner_check_auth_for(
     if let Some(ban) = player::check_banned(conn.mysql_conn, player.id).await? {
         return Err(RecordsErrorKind::BannedPlayer(ban));
     };
+
+    let stored_token: Option<String> = conn.redis_conn.get(&key).await.with_api_err()?;
+    if !matches!(stored_token, Some(t) if t == digest(token)) {
+        return Err(RecordsErrorKind::Unauthorized);
+    }
 
     let role: privilege::Flags = sqlx::query_scalar(
         "SELECT r.privileges
