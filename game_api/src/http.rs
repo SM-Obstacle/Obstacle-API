@@ -6,12 +6,13 @@ use std::fmt;
 use actix_web::web::{JsonConfig, Query};
 use actix_web::{web, HttpResponse, Scope};
 
-use records_lib::Database;
+use records_lib::context::{Context, Ctx};
+use records_lib::{acquire, Database};
 use serde::Serialize;
 use tracing_actix_web::RequestId;
 
 use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
-use crate::utils::{get_api_status, json, ApiStatus};
+use crate::utils::{self, get_api_status, json, ApiStatus};
 use crate::{FitRequestId as _, ModeVersion, RecordsResponse, RecordsResultExt, Res};
 use actix_web::Responder;
 
@@ -181,14 +182,20 @@ async fn overview(
     db: Res<Database>,
     Query(query): overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    let mut conn = db.acquire().await.fit(req_id)?;
+    let conn = acquire!(db.with_api_err().fit(req_id)?);
 
-    overview::overview(
-        req_id,
-        &db.mysql_pool,
-        &mut conn,
-        query.into_params(None),
-        Default::default(),
-    )
-    .await
+    let ctx = Context::default()
+        .with_pool(db.0)
+        .with_player_login(&query.login)
+        .with_map_uid(&query.map_uid);
+
+    let map = records_lib::must::have_map(conn.mysql_conn, &ctx)
+        .await
+        .with_api_err()
+        .fit(req_id)?;
+
+    let res = overview::overview(conn, ctx.with_map(&map))
+        .await
+        .fit(req_id)?;
+    utils::json(res)
 }

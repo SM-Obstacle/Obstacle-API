@@ -1,108 +1,139 @@
-//! This is a tiny module which contains utility functions used to update the maps leaderboards
-//! in Redis.
+//! Module which contains utility functions used to update maps leaderboards and get players ranks.
 //!
-//! ## Leaderboards state
+//! When retrieving the rank of a player on a map, or updating its leaderboard, this module uses
+//! a lock system.
 //!
-//! You should always remember that the state of the MariaDB and the Redis leaderboards are not
-//! always the same. The problem is that we can't flag it because they could be different
-//! for different reasons:
+//! The Obstacle API uses the standard competition ranking system (1224) to order the leaderboards
+//! of the maps. However, the server we use to store the maps leaderboards, Redis, doesn't support
+//! the standard competition ranking system, but only the ordinal ranking (1234).
 //!
-//! - Records migration
-//! - Redis that failed to update the score of a player on a map
-//! - The associated Redis key has been deleted
-//! - etc.
+//! Giving a map and a player we want to get the rank of, the alternative is to retrieve the rank
+//! of the first player that has the same time. This requires executing many commands to
+//! the Redis server:
 //!
-//! We mainly use the Redis leaderboard to get the rank of a player on a map. Thus, we should take
-//! care in each operation and update it if anything goes wrong.
+//! 1. `ZRANGEBYSCORE` to get the sorted list of the players having the same time
+//! 2. `ZRANK` to get the rank of the first player of this list
 //!
-//! Let's say we have a map with this leaderboard in MariaDB:
+//! However, because Redis doesn't support transactional mode[^note], there are cases where
+//! the leaderboard of a map is being both read and updated at the same time by many different API
+//! operations. For example, when a player finishes a map, the leaderboard is updated ; at the same
+//! time, another request may be reading the same leaderboard.
 //!
-//! | Rank | Player | Time |
-//! | ----- | ----- | ----- |
-//! | 1 | Player1 | 01:50.33 |
-//! | 2 | Player2 | 01:56.42 |
-//! | 2 | Player3 | 01:56.42 |
-//! | 4 | Player4 | 02:09.25 |
+//! Imagine a request A that needs to get the rank of a player on a map, and a request B that updates
+//! the same leaderboard. Both requests run at the same time, so the time of the player in Redis on
+//! this map can be updated *after* the request A started, but *before* the latter retrieves
+//! his rank. Thus, the request A will retrieve the rank of a time that isn't in the Redis
+//! leaderboard, because it has been previously updated to a newer time.
 //!
-//! As you can see, we're using the competitive ranking (1224). However, the Redis ranking system
-//! of ZSETs isn't using this ranking system. The technique is to get the score of the player
-//! we want, then get a list of the players with the same score, to get the rank of the first player.
+//! The solution of replacing the player's time in the leaderboard by the time we're getting
+//! the rank of, doesn't work. The leaderboard might be updated once again right after by
+//! the request B[^note2].
 //!
-//! For instance, to get the rank of Player3, we get his score: 01:56.42. Then, we get all
-//! the players with the same score, which returns the list: `[Player2, Player3]` . Then, we get
-//! the rank of the first player, Player2, which is 2.
+//! The only solution is to make a leaderboard lock system. If you need to read the leaderboard of
+//! a map, you have to lock it, to avoid stale read issues ; and To lock a leaderboard, you need
+//! to wait for any other pending lock.
 //!
-//! This technique works well if the two leaderboards, from MariaDB and Redis,
-//! are **in the same state**. But sometimes, it's not the case. Let's say the Redis leaderboard is:
+//! You may think that these are very rare cases, but they actually happen quite often. Especially
+//! with the staggered requests system, and finish requests that can be numerous if the player
+//! had a lot of cached requests. This causes a lot of updates of the same map leaderboard.
+//! Many finish requests can also be sent during a cup, for example LoL cups, Choco cups, Campaigns,
+//! etc.
 //!
-//! | Rank | Player | Time |
-//! | ----- | ----- | ----- |
-//! | 1 | Player1 | 01:50.33 |
-//! | 2 | Player2 | 01:56.42 |
-//! | 3 | Player4 | 02:09.25 |
-//! | 4 | Player3 | 03:13.87 |
+//! Any operation on a map's leaderboard must be done using functions defined in the [`ranks`](super)
+//! module. This minimizes inconsistency issues by locking the leaderboards for each operation.
 //!
-//! As you can see, the true rank of Player3 is still 2nd, but with Redis, he would be 4th.
-//! If, at the moment, we already know the real time of Player3, which is 01:56.42, we can make
-//! a mechanism that checks the time of the player, and updates the Redis leaderboard if they're different.
-//! But if we don't already know his time, then we can't tell if the returned rank from Redis
-//! is valid or not.
+//! However, we might still do reads/updates to the leaderboards without passing by this module, and
+//! these can be done when a leaderboard is actually locked. We consider this case very rare.
+//! Otherwise, to fix it, we would have to emulate the isolation part of a transactional mode in
+//! any DBMS, so that all the operations on a leaderboard to get the rank of a player are made
+//! on the same version of it ; and to emulate this, we have to clone the leaderboard
+//! for each request, which is very cumbersome and slow. Thus, we ignore this issue.
 //!
-//! This is why the [`get_rank`] function requires the time of the player.
+//! [^note]: Redis actually supports transactional mode, but the way it works is by queuing the
+//! commands ; so we can't use it because we want to use the result of the previous commands before
+//! running the next ones.
+//! [^note2]: We update the player's time in the leaderboard anyway if the one we're getting the
+//! rank of is lower than the one stored in the leaderboard, to keep the Redis leaderboard updated,
+//! and minimize inconsistencies between Redis and MariaDB.
 
 use crate::{
+    context::{HasMapId, HasPlayerId, Transactional},
     error::{RecordsError, RecordsResult},
-    event::OptEvent,
     redis_key::{map_key, MapKey},
     DatabaseConnection, RedisConnection,
 };
 use deadpool_redis::redis::{self, AsyncCommands};
-use futures::{Stream, TryStreamExt};
+use futures::TryStreamExt;
 use itertools::{EitherOrBoth, Itertools};
-use sqlx::{pool::PoolConnection, MySql, MySqlConnection};
-use std::collections::HashSet;
-use std::future::Future;
-use std::sync::LazyLock;
-use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 
-mod lock {
-    use super::*;
+use std::{
+    collections::HashMap,
+    future::Future,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
+use tokio::sync::{Mutex, Semaphore};
 
+/// Wraps the execution of the provided closure to guarantee that it is executed by one task
+/// at a time, based on the provided ID.
+///
+/// This is mainly used to avoid stale-read issues when processing leaderboards in Redis.
+///
+/// If many tasks wrap their procedure for the same ID, it is guaranteed that only one of them
+/// will execute at a time, implying the other tasks to wait before executing the next one.
+///
+/// Therefore, this function might block (asynchronously), with a timeout of 10 seconds.
+pub async fn lock_within<F, Fut, R>(map_id: u32, f: F) -> R
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = R>,
+{
     const WAIT_UNLOCK_TIMEOUT: Duration = Duration::from_secs(10);
 
-    static LB_LOCK: LazyLock<RwLock<HashSet<u32>>> = LazyLock::new(Default::default);
+    /// Contains the locked IDs.
+    ///
+    /// Any entry in the hash map doesn't guarantee that the ID in question is actually locked.
+    /// It is locked if and only if the associated semaphore is acquired. This is so that
+    /// we don't remove the entry from the hash map then reinsert it again if another task is running
+    /// for the same ID. The entry is removed if the associated semaphore is referenced only once.
+    ///
+    /// We use a mutex and a semaphore because they seem to be the most efficient compared to
+    /// a `RwLock` instead of the `Mutex` or a `Mutex<()>` instead of the `Semaphore`.
+    static LOCKS: LazyLock<Mutex<HashMap<u32, Arc<Semaphore>>>> = LazyLock::new(Default::default);
 
-    pub(super) async fn within<F, Fut, R>(map_id: u32, f: F) -> R
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = R>,
-    {
-        wait_unlock(map_id).await;
-        LB_LOCK.write().await.insert(map_id);
-        let r = f().await;
-        LB_LOCK.write().await.remove(&map_id);
-        r
-    }
-
-    async fn wait_unlock(map_id: u32) {
-        let i = Instant::now();
-
-        while i.elapsed() < WAIT_UNLOCK_TIMEOUT {
-            if !LB_LOCK.read().await.contains(&map_id) {
-                return;
+    let semaphore = {
+        let mut locks = LOCKS.lock().await;
+        match locks.get(&map_id).cloned() {
+            Some(semaphore) => semaphore,
+            None => {
+                let semaphore = Arc::new(Semaphore::new(1));
+                locks.insert(map_id, semaphore.clone());
+                semaphore
             }
-            tokio::task::yield_now().await;
         }
+    };
 
-        #[cfg(feature = "tracing")]
-        tracing::warn!(
-            "Waiting for unlock of {map_id} exceeded {WAIT_UNLOCK_TIMEOUT:?}, unlocking it"
-        );
-        LB_LOCK.write().await.remove(&map_id);
-        #[cfg(feature = "tracing")]
-        tracing::debug!("Unlocked {map_id}");
+    let ret = {
+        let _permit =
+            match tokio::time::timeout(WAIT_UNLOCK_TIMEOUT, semaphore.acquire_owned()).await {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    // Remove the entry if we timeout
+                    LOCKS.lock().await.remove(&map_id);
+                    None
+                }
+            };
+
+        f().await
+    };
+
+    let mut locks = LOCKS.lock().await;
+    if let Some(1) = locks.get(&map_id).map(Arc::strong_count) {
+        // Remove the entry if we're the last
+        locks.remove(&map_id);
     }
+
+    ret
 }
 
 /// Updates the rank of a player on a map.
@@ -110,54 +141,40 @@ mod lock {
 /// This is roughly just a `ZADD` command for the Redis leaderboard of the map.
 /// The difference is that it locks the leaderboard during the operation so that any other request
 /// that might access the ranks of the leaderboard must wait for it to finish.
-///
-/// # Arguments
-///
-/// * `redis_conn`: a connection to the Redis server
-/// * `map_id`: The ID of the map
-/// * `player_id`: The ID of the player
-/// * `time`: The time of the player on this map
-/// * `event`: The event context if provided
-pub async fn update_rank(
-    redis_conn: &mut RedisConnection,
-    map_id: u32,
-    player_id: u32,
-    time: i32,
-    event: OptEvent<'_, '_>,
-) -> RecordsResult<()> {
-    let _: () = lock::within(map_id, || async {
-        redis_conn
-            .zadd(map_key(map_id, event), player_id, time)
-            .await
+pub async fn update_rank<C>(conn: &mut RedisConnection, ctx: C, time: i32) -> RecordsResult<()>
+where
+    C: HasMapId + HasPlayerId,
+{
+    let _: () = lock_within(ctx.get_map_id(), || {
+        conn.zadd(
+            map_key(ctx.get_map_id(), ctx.get_opt_event_edition()),
+            ctx.get_player_id(),
+            time,
+        )
     })
     .await?;
 
     Ok(())
 }
 
-async fn count_records_map(
-    db: &mut MySqlConnection,
-    map_id: u32,
-    event: OptEvent<'_, '_>,
-) -> RecordsResult<i64> {
-    let (join_event, and_event) = event.get_join();
+async fn count_records_map<C>(conn: &mut sqlx::MySqlConnection, ctx: C) -> RecordsResult<i64>
+where
+    C: HasMapId + Transactional,
+{
+    let builder = ctx.sql_frag_builder();
 
-    let q = &format!(
-        "SELECT COUNT(*)
-        FROM (SELECT r.* FROM records r {join_event}
-        WHERE map_id = ? {and_event}
-        GROUP BY record_player_id) r",
-    );
+    let mut query = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM (SELECT r.* FROM records r ");
+    builder
+        .push_event_join(&mut query, "eer", "r")
+        .push(" where map_id = ")
+        .push_bind(ctx.get_map_id())
+        .push(" ");
+    let query = builder
+        .push_event_filter(&mut query, "eer")
+        .push(" group by record_player_id) r")
+        .build_query_scalar();
 
-    let q = sqlx::query_scalar(q).bind(map_id);
-
-    let q = if let Some((ev, ed)) = event.0 {
-        q.bind(ev.id).bind(ed.id)
-    } else {
-        q
-    };
-
-    q.fetch_one(db).await.map_err(Into::into)
+    query.fetch_one(conn).await.map_err(Into::into)
 }
 
 /// Checks if the Redis leaderboard for the map with the provided ID has a different count
@@ -166,110 +183,88 @@ async fn count_records_map(
 /// This is a check to avoid differences between the MariaDB and the Redis leaderboards.
 ///
 /// It returns the number of records in the map.
-pub async fn update_leaderboard(
-    db: &mut DatabaseConnection,
-    map_id: u32,
-    event: OptEvent<'_, '_>,
-) -> RecordsResult<i64> {
-    let redis_count: i64 = db
-        .redis_conn
-        .zcount(map_key(map_id, event), "-inf", "+inf")
-        .await?;
-    let mysql_count: i64 = count_records_map(&mut db.mysql_conn, map_id, event).await?;
+pub async fn update_leaderboard<C>(conn: &mut DatabaseConnection<'_>, ctx: C) -> RecordsResult<i64>
+where
+    C: HasMapId + Transactional,
+{
+    let mysql_count: i64 = count_records_map(conn.mysql_conn, &ctx).await?;
 
-    if redis_count != mysql_count {
-        force_update(map_id, event, db).await?;
-    }
+    lock_within(ctx.get_map_id(), || async move {
+        let key = map_key(ctx.get_map_id(), ctx.get_opt_event_edition());
+
+        let redis_count: i64 = conn.redis_conn.zcount(key, "-inf", "+inf").await?;
+        if redis_count != mysql_count {
+            force_update_locked(conn, ctx).await?;
+        }
+
+        RecordsResult::Ok(())
+    })
+    .await?;
 
     Ok(mysql_count)
 }
 
-fn get_mariadb_lb_query(event: OptEvent<'_, '_>) -> String {
-    let (join_event, and_event) = event.get_join();
+fn get_mariadb_lb_query<C: HasMapId>(ctx: C) -> sqlx::QueryBuilder<'static, sqlx::MySql> {
+    let builder = ctx.sql_frag_builder();
 
-    format!(
-        "SELECT record_player_id, min(time) AS time
-            FROM records r
-            {join_event}
-                WHERE map_id = ?
-                    {and_event}
-                GROUP BY record_player_id
-                ORDER BY time, record_date ASC",
-    )
+    let mut q = sqlx::QueryBuilder::new(
+        "select record_player_id, min(time) as time \
+        from records r ",
+    );
+
+    builder
+        .push_event_join(&mut q, "eer", "r")
+        .push(" where map_id = ")
+        .push_bind(ctx.get_map_id())
+        .push(" ");
+    builder
+        .push_event_filter(&mut q, "eer")
+        .push(" group by record_player_id order by time, record_player_id asc");
+
+    q
 }
 
-fn get_mariadb_lb<'a>(
-    db: &'a mut PoolConnection<MySql>,
-    event: OptEvent<'_, '_>,
-    map_id: u32,
-    query: &'a str,
-) -> impl Stream<Item = sqlx::Result<(u32, i32)>> + 'a {
-    let mut query = sqlx::query_as(query).bind(map_id);
-    if let Some((event, edition)) = event.0 {
-        query = query.bind(event.id).bind(edition.id);
-    }
-
-    query.fetch(&mut **db)
-}
-
-/// Updates the Redis leaderboard for a map.
-///
-/// This function deletes the Redis key and reinserts all the records from the MariaDB database.
-/// All this is done in a single transaction.
-pub async fn force_update(
-    map_id: u32,
-    event: OptEvent<'_, '_>,
-    db: &mut DatabaseConnection,
+async fn force_update_locked<C: HasMapId>(
+    conn: &mut DatabaseConnection<'_>,
+    ctx: C,
 ) -> RecordsResult<()> {
     let mut pipe = redis::pipe();
     let pipe = pipe.atomic();
 
-    let key = map_key(map_id, event);
+    let key = map_key(ctx.get_map_id(), ctx.get_opt_event_edition()).to_string();
 
-    lock::within(map_id, || async {
-        pipe.del(&key);
+    pipe.del(&key);
 
-        get_mariadb_lb(
-            &mut db.mysql_conn,
-            event,
-            map_id,
-            &get_mariadb_lb_query(event),
-        )
+    get_mariadb_lb_query(&ctx)
+        .build_query_as()
+        .fetch(&mut **conn.mysql_conn)
         .map_ok(|(player_id, time): (u32, i32)| {
             pipe.zadd(&key, player_id, time);
         })
         .try_collect::<()>()
         .await?;
 
-        let _: () = pipe.query_async(&mut db.redis_conn).await?;
-
-        RecordsResult::Ok(())
-    })
-    .await?;
+    let _: () = pipe.query_async(conn.redis_conn).await?;
 
     Ok(())
 }
 
 async fn get_rank_impl(
     redis_conn: &mut RedisConnection,
-    map_id: u32,
     key: &MapKey<'_>,
     time: i32,
 ) -> RecordsResult<Option<i32>> {
-    lock::within(map_id, || async {
-        let player_ids: Vec<u32> = redis_conn
-            .zrangebyscore_limit(key, time, time, 0, 1)
-            .await?;
+    let player_ids: Vec<u32> = redis_conn
+        .zrangebyscore_limit(key, time, time, 0, 1)
+        .await?;
 
-        match player_ids.first() {
-            Some(id) => {
-                let rank: Option<i32> = redis_conn.zrank(key, *id).await?;
-                Ok(rank.map(|rank| rank + 1))
-            }
-            None => Ok(None),
+    match player_ids.first() {
+        Some(id) => {
+            let rank: Option<i32> = redis_conn.zrank(key, *id).await?;
+            Ok(rank.map(|rank| rank + 1))
         }
-    })
-    .await
+        None => Ok(None),
+    }
 }
 
 /// Gets the rank of a player in a map, or fully updates its leaderboard if not found.
@@ -281,38 +276,49 @@ async fn get_rank_impl(
 /// The ranking type is the standard competition ranking (1224).
 ///
 /// See the [module documentation](super) for more information.
-pub async fn get_rank(
-    db: &mut DatabaseConnection,
-    map_id: u32,
-    player_id: u32,
-    time: i32,
-    event: OptEvent<'_, '_>,
-) -> RecordsResult<i32> {
-    let key = map_key(map_id, event);
+pub async fn get_rank<C>(db: &mut DatabaseConnection<'_>, ctx: C, time: i32) -> RecordsResult<i32>
+where
+    C: HasMapId + HasPlayerId + Transactional,
+{
+    lock_within(ctx.get_map_id(), || async move {
+        let key = map_key(ctx.get_map_id(), ctx.get_opt_event_edition());
 
-    // Get the time of the player saved in Redis and update it if inconsistent
-    let score: Option<i32> = db.redis_conn.zscore(&key, player_id).await?;
-    if score.is_none_or(|t| t != time) {
-        force_update(map_id, event, db).await?;
-    }
+        // We update the Redis leaderboard if it doesn't have the requested `time`.
+        let score: Option<i32> = db.redis_conn.zscore(&key, ctx.get_player_id()).await?;
+        // We keep track of the previous Redis time if it's lower than ours.
+        let newest_time = match score {
+            Some(t) if t == time => None,
+            other => {
+                force_update_locked(db, &ctx).await?;
+                other.filter(|t| *t < time)
+            }
+        };
 
-    match get_rank_impl(&mut db.redis_conn, map_id, &key, time).await? {
-        Some(r) => Ok(r),
-        None => Err(get_rank_failed(db, player_id, time, event, map_id).await?),
-    }
+        match get_rank_impl(db.redis_conn, &key, time).await? {
+            Some(r) => {
+                if let Some(time) = newest_time {
+                    let _: () = db.redis_conn.zadd(key, ctx.get_player_id(), time).await?;
+                }
+                Ok(r)
+            }
+            None => Err(get_rank_failed(db, ctx, time, score).await?),
+        }
+    })
+    .await
 }
 
-/// Panics with a clear message of the leaderboards differences between MariaDB and Redis.
-///
-/// The `O` generic parameter is used to return the same type as the [`get_rank`] function.
+/// Returns an error and prints a clear message of the leaderboards differences between
+/// MariaDB and Redis.
 #[cold]
-async fn get_rank_failed(
-    db: &mut DatabaseConnection,
-    player_id: u32,
+async fn get_rank_failed<C>(
+    db: &mut DatabaseConnection<'_>,
+    ctx: C,
     time: i32,
-    event: OptEvent<'_, '_>,
-    map_id: u32,
-) -> RecordsResult<RecordsError> {
+    tested_time: Option<i32>,
+) -> RecordsResult<RecordsError>
+where
+    C: HasPlayerId + HasMapId,
+{
     use std::fmt::Write as _;
 
     fn num_digits<N>(n: N) -> usize
@@ -322,17 +328,17 @@ async fn get_rank_failed(
         (f64::from(n).log10() + 1.) as _
     }
 
-    let key = &map_key(map_id, event);
+    let event = ctx.get_opt_event_edition();
+    let player_id = ctx.get_player_id();
+    let map_id = ctx.get_map_id();
+
+    let key = &map_key(ctx.get_map_id(), event);
     let redis_lb: Vec<i64> = db.redis_conn.zrange_withscores(key, 0, -1).await?;
 
-    let mariadb_lb = get_mariadb_lb(
-        &mut db.mysql_conn,
-        event,
-        map_id,
-        &get_mariadb_lb_query(event),
-    )
-    .try_collect::<Vec<_>>()
-    .await?;
+    let mariadb_lb = get_mariadb_lb_query(&ctx)
+        .build_query_as::<(u32, i32)>()
+        .fetch_all(&mut **db.mysql_conn)
+        .await?;
 
     let lb = redis_lb
         .chunks_exact(2)
@@ -373,10 +379,15 @@ async fn get_rank_failed(
                     "{c}{rpid:w4$} | {rtime:w4$} || {mpid:w4$} | {mtime:w4$}{c_end}",
                     c = if rpid != mpid || rtime != mtime {
                         "\x1b[93m"
+                    } else if player_id == rpid && player_id == mpid {
+                        "\x1b[34m"
                     } else {
                         ""
                     },
-                    c_end = if rpid != mpid || rtime != mtime {
+                    c_end = if rpid != mpid
+                        || rtime != mtime
+                        || (player_id == rpid && player_id == mpid)
+                    {
                         "\x1b[0m"
                     } else {
                         ""
@@ -403,7 +414,8 @@ async fn get_rank_failed(
         }
     }
 
-    tracing::error!("missing player rank ({player_id} on map {map_id} with time {time})\n{msg}");
+    #[cfg(feature = "tracing")]
+    tracing::error!("missing player rank ({player_id} on map {map_id} with time {time}); tested time: {tested_time:?}\n{msg}");
 
     Ok(RecordsError::Internal)
 }

@@ -1,15 +1,13 @@
 use std::{borrow::Cow, collections::HashMap, iter::repeat, sync::Arc};
 
-use async_graphql::{
-    dataloader::{DataLoader, Loader},
-    Context,
-};
+use async_graphql::dataloader::{DataLoader, Loader};
 use deadpool_redis::redis::AsyncCommands;
 use futures::{StreamExt as _, TryStreamExt};
 use sqlx::{mysql, FromRow, MySqlPool, Row};
 
 use records_lib::{
-    event::{self, EventMap, MedalTimes, OptEvent},
+    context::{Context, Ctx},
+    event::{self, EventMap, MedalTimes},
     mappack::AnyMappackId,
     models::{self, EventCategory},
     must,
@@ -49,7 +47,7 @@ impl Event {
         self.inner.cooldown
     }
 
-    async fn admins(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Player>> {
+    async fn admins(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<Player>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let q = sqlx::query_as(
             "SELECT * FROM players
@@ -65,7 +63,10 @@ impl Event {
         Ok(q)
     }
 
-    async fn categories(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<EventCategory>> {
+    async fn categories(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<EventCategory>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let q = sqlx::query_as(
             "SELECT * FROM event_category
@@ -80,7 +81,10 @@ impl Event {
         Ok(q)
     }
 
-    async fn editions(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<EventEdition>> {
+    async fn editions(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<EventEdition>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
 
@@ -94,7 +98,10 @@ impl Event {
             .collect())
     }
 
-    async fn last_edition(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<EventEdition>> {
+    async fn last_edition(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<EventEdition>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let edition: Option<models::EventEdition> = sqlx::query_as(
             "select ee.* from event_edition ee
@@ -116,7 +123,7 @@ impl Event {
 
     async fn edition(
         &self,
-        ctx: &Context<'_>,
+        ctx: &async_graphql::Context<'_>,
         edition_id: u32,
     ) -> async_graphql::Result<Option<EventEdition>> {
         let db = ctx.data_unchecked::<MySqlPool>();
@@ -251,7 +258,7 @@ impl EventEditionMapExt<'_> {
         &self.inner
     }
 
-    async fn last_rank(&self, ctx: &Context<'_>) -> async_graphql::Result<i32> {
+    async fn last_rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i32> {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
         let last_rank = redis_conn
@@ -266,13 +273,17 @@ impl EventEditionMapExt<'_> {
         Ok(last_rank)
     }
 
-    async fn medal_times(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<MedalTimes>> {
+    async fn medal_times(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<MedalTimes>> {
         let db = ctx.data_unchecked::<MySqlPool>();
+        let mut db = db.acquire().await?;
         let medal_times = event::get_medal_times_of(
-            db,
-            self.edition_player.edition.inner.event_id,
-            self.edition_player.edition.inner.id,
-            self.inner.inner.id,
+            &mut db,
+            Context::default()
+                .with_edition(&self.edition_player.edition.inner)
+                .with_map_id(self.inner.inner.id),
         )
         .await?;
         Ok(medal_times)
@@ -281,7 +292,7 @@ impl EventEditionMapExt<'_> {
 
 #[async_graphql::Object]
 impl EventEditionPlayerRank<'_> {
-    async fn rank(&self, ctx: &Context<'_>) -> async_graphql::Result<usize> {
+    async fn rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
         let rank = redis_conn
@@ -303,10 +314,17 @@ impl EventEditionPlayerRank<'_> {
         self.record_time
     }
 
-    async fn map(&self, ctx: &Context<'_>) -> async_graphql::Result<EventEditionMapExt<'_>> {
+    async fn map(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<EventEditionMapExt<'_>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
-        let map = must::have_map(&mut mysql_conn, &self.map_game_id).await?;
+        let map = must::have_map(
+            &mut mysql_conn,
+            Context::default().with_map_uid(&self.map_game_id),
+        )
+        .await?;
         Ok(EventEditionMapExt {
             inner: map.into(),
             edition_player: self.edition_player,
@@ -328,7 +346,7 @@ impl EventEditionPlayerCategorizedRank<'_> {
         self.category.hex_color.as_deref()
     }
 
-    async fn nb_maps(&self, ctx: &Context<'_>) -> async_graphql::Result<i64> {
+    async fn nb_maps(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i64> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let edition = &self.player.edition.inner;
 
@@ -347,7 +365,10 @@ impl EventEditionPlayerCategorizedRank<'_> {
         Ok(n)
     }
 
-    async fn ranks(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<EventEditionPlayerRank>> {
+    async fn ranks(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<EventEditionPlayerRank>> {
         let db = ctx.data_unchecked::<MySqlPool>();
 
         if self.category.id == 0 {
@@ -411,7 +432,7 @@ impl EventEditionPlayer<'_> {
         self.player.clone().into()
     }
 
-    async fn rank(&self, ctx: &Context<'_>) -> async_graphql::Result<usize> {
+    async fn rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
         mappack::player_rank(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
@@ -420,7 +441,7 @@ impl EventEditionPlayer<'_> {
         .await
     }
 
-    async fn rank_avg(&self, ctx: &Context<'_>) -> async_graphql::Result<f64> {
+    async fn rank_avg(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<f64> {
         mappack::player_rank_avg(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
@@ -429,7 +450,7 @@ impl EventEditionPlayer<'_> {
         .await
     }
 
-    async fn map_finished(&self, ctx: &Context<'_>) -> async_graphql::Result<usize> {
+    async fn map_finished(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
         mappack::player_map_finished(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
@@ -438,7 +459,7 @@ impl EventEditionPlayer<'_> {
         .await
     }
 
-    async fn worst_rank(&self, ctx: &Context<'_>) -> async_graphql::Result<i32> {
+    async fn worst_rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i32> {
         mappack::player_worst_rank(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
@@ -449,7 +470,7 @@ impl EventEditionPlayer<'_> {
 
     async fn categorized_ranks(
         &self,
-        ctx: &Context<'_>,
+        ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<EventEditionPlayerCategorizedRank>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
@@ -480,7 +501,7 @@ impl EventEditionPlayer<'_> {
 
     async fn unfinished_maps(
         &self,
-        ctx: &Context<'_>,
+        ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<EventEditionMapExt<'_>>> {
         let db = ctx.data_unchecked::<MySqlPool>();
 
@@ -515,7 +536,10 @@ impl EventEditionMap<'_> {
         !(self.edition.inner.save_non_event_record && self.edition.inner.non_original_maps)
     }
 
-    async fn original_map(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<Map>> {
+    async fn original_map(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<Map>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
         let mut conn = db.acquire().await?;
@@ -545,19 +569,17 @@ impl EventEditionMap<'_> {
 
     async fn records(
         &self,
-        ctx: &Context<'_>,
+        ctx: &async_graphql::Context<'_>,
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         self.map
             .get_records(
                 ctx,
+                Context::default()
+                    .with_event_edition(&self.edition.event.inner, &self.edition.inner),
                 rank_sort_by,
                 date_sort_by,
-                match self.edition.event {
-                    Cow::Borrowed(event) => OptEvent::new(&event.inner, &self.edition.inner),
-                    Cow::Owned(ref event) => OptEvent::new(&event.inner, &self.edition.inner),
-                },
             )
             .await
     }
@@ -578,7 +600,7 @@ impl EventEdition<'_> {
         })
     }
 
-    async fn admins(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Player>> {
+    async fn admins(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<Player>> {
         let mut db = ctx.data_unchecked::<MySqlPool>().acquire().await?;
         let a = event::get_admins_of(&mut db, self.inner.event_id, self.inner.id)
             .map_ok(From::from)
@@ -613,12 +635,16 @@ impl EventEdition<'_> {
 
     async fn player(
         &self,
-        ctx: &Context<'_>,
+        ctx: &async_graphql::Context<'_>,
         login: String,
     ) -> async_graphql::Result<EventEditionPlayer<'_>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
-        let player = must::have_player(&mut mysql_conn, &login).await?;
+        let player = must::have_player(
+            &mut mysql_conn,
+            Context::default().with_player_login(&login),
+        )
+        .await?;
         Ok(EventEditionPlayer {
             edition: self,
             player,
@@ -627,7 +653,7 @@ impl EventEdition<'_> {
 
     async fn map(
         &self,
-        ctx: &Context<'_>,
+        ctx: &async_graphql::Context<'_>,
         game_id: String,
     ) -> async_graphql::Result<EventEditionMap<'_>> {
         let db = ctx.data_unchecked::<MySqlPool>();
@@ -635,9 +661,9 @@ impl EventEdition<'_> {
 
         let EventMap { map, .. } = event::get_map_in_edition(
             &mut mysql_conn,
-            &game_id,
-            self.inner.event_id,
-            self.inner.id,
+            Context::default()
+                .with_map_uid(&game_id)
+                .with_edition(&self.inner),
         )
         .await?
         .ok_or_else(|| async_graphql::Error::new("Map not found in this edition"))?;
@@ -648,7 +674,10 @@ impl EventEdition<'_> {
         })
     }
 
-    async fn categories(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<EventCategory>> {
+    async fn categories(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<EventCategory>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let q = sqlx::query_as(
             "SELECT * FROM event_category

@@ -1,12 +1,10 @@
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
-use futures::TryStreamExt;
-use itertools::Itertools;
-use records_lib::{event::OptEvent, models, player, ranks, DatabaseConnection, NullableInteger};
+use records_lib::{
+    context::{HasMap, HasMapId, HasPlayerId, HasPlayerLogin, ReadWrite, Transactional},
+    models, ranks, DatabaseConnection, MySqlConnection, NullableInteger,
+};
 use serde::{Deserialize, Serialize};
-use sqlx::Connection;
-
-use super::{event, map::MapParam};
 
 #[derive(Deserialize, Debug, Clone)]
 #[cfg_attr(test, derive(Serialize))]
@@ -17,11 +15,6 @@ pub struct InsertRecordParams {
     pub cps: Vec<i32>,
 }
 
-pub struct FinishedParams<'a> {
-    pub rest: InsertRecordParams,
-    pub map: MapParam<'a>,
-}
-
 #[derive(Deserialize, Debug)]
 #[cfg_attr(test, derive(Serialize))]
 pub struct HasFinishedBody {
@@ -30,99 +23,94 @@ pub struct HasFinishedBody {
     pub rest: InsertRecordParams,
 }
 
-impl HasFinishedBody {
-    #[inline]
-    pub fn into_params(self, map: Option<&models::Map>) -> FinishedParams<'_> {
-        FinishedParams {
-            rest: self.rest,
-            map: MapParam::from_map(map, self.map_uid),
-        }
-    }
-}
-
 pub type PlayerFinishedBody = Json<HasFinishedBody>;
 
 #[derive(Serialize)]
 pub struct HasFinishedResponse {
     has_improved: bool,
-    login: String,
     old: i32,
     new: i32,
     current_rank: i32,
     old_rank: NullableInteger,
 }
 
-async fn send_query(
-    db: &mut sqlx::MySqlConnection,
-    map_id: u32,
-    player_id: u32,
-    body: InsertRecordParams,
+struct SendQueryParam<'a> {
+    body: &'a InsertRecordParams,
     event_record_id: Option<u32>,
     at: chrono::NaiveDateTime,
-) -> sqlx::Result<u32> {
+}
+
+async fn send_query<C>(
+    db: MySqlConnection<'_>,
+    ctx: C,
+    SendQueryParam {
+        body,
+        event_record_id,
+        at,
+    }: SendQueryParam<'_>,
+) -> sqlx::Result<u32>
+where
+    C: HasPlayerId + HasMapId,
+{
     let record_id: u32 = sqlx::query_scalar(
         "INSERT INTO records (record_player_id, map_id, time, respawn_count, record_date, flags, event_record_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING record_id",
     )
-    .bind(player_id)
-    .bind(map_id)
+    .bind(ctx.get_player_id())
+    .bind(ctx.get_map_id())
     .bind(body.time)
     .bind(body.respawn_count)
     .bind(at)
     .bind(body.flags)
     .bind(event_record_id)
-    .fetch_one(&mut *db)
+    .fetch_one(&mut **db)
     .await?;
 
-    let cps_times = body.cps.iter().enumerate().format_with(", ", |(i, t), f| {
-        f(&format_args!("({i}, {map_id}, {record_id}, {t})"))
-    });
-
-    sqlx::query(
-        format!(
-            "INSERT INTO checkpoint_times (cp_num, map_id, record_id, time)
-                        VALUES {cps_times}"
-        )
-        .as_str(),
-    )
-    .execute(db)
-    .await?;
+    let mut query =
+        sqlx::QueryBuilder::new("INSERT INTO checkpoint_times (cp_num, map_id, record_id, time) ");
+    query
+        .push_values(body.cps.iter().enumerate(), |mut b, (i, cptime)| {
+            b.push_bind(i as u32)
+                .push_bind(ctx.get_map_id())
+                .push_bind(record_id)
+                .push_bind(cptime);
+        })
+        .build()
+        .execute(&mut **db)
+        .await?;
 
     Ok(record_id)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn insert_record(
-    db: &mut DatabaseConnection,
-    map_id: u32,
-    player_id: u32,
-    body: InsertRecordParams,
-    event: OptEvent<'_, '_>,
+pub(super) async fn insert_record<C>(
+    db: &mut DatabaseConnection<'_>,
+    ctx: C,
+    body: &InsertRecordParams,
     event_record_id: Option<u32>,
     at: chrono::NaiveDateTime,
     update_redis_lb: bool,
-) -> RecordsResult<u32> {
-    ranks::update_leaderboard(db, map_id, event).await?;
+) -> RecordsResult<u32>
+where
+    C: HasMapId + HasPlayerId + Transactional<Mode = ReadWrite>,
+{
+    ranks::update_leaderboard(db, &ctx).await?;
 
     if update_redis_lb {
-        ranks::update_rank(&mut db.redis_conn, map_id, player_id, body.time, event).await?;
+        ranks::update_rank(db.redis_conn, &ctx, body.time).await?;
     }
 
     // FIXME: find a way to retry deadlock errors **without loops**
-    let record_id = db
-        .mysql_conn
-        .transaction(|txn| {
-            Box::pin(send_query(
-                txn,
-                map_id,
-                player_id,
-                body.clone(),
-                event_record_id,
-                at,
-            ))
-        })
-        .await
-        .with_api_err()?;
+    let record_id = send_query(
+        db.mysql_conn,
+        ctx,
+        SendQueryParam {
+            body,
+            event_record_id,
+            at,
+        },
+    )
+    .await
+    .with_api_err()?;
 
     Ok(record_id)
 }
@@ -133,139 +121,78 @@ pub struct FinishedOutput {
     pub res: HasFinishedResponse,
 }
 
-pub async fn finished(
-    login: String,
-    db: &mut DatabaseConnection,
-    params: FinishedParams<'_>,
-    event: OptEvent<'_, '_>,
-    at: chrono::NaiveDateTime,
-) -> RecordsResult<FinishedOutput> {
-    // First, we retrieve all what we need to save the record
-    let player_id = records_lib::must::have_player(&mut db.mysql_conn, &login)
-        .await?
-        .id;
-    let map @ models::Map {
-        id: map_id,
-        cps_number,
-        ..
-    } = match params.map {
-        MapParam::AlreadyQueried(map) => map,
-        MapParam::Uid(uid) => &records_lib::must::have_map(&mut db.mysql_conn, &uid).await?,
-    };
+async fn get_old_record<C>(
+    db: &mut sqlx::MySqlConnection,
+    ctx: C,
+) -> RecordsResult<Option<models::Record>>
+where
+    C: HasPlayerId + HasMapId,
+{
+    let builder = ctx.sql_frag_builder();
+    let mut query = sqlx::QueryBuilder::new("SELECT r.* FROM records r ");
+    builder
+        .push_event_join(&mut query, "eer", "r")
+        .push(" where map_id = ")
+        .push_bind(ctx.get_map_id())
+        .push(" and record_player_id = ")
+        .push_bind(ctx.get_player_id())
+        .push(" ");
+    builder
+        .push_event_filter(&mut query, "eer")
+        .push(" order by time limit 1")
+        .build_query_as::<models::Record>()
+        .fetch_optional(db)
+        .await
+        .with_api_err()
+}
 
-    let (join_event, and_event) = event.get_join();
+pub async fn finished<C>(
+    db: &mut DatabaseConnection<'_>,
+    ctx: C,
+    params: InsertRecordParams,
+    at: chrono::NaiveDateTime,
+) -> RecordsResult<FinishedOutput>
+where
+    C: HasPlayerLogin + HasMap + Transactional<Mode = ReadWrite>,
+{
+    // First, we retrieve all what we need to save the record
+    let player = records_lib::must::have_player(db.mysql_conn, &ctx)
+        .await
+        .with_api_err()?;
+    let ctx = ctx.with_player(&player);
+    let player_id = player.id;
 
     // We check that the cps times are coherent to the final time
-    if matches!(cps_number, Some(num) if num + 1 != params.rest.cps.len() as u32)
-        || params.rest.cps.iter().sum::<i32>() != params.rest.time
+    if matches!(ctx.get_map().cps_number, Some(num) if num + 1 != params.cps.len() as u32)
+        || params.cps.iter().sum::<i32>() != params.time
     {
         return Err(RecordsErrorKind::InvalidTimes);
     }
 
-    let query = format!(
-        "SELECT r.* FROM records r
-        {join_event}
-        WHERE map_id = ? AND record_player_id = ?
-        {and_event}
-        ORDER BY time LIMIT 1",
-        join_event = join_event,
-        and_event = and_event,
-    );
-
-    // We retrieve the optional old record to compare with the new one
-    let mut query = sqlx::query_as::<_, models::Record>(&query)
-        .bind(map_id)
-        .bind(player_id);
-
-    if let Some((event, edition)) = event.0 {
-        query = query.bind(event.id).bind(edition.id);
-    }
-
-    let old_record = query
-        .fetch_optional(&mut *db.mysql_conn)
-        .await
-        .with_api_err()?;
+    let old_record = get_old_record(db.mysql_conn, &ctx).await?;
 
     let (old, new, has_improved, old_rank) =
         if let Some(models::Record { time: old, .. }) = old_record {
             (
                 old,
-                params.rest.time,
-                params.rest.time < old,
-                Some(ranks::get_rank(db, map.id, player_id, old, event).await?),
+                params.time,
+                params.time < old,
+                Some(ranks::get_rank(db, &ctx, old).await?),
             )
         } else {
-            (params.rest.time, params.rest.time, true, None)
+            (params.time, params.time, true, None)
         };
 
     // We insert the record
-    let record_id = insert_record(
-        db,
-        map.id,
-        player_id,
-        params.rest.clone(),
-        event,
-        None,
-        at,
-        has_improved,
-    )
-    .await?;
+    let record_id = insert_record(db, &ctx, &params, None, at, has_improved).await?;
 
-    let current_rank = ranks::get_rank(
-        db,
-        map.id,
-        player_id,
-        if has_improved { new } else { old },
-        event,
-    )
-    .await?;
-
-    // If the record isn't in an event context, save the record to the events that have the map
-    // and allow records saving without an event context.
-    if event.0.is_none() {
-        let editions = records_lib::event::get_editions_which_contain(&mut db.mysql_conn, *map_id)
-            .try_collect::<Vec<_>>()
-            .await
-            .with_api_err()?;
-
-        for (event_id, edition_id, original_map_id) in editions {
-            event::insert_event_record(&mut db.mysql_conn, record_id, event_id, edition_id).await?;
-
-            let Some(original_map_id) = original_map_id else {
-                continue;
-            };
-
-            // Get previous the time of the player on the original map, to check if it would be a PB or not.
-            let previous_time = player::get_time_on_map(
-                &mut db.mysql_conn,
-                player_id,
-                original_map_id,
-                Default::default(),
-            )
-            .await?;
-            let is_pb =
-                previous_time.is_none() || previous_time.is_some_and(|t| t > params.rest.time);
-
-            insert_record(
-                db,
-                original_map_id,
-                player_id,
-                params.rest.clone(),
-                Default::default(),
-                Some(record_id),
-                at,
-                is_pb,
-            )
-            .await?;
-        }
-    }
+    let current_rank = ranks::get_rank(db, &ctx, if has_improved { new } else { old }).await?;
 
     Ok(FinishedOutput {
         record_id,
         player_id,
         res: HasFinishedResponse {
             has_improved,
-            login,
             old,
             new,
             current_rank,

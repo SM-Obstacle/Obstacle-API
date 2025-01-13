@@ -1,20 +1,19 @@
-use std::iter;
-
 use actix_session::Session;
 use actix_web::{
     web::{self, Data, Json, Query},
     HttpResponse, Responder, Scope,
 };
 use futures::TryStreamExt;
-use itertools::Itertools as _;
 use records_lib::{
-    event::{self, OptEvent},
+    acquire,
+    context::{Context, Ctx, HasMap, HasMapId, HasPlayerLogin, ReadWrite, Transactional},
+    event::{self},
     models::Banishment,
-    must, Database,
+    must, player, transaction, Database, DatabaseConnection, MySqlConnection, RedisConnection,
 };
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, MySqlConnection};
+use sqlx::FromRow;
 use tokio::time::timeout;
 use tracing::Level;
 use tracing_actix_web::RequestId;
@@ -25,7 +24,7 @@ use crate::{
         TIMEOUT, WEB_TOKEN_SESS_KEY,
     },
     discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
-    utils::json,
+    utils::{self, json},
     AccessTokenErr, FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult,
     RecordsResultExt, Res,
 };
@@ -119,7 +118,7 @@ pub async fn update_player(
 }
 
 pub async fn check_banned(
-    db: &mut MySqlConnection,
+    db: &mut sqlx::MySqlConnection,
     player_id: u32,
 ) -> Result<Option<Banishment>, RecordsErrorKind> {
     let r = sqlx::query_as("SELECT * FROM current_bans WHERE player_id = ?")
@@ -198,6 +197,60 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
     Ok(res_login.to_lowercase() == login.to_lowercase())
 }
 
+struct FinishedImplParams<'a> {
+    redis_conn: &'a mut RedisConnection,
+    at: chrono::NaiveDateTime,
+    body: pf::InsertRecordParams,
+}
+
+async fn finished_impl<C>(
+    mysql_conn: MySqlConnection<'_>,
+    ctx: C,
+    FinishedImplParams {
+        redis_conn,
+        at,
+        body,
+    }: FinishedImplParams<'_>,
+) -> RecordsResult<pf::FinishedOutput>
+where
+    C: HasPlayerLogin + HasMap + Transactional<Mode = ReadWrite>,
+{
+    let mut conn = DatabaseConnection {
+        mysql_conn,
+        redis_conn,
+    };
+
+    let res = pf::finished(&mut conn, &ctx, body.clone(), at).await?;
+
+    let ctx = ctx.with_player_id(res.player_id);
+
+    // If the record isn't in an event context, save the record to the events that have the map
+    // and allow records saving without an event context.
+    let editions =
+        records_lib::event::get_editions_which_contain(conn.mysql_conn, ctx.get_map_id())
+            .try_collect::<Vec<_>>()
+            .await
+            .with_api_err()?;
+    for (event_id, edition_id, original_map_id) in editions {
+        super::event::insert_event_record(conn.mysql_conn, res.record_id, event_id, edition_id)
+            .await?;
+
+        let Some(original_map_id) = original_map_id else {
+            continue;
+        };
+
+        let ctx = ctx.by_ref().with_map_id(original_map_id).with_no_event();
+
+        // Get the previous time of the player on the original map, to check if it would be a PB or not.
+        let previous_time = player::get_time_on_map(conn.mysql_conn, &ctx).await?;
+        let is_pb = previous_time.is_none_or(|t| t > body.time);
+
+        pf::insert_record(&mut conn, &ctx, &body, Some(res.record_id), at, is_pb).await?;
+    }
+
+    Ok(res)
+}
+
 pub async fn finished_at(
     req_id: RequestId,
     login: String,
@@ -205,14 +258,26 @@ pub async fn finished_at(
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
-    let mut conn = db.acquire().await.with_api_err().fit(req_id)?;
+    let conn = acquire!(db.with_api_err().fit(req_id)?);
 
-    let res = pf::finished(
-        login,
-        &mut conn,
-        body.into_params(None),
-        Default::default(),
-        at,
+    let ctx = Context::default().with_player_login(&login);
+
+    let map = must::have_map(conn.mysql_conn, ctx.by_ref().with_map_uid(&body.map_uid))
+        .await
+        .with_api_err()
+        .fit(req_id)?;
+    let ctx = ctx.with_map(&map);
+
+    let res = transaction::within(
+        conn.mysql_conn,
+        ctx,
+        ReadWrite,
+        FinishedImplParams {
+            redis_conn: conn.redis_conn,
+            at,
+            body: body.rest,
+        },
+        finished_impl,
     )
     .await
     .fit(req_id)?;
@@ -265,7 +330,7 @@ pub async fn get_token(
                 body.state.clone()
             );
             state.remove_state(body.state).await;
-            return Err(RecordsErrorKind::Timeout).fit(req_id);
+            return Err(RecordsErrorKind::Timeout(TIMEOUT)).fit(req_id);
         }
     };
 
@@ -328,11 +393,17 @@ async fn pb(
     Query(body): pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let ctx = Context::default()
+        .with_map_uid(&body.map_uid)
+        .with_player_login(&login)
+        .with_pool(db.0);
 
-    let map = must::have_map(&mut mysql_conn, &body.map_uid)
+    let map = must::have_map(&mut mysql_conn, &ctx)
         .await
         .with_api_err()
         .fit(req_id)?;
+
+    let ctx = ctx.with_map(&map);
 
     let mut editions = event::get_editions_which_contain(&mut mysql_conn, map.id);
     let edition = editions.try_next().await.with_api_err().fit(req_id)?;
@@ -345,17 +416,20 @@ async fn pb(
 
     drop(editions);
 
-    match edition {
+    let res = match edition {
         Some((event_id, edition_id, _)) if single_edition => {
             let (event, edition) =
                 must::have_event_edition_from_ids(&mut mysql_conn, event_id, edition_id)
                     .await
                     .with_api_err()
                     .fit(req_id)?;
-            pb::pb(login, req_id, db, body, OptEvent::new(&event, &edition)).await
+            pb::pb(ctx.with_event_edition(&event, &edition)).await
         }
-        _ => pb::pb(login, req_id, db, body, Default::default()).await,
+        _ => pb::pb(ctx).await,
     }
+    .fit(req_id)?;
+
+    utils::json(res)
 }
 
 #[derive(Deserialize)]
@@ -377,26 +451,29 @@ async fn times(
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let player = records_lib::must::have_player(&mut mysql_conn, &login)
-        .await
-        .fit(req_id)?;
+    let player = records_lib::must::have_player(
+        &mut mysql_conn,
+        Context::default().with_player_login(&login),
+    )
+    .await
+    .fit(req_id)?;
 
-    let query = format!(
+    let mut query = sqlx::QueryBuilder::new(
         "SELECT m.game_id AS map_uid, MIN(r.time) AS time
         FROM maps m
         INNER JOIN records r ON r.map_id = m.id
-        WHERE r.record_player_id = ? AND m.game_id IN ({})
-        GROUP BY m.id",
-        iter::repeat("?").take(body.maps_uids.len()).join(",")
+        WHERE r.record_player_id = ",
     );
-
-    let mut query = sqlx::query_as::<_, TimesResponseItem>(&query).bind(player.id);
-
-    for map_uid in body.maps_uids {
-        query = query.bind(map_uid);
+    let mut sep = query
+        .push_bind(player.id)
+        .push(" AND m.game_id IN (")
+        .separated(", ");
+    for uid in body.maps_uids {
+        sep.push_bind(uid);
     }
-
     let result = query
+        .push(") GROUP BY m.id")
+        .build_query_as::<TimesResponseItem>()
         .fetch_all(&mut *mysql_conn)
         .await
         .with_api_err()

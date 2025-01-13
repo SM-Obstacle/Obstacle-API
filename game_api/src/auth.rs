@@ -57,9 +57,10 @@ use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
 use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
 use futures::Future;
+use records_lib::context::{Context, Ctx as _};
 use records_lib::models::ApiStatusKind;
 use records_lib::redis_key::{mp_token_key, web_token_key};
-use records_lib::Database;
+use records_lib::{acquire, Database};
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use tokio::sync::oneshot::{self, Receiver, Sender};
@@ -210,8 +211,9 @@ impl AuthState {
         let mut state_map = self.states_map.lock().await;
 
         let web_token = if let Some(TokenState { tx, rx, .. }) = state_map.remove(&state) {
-            tx.send(Message::MPCode(code))
-                .expect("/player/get_token rx should not be dropped at this point");
+            if tx.send(Message::MPCode(code)).is_err() {
+                return Err(RecordsErrorKind::MissingGetTokenReq);
+            }
 
             match timeout(TIMEOUT, rx).await {
                 Ok(Ok(res)) => match res {
@@ -224,7 +226,7 @@ impl AuthState {
                 },
                 _ => {
                     tracing::event!(Level::WARN, "Token state `{}` timed out", state);
-                    return Err(RecordsErrorKind::Timeout);
+                    return Err(RecordsErrorKind::Timeout(TIMEOUT));
                 }
             }
         } else {
@@ -279,16 +281,20 @@ async fn inner_check_auth_for(
     required: privilege::Flags,
     key: impl ToRedisArgs + std::marker::Sync + std::marker::Sync,
 ) -> RecordsResult<u32> {
-    let mut conn = db.acquire().await?;
+    let conn = acquire!(db.with_api_err()?);
 
     let stored_token: Option<String> = conn.redis_conn.get(&key).await.with_api_err()?;
     if !matches!(stored_token, Some(t) if t == digest(token)) {
         return Err(RecordsErrorKind::Unauthorized);
     }
 
-    let player = records_lib::must::have_player(&mut conn.mysql_conn, login).await?;
+    let player = records_lib::must::have_player(
+        conn.mysql_conn,
+        Context::default().with_player_login(login),
+    )
+    .await?;
 
-    if let Some(ban) = player::check_banned(&mut conn.mysql_conn, player.id).await? {
+    if let Some(ban) = player::check_banned(conn.mysql_conn, player.id).await? {
         return Err(RecordsErrorKind::BannedPlayer(ban));
     };
 

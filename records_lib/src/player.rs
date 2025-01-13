@@ -1,27 +1,26 @@
 //! This module contains anything related to in-game players in this library.
 
-use crate::event::OptEventIds;
+use crate::context::{HasMapId, HasPlayerId};
 use crate::{error::RecordsResult, models::Player};
-use sqlx::MySqlConnection;
 
 /// Returns the time of a player on a map.
-pub async fn get_time_on_map(
-    conn: &mut MySqlConnection,
-    player_id: u32,
-    map_id: u32,
-    event: OptEventIds,
-) -> RecordsResult<Option<i32>> {
-    let (view_name, and_event) = event.get_view();
+pub async fn get_time_on_map<C>(
+    conn: &mut sqlx::MySqlConnection,
+    ctx: C,
+) -> RecordsResult<Option<i32>>
+where
+    C: HasPlayerId + HasMapId,
+{
+    let builder = ctx.sql_frag_builder();
 
-    let query = format!(
-        "select time from {view_name} r where map_id = ? and record_player_id = ? {and_event}"
-    );
-    let query = sqlx::query_scalar(&query).bind(map_id).bind(player_id);
-    let query = if let Some((ev, ed)) = event.0 {
-        query.bind(ev).bind(ed)
-    } else {
-        query
-    };
+    let mut q = sqlx::QueryBuilder::new("select time from ");
+    builder
+        .push_event_view_name(&mut q, "r")
+        .push(" where map_id = ")
+        .push_bind(ctx.get_map_id())
+        .push(" and record_player_id = ")
+        .push_bind(ctx.get_player_id());
+    let query = builder.push_event_filter(&mut q, "r").build_query_scalar();
 
     let time = query.fetch_optional(conn).await?;
 
@@ -29,13 +28,13 @@ pub async fn get_time_on_map(
 }
 
 /// Returns the optional player from the provided login.
-pub async fn get_player_from_login<'c, E: sqlx::Executor<'c, Database = sqlx::MySql>>(
-    db: E,
-    player_login: &str,
+pub async fn get_player_from_login(
+    conn: &mut sqlx::MySqlConnection,
+    login: &str,
 ) -> RecordsResult<Option<Player>> {
     let r = sqlx::query_as("SELECT * FROM players WHERE login = ?")
-        .bind(player_login)
-        .fetch_optional(db)
+        .bind(login)
+        .fetch_optional(conn)
         .await?;
     Ok(r)
 }
@@ -44,13 +43,13 @@ pub async fn get_player_from_login<'c, E: sqlx::Executor<'c, Database = sqlx::My
 ///
 /// The return of this function isn't optional as if an ID is provided, the player most likely
 /// already exists.
-pub async fn get_player_from_id<'c, E: sqlx::Executor<'c, Database = sqlx::MySql>>(
-    db: E,
-    id: u32,
+pub async fn get_player_from_id(
+    conn: &mut sqlx::MySqlConnection,
+    player_id: u32,
 ) -> RecordsResult<Player> {
     let r = sqlx::query_as("SELECT * FROM players WHERE id = ?")
-        .bind(id)
-        .fetch_one(db)
+        .bind(player_id)
+        .fetch_one(conn)
         .await?;
     Ok(r)
 }

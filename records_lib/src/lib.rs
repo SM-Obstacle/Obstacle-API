@@ -8,12 +8,11 @@
 
 #![warn(missing_docs)]
 
-use sqlx::{pool::PoolConnection, MySql, Pool};
-
 mod env;
 mod modeversion;
 mod mptypes;
 
+pub mod context;
 pub mod error;
 pub mod event;
 pub mod leaderboard;
@@ -25,26 +24,41 @@ pub mod player;
 pub mod ranks;
 pub mod redis_key;
 pub mod time;
+pub mod transaction;
 
 /// The MySQL/MariaDB pool type.
-pub type MySqlPool = Pool<MySql>;
+pub type MySqlPool = sqlx::MySqlPool;
 /// The Redis pool type.
 pub type RedisPool = deadpool_redis::Pool;
+/// A mutable reference to the connection to the database.
+pub type MySqlConnection<'a> = &'a mut sqlx::pool::PoolConnection<sqlx::MySql>;
 /// The type of a Redis connection.
 pub type RedisConnection = deadpool_redis::Connection;
+
+use std::future::Future;
 
 pub use env::*;
 pub use modeversion::*;
 pub use mptypes::*;
 
-use self::error::RecordsResult;
+/// Asserts that the type of the provided future is Send, and returns an opaque type from it.
+///
+/// This helps the compiler to correctly type the values of some await points, and helps
+/// to trace the root of weird errors.
+#[inline(always)]
+pub fn assert_future_send<T, R>(t: T) -> impl Future<Output = R> + Send
+where
+    T: Future<Output = R> + Send,
+{
+    t
+}
 
 /// Represents a connection to the API database, both MariaDB and Redis.
-pub struct DatabaseConnection {
+pub struct DatabaseConnection<'a> {
     /// The connection to the MariaDB database.
-    pub mysql_conn: PoolConnection<MySql>,
+    pub mysql_conn: MySqlConnection<'a>,
     /// The connection to the Redis database.
-    pub redis_conn: RedisConnection,
+    pub redis_conn: &'a mut RedisConnection,
 }
 
 /// Represents the database of the API, meaning the MariaDB and Redis pools.
@@ -56,13 +70,13 @@ pub struct Database {
     pub redis_pool: RedisPool,
 }
 
-impl Database {
-    /// Retrieves a connection object for each database pool, and returns them wrapped in a
-    /// [`DatabaseConnection`].
-    pub async fn acquire(&self) -> RecordsResult<DatabaseConnection> {
-        Ok(DatabaseConnection {
-            mysql_conn: self.mysql_pool.acquire().await?,
-            redis_conn: self.redis_pool.get().await?,
-        })
-    }
+#[allow(missing_docs)]
+#[macro_export]
+macro_rules! acquire {
+    ($db:ident $($t:tt)*) => {{
+        $crate::DatabaseConnection {
+            mysql_conn: &mut $db.mysql_pool.acquire().await $($t)*,
+            redis_conn: &mut $db.redis_pool.get().await $($t)*,
+        }
+    }};
 }

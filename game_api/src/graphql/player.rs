@@ -1,10 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
-use async_graphql::{connection, dataloader::Loader, Context, Enum, ID};
-use futures::StreamExt;
+use async_graphql::{connection, dataloader::Loader, Enum, ID};
 use records_lib::{
+    acquire,
+    context::{Context, Ctx as _, HasPlayerId, ReadOnly, Transactional},
     models::{self, Role},
-    Database,
+    transaction, Database, DatabaseConnection, MySqlConnection, RedisConnection,
 };
 use sqlx::{mysql, FromRow, MySqlPool, Row};
 
@@ -74,7 +75,10 @@ impl Player {
         self.inner.zone_path.as_deref()
     }
 
-    async fn banishments(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<Banishment>> {
+    async fn banishments(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<Banishment>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         Ok(
             sqlx::query_as("SELECT * FROM banishments WHERE player_id = ?")
@@ -157,43 +161,75 @@ impl Player {
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
+        let conn = acquire!(db?);
 
-        let date_sort_by = SortState::sql_order_by(&date_sort_by);
+        records_lib::assert_future_send(transaction::within(
+            conn.mysql_conn,
+            Context::default().with_player(&self.inner),
+            ReadOnly,
+            GetPlayerRecordsParam {
+                date_sort_by,
+                redis_conn: conn.redis_conn,
+            },
+            get_player_records,
+        ))
+        .await
+    }
+}
 
-        // Query the records with these ids
+struct GetPlayerRecordsParam<'a> {
+    redis_conn: &'a mut RedisConnection,
+    date_sort_by: Option<SortState>,
+}
 
-        let query = format!(
-            "SELECT * FROM global_records r
+async fn get_player_records<C>(
+    mysql_conn: MySqlConnection<'_>,
+    ctx: C,
+    GetPlayerRecordsParam {
+        redis_conn,
+        date_sort_by,
+    }: GetPlayerRecordsParam<'_>,
+) -> async_graphql::Result<Vec<RankedRecord>>
+where
+    C: HasPlayerId + Transactional,
+{
+    let mut conn = DatabaseConnection {
+        mysql_conn,
+        redis_conn,
+    };
+
+    let date_sort_by = SortState::sql_order_by(&date_sort_by);
+
+    // Query the records with these ids
+
+    let query = format!(
+        "SELECT * FROM global_records r
             WHERE record_player_id = ?
             ORDER BY record_date {date_sort_by}
             LIMIT 100",
-        );
+    );
 
-        let mut records = sqlx::query_as::<_, models::Record>(&query)
-            .bind(self.inner.id)
-            .fetch(&db.mysql_pool);
+    let records = sqlx::query_as::<_, models::Record>(&query)
+        .bind(ctx.get_player_id())
+        .fetch_all(&mut **conn.mysql_conn)
+        .await?;
 
-        let mut ranked_records = Vec::with_capacity(records.size_hint().0);
+    let mut ranked_records = Vec::with_capacity(records.len());
 
-        let mut conn = db.acquire().await?;
+    for record in records {
+        let rank = get_rank(
+            &mut conn,
+            ctx.by_ref()
+                .with_map_id(record.map_id)
+                .with_player_id(record.record_player_id),
+            record.time,
+        )
+        .await?;
 
-        while let Some(record) = records.next().await {
-            let record = record?;
-
-            let rank = get_rank(
-                &mut conn,
-                record.map_id,
-                record.record_player_id,
-                record.time,
-                Default::default(),
-            )
-            .await?;
-
-            ranked_records.push(models::RankedRecord { rank, record }.into());
-        }
-
-        Ok(ranked_records)
+        ranked_records.push(models::RankedRecord { rank, record }.into());
     }
+
+    Ok(ranked_records)
 }
 
 pub struct PlayerLoader(pub MySqlPool);

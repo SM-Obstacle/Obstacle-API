@@ -56,8 +56,8 @@ pub enum RecordsErrorKind {
     AccessTokenErr(AccessTokenErr) = 206,
     #[error("invalid ManiaPlanet code on /player/give_token request")]
     InvalidMPCode = 207,
-    #[error("timeout exceeded (max 5 minutes)")]
-    Timeout = 208,
+    #[error("timeout exceeded")]
+    Timeout(std::time::Duration) = 208,
 
     // --------
     // --- Logical errors
@@ -102,6 +102,12 @@ impl RecordsErrorKind {
             // SAFETY: Self is repr(i32).
             other => unsafe { *(other as *const Self as *const _) },
         }
+    }
+}
+
+impl From<sqlx::Error> for RecordsErrorKind {
+    fn from(value: sqlx::Error) -> Self {
+        Self::Lib(value.into())
     }
 }
 
@@ -181,7 +187,7 @@ impl actix_web::ResponseError for RecordsError {
             }
             R::AccessTokenErr(_) => HttpResponse::BadRequest().json(self.to_err_res()),
             R::InvalidMPCode => HttpResponse::BadRequest().json(self.to_err_res()),
-            R::Timeout => HttpResponse::RequestTimeout().json(self.to_err_res()),
+            R::Timeout(_) => HttpResponse::RequestTimeout().json(self.to_err_res()),
 
             // --- Logical errors
 
