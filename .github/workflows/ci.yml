@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Setup MariaDB
-        uses: ankane/setup-mariadb@v1
+        uses: ahmadbky/setup-mariadb@v1
         with:
           database: obs_records
           mariadb-version: ${{ matrix.mariadb }}
