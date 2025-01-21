@@ -127,7 +127,7 @@ pub struct Row {
     /// The rank of the record.
     pub rank: i32,
     /// The login of the player.
-    pub player: String,
+    pub login: String,
     /// The nickname of the player.
     pub nickname: String,
     /// The time of the record.
@@ -202,7 +202,7 @@ where
     for r in result {
         records.push(Row {
             rank: ranks::get_rank(conn, ctx.by_ref().with_player_id(r.player_id), r.time).await?,
-            player: r.login,
+            login: r.login,
             nickname: r.nickname,
             time: r.time,
         });

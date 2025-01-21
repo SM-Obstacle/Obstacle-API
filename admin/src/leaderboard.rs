@@ -56,7 +56,7 @@ async fn mariadb_lb(
         table.add_row(prettytable::row![
             i + offset.unwrap_or_default() as usize,
             row.rank,
-            row.player,
+            row.login,
             Time(row.time)
         ]);
     }
