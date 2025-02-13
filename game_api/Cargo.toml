@@ -12,15 +12,14 @@ name = "game_api_lib"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 async-graphql = { workspace = true, features = [
-  "dataloader",
-  "apollo_tracing",
+    "dataloader",
+    "apollo_tracing",
 ] }
 sqlx = { workspace = true }
 chrono = { workspace = true }
 deadpool = { workspace = true }
 deadpool-redis = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 actix-web = { workspace = true }
@@ -40,8 +39,8 @@ records-lib = { workspace = true, features = ["tracing"] }
 mkenv = { workspace = true }
 
 [dev-dependencies]
-tracing-test = "0.2.5"
 
 [features]
 default = []
 gql_schema = []
+no_auth = []
