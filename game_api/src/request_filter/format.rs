@@ -78,18 +78,12 @@ impl fmt::Display for FormattedConnectionInfo<'_> {
         writeln!(
             f,
             "Peer address: {}",
-            match self.connection_info.peer_addr() {
-                Some(s) => s,
-                None => "None",
-            }
+            self.connection_info.peer_addr().unwrap_or("None"),
         )?;
         writeln!(
             f,
             "Real IP remote address: {}",
-            match self.connection_info.realip_remote_addr() {
-                Some(s) => s,
-                None => "None",
-            }
+            self.connection_info.realip_remote_addr().unwrap_or("None"),
         )?;
         writeln!(f, "Scheme: {}", self.connection_info.scheme())?;
 
