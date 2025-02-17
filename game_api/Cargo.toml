@@ -43,4 +43,4 @@ mkenv = { workspace = true }
 [features]
 default = []
 gql_schema = []
-no_auth = []
+auth = []
