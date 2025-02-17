@@ -48,10 +48,6 @@
 //! See <https://github.com/maniaplanet/documentation/blob/master/13.web-services/01.oauth2/docs.md#auth-code-flow-or-explicit-flow-or-server-side-flow>
 //! for more information.
 
-use std::future::{ready, Ready};
-use std::pin::Pin;
-use std::{collections::HashMap, time::Duration};
-
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
@@ -63,6 +59,9 @@ use records_lib::redis_key::{mp_token_key, web_token_key};
 use records_lib::{acquire, Database};
 use serde::{Deserialize, Serialize};
 use sha256::digest;
+use std::future::{ready, Ready};
+use std::pin::Pin;
+use std::{collections::HashMap, time::Duration};
 use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::timeout;

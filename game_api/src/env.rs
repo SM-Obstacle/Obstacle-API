@@ -32,6 +32,7 @@ const DEFAULT_MP_CLIENT_ID: &str = "";
 const DEFAULT_MP_CLIENT_SECRET: &str = "";
 const DEFAULT_WH_REPORT_URL: &str = "";
 const DEFAULT_WH_AC_URL: &str = "";
+const DEFAULT_WH_INVALID_REQ_URL: &str = "";
 const DEFAULT_GQL_ENDPOINT: &str = "/graphql";
 
 mkenv::make_env! {pub ApiEnv includes [
@@ -109,6 +110,14 @@ mkenv::make_env! {pub ApiEnv includes [
         var: "WEBHOOK_AC_URL",
         desc: "The URL to the Discord webhook used to share in-game statistics",
         default: DEFAULT_WH_AC_URL,
+    },
+
+    wh_invalid_req_url: {
+        id: WebhookInvalidReqUrl(String),
+        kind: normal,
+        var: "WEBHOOK_INVALID_REQ_URL",
+        desc: "The URL to the Discord webhook used to flag invalid requests",
+        default: DEFAULT_WH_INVALID_REQ_URL,
     },
 
     gql_endpoint: {

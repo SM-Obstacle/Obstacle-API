@@ -12,8 +12,8 @@ name = "game_api_lib"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 async-graphql = { workspace = true, features = [
-  "dataloader",
-  "apollo_tracing",
+    "dataloader",
+    "apollo_tracing",
 ] }
 sqlx = { workspace = true }
 chrono = { workspace = true }
@@ -38,10 +38,12 @@ itertools = { workspace = true }
 once_cell = { workspace = true }
 records-lib = { workspace = true, features = ["tracing"] }
 mkenv = { workspace = true }
+nom = { workspace = true }
 
 [dev-dependencies]
 tracing-test = "0.2.5"
 
 [features]
-default = []
+default = ["request_filter"]
 gql_schema = []
+request_filter = []

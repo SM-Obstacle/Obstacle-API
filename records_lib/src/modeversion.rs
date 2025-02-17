@@ -3,7 +3,7 @@ use std::{fmt, str::FromStr};
 use nom::{
     bytes::complete::{tag, take_while1},
     combinator::{map, map_res},
-    sequence::tuple,
+    Parser as _,
 };
 
 /// The error emitted by the parse of the [`ModeVersion`] type.
@@ -37,18 +37,20 @@ impl fmt::Debug for ModeVersion {
 fn parse_u8(input: &str) -> nom::IResult<&str, u8> {
     map_res(take_while1(|c: char| c.is_ascii_digit()), |input: &str| {
         input.parse()
-    })(input)
+    })
+    .parse(input)
 }
 
 fn parse_mode_version(input: &str) -> nom::IResult<&str, ModeVersion> {
     map(
-        tuple((parse_u8, tag("."), parse_u8, tag("."), parse_u8)),
+        (parse_u8, tag("."), parse_u8, tag("."), parse_u8),
         |(major, _, minor, _, patch)| ModeVersion {
             major,
             minor,
             patch,
         },
-    )(input)
+    )
+    .parse(input)
 }
 
 impl FromStr for ModeVersion {
