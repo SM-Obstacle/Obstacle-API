@@ -314,7 +314,7 @@ pub async fn check_auth_for(
     {
         let stored_token: Option<String> = conn
             .redis_conn
-            .get(&mp_token_key(login))
+            .get(mp_token_key(login))
             .await
             .with_api_err()?;
 
