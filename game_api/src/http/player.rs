@@ -338,12 +338,11 @@ struct GetTokenResponse {
 }
 
 // Handler used when the `auth` feature is disabled.
-// It simply returns an empty token.
 // This is used for older versions of the game that still rely on the `/player/get_token` route.
 #[cfg(not(auth))]
 async fn get_token() -> RecordsResponse<impl Responder> {
     json(GetTokenResponse {
-        token: String::new(),
+        token: "if you see this gg".to_owned(),
     })
 }
 
