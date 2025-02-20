@@ -55,13 +55,16 @@ use std::{collections::HashMap, time::Duration};
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
+#[cfg(auth)]
 use deadpool_redis::redis::AsyncCommands;
 use futures::Future;
 use records_lib::context::{Context, Ctx as _};
 use records_lib::models::ApiStatusKind;
+#[cfg(auth)]
 use records_lib::redis_key::{mp_token_key, web_token_key};
 use records_lib::{acquire, Database};
 use serde::{Deserialize, Serialize};
+#[cfg(auth)]
 use sha256::digest;
 use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio::sync::Mutex;
@@ -69,7 +72,9 @@ use tokio::time::timeout;
 use tracing::Level;
 use tracing_actix_web::RequestId;
 
-use crate::utils::{generate_token, get_api_status, ApiStatus};
+#[cfg(auth)]
+use crate::utils::generate_token;
+use crate::utils::{get_api_status, ApiStatus};
 use crate::{http::player, RecordsErrorKind, RecordsResult};
 use crate::{
     must, AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, RecordsResultExt, Res,
@@ -250,6 +255,7 @@ impl AuthState {
 /// It returns a couple of (ManiaPlanet token ; Website token).
 ///
 /// The tokens are stored in the Redis database.
+#[cfg(auth)]
 pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String, String)> {
     let mp_token = generate_token(256);
     let web_token = generate_token(32);

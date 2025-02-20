@@ -11,22 +11,28 @@ use records_lib::{
     models::Banishment,
     must, player, transaction, Database, DatabaseConnection, MySqlConnection, RedisConnection,
 };
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
+#[cfg(auth)]
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+#[cfg(auth)]
 use tokio::time::timeout;
+#[cfg(auth)]
 use tracing::Level;
 use tracing_actix_web::RequestId;
 
+#[cfg(auth)]
 use crate::{
-    auth::{
-        self, privilege, ApiAvailable, AuthHeader, AuthState, MPAuthGuard, Message, WebToken,
-        TIMEOUT, WEB_TOKEN_SESS_KEY,
-    },
+    auth::{Message, WebToken, TIMEOUT},
+    AccessTokenErr,
+};
+
+use crate::{
+    auth::{self, privilege, ApiAvailable, AuthHeader, AuthState, MPAuthGuard, WEB_TOKEN_SESS_KEY},
     discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
     utils::{self, json},
-    AccessTokenErr, FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult,
-    RecordsResultExt, Res,
+    FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
 };
 
 use super::{pb, player_finished as pf};
@@ -146,6 +152,7 @@ pub async fn check_banned(
     Ok(r)
 }
 
+#[cfg(auth)]
 #[derive(Serialize)]
 struct MPAccessTokenBody<'a> {
     grant_type: &'a str,
@@ -155,6 +162,7 @@ struct MPAccessTokenBody<'a> {
     redirect_uri: &'a str,
 }
 
+#[cfg(auth)]
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum MPAccessTokenResponse {
@@ -162,12 +170,14 @@ enum MPAccessTokenResponse {
     Error(AccessTokenErr),
 }
 
+#[cfg(auth)]
 #[derive(Deserialize, Debug)]
 struct MPServerRes {
     #[serde(alias = "login")]
     res_login: String,
 }
 
+#[cfg(auth)]
 async fn test_access_token(
     client: &Client,
     login: &str,
@@ -198,6 +208,7 @@ async fn test_access_token(
     check_mp_token(client, login, access_token).await
 }
 
+#[cfg(auth)]
 async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsResult<bool> {
     let res = client
         .get("https://prod.live.maniaplanet.com/webservices/me")
@@ -313,6 +324,7 @@ async fn finished(
     finished_at(req_id, login, db, body.0, chrono::Utc::now().naive_utc()).await
 }
 
+#[cfg(auth)]
 #[derive(Deserialize)]
 pub struct GetTokenBody {
     login: String,
@@ -325,7 +337,18 @@ struct GetTokenResponse {
     token: String,
 }
 
-pub async fn get_token(
+// Handler used when the `auth` feature is disabled.
+// It simply returns an empty token.
+// This is used for older versions of the game that still rely on the `/player/get_token` route.
+#[cfg(not(auth))]
+async fn get_token() -> RecordsResponse<impl Responder> {
+    json(GetTokenResponse {
+        token: String::new(),
+    })
+}
+
+#[cfg(auth)]
+async fn get_token(
     _: ApiAvailable,
     req_id: RequestId,
     db: Res<Database>,
