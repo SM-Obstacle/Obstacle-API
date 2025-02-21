@@ -3,7 +3,7 @@
 use actix_web::{
     dev::{ConnectionInfo, RequestHead, ServiceRequest},
     error::InternalError,
-    http::StatusCode,
+    http::{header, StatusCode},
 };
 
 use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
@@ -89,10 +89,8 @@ pub(crate) async fn flag_invalid_req(
 }
 
 pub(crate) fn is_request_valid(req: &ServiceRequest) -> bool {
-    req.headers().get("Authorization").is_some()
-        && req
-            .headers()
-            .get("User-Agent")
-            .filter(|value| is_known_agent(value.as_bytes()))
-            .is_some()
+    req.headers()
+        .get(header::USER_AGENT)
+        .filter(|value| is_known_agent(value.as_bytes()))
+        .is_some()
 }

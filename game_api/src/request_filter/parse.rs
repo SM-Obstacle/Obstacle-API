@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use nom::{
-    bytes::{tag, take_until, take_while1},
+    bytes::complete::{tag, take_until, take_while1},
     combinator::map_res,
     Parser as _,
 };
@@ -52,10 +52,10 @@ pub(super) fn parse_agent(input: &[u8]) -> nom::IResult<&[u8], ParsedAgent> {
     )
         .parse(input)?;
     let (input, (_, client)) = (tag(" ("), take_until(";")).parse(input)?;
-    let (input, (_, rv)) = (tag(" rv: "), take_until(";")).parse(input)?;
+    let (input, (_, rv)) = (tag("; rv: "), take_until(";")).parse(input)?;
     let (_, rv) = parse_rv(rv)?;
-    let (input, (_, context)) = (tag(" context: "), take_until(";")).parse(input)?;
-    let (input, (_, distro)) = (tag(" distro: "), take_until(";")).parse(input)?;
+    let (input, (_, context)) = (tag("; context: "), take_until(";")).parse(input)?;
+    let (input, (_, distro)) = (tag("; distro: "), take_until(")")).parse(input)?;
 
     Ok((
         input,
