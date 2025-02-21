@@ -16,12 +16,10 @@ use records_lib::{
 };
 use sqlx::{mysql, FromRow, MySqlPool};
 
-use crate::auth::{self, privilege, WebToken};
-
 use super::{
     event::EventEdition,
     player::{Player, PlayerLoader},
-    rating::{PlayerRating, Rating},
+    rating::PlayerRating,
     record::RankedRecord,
     SortState,
 };
@@ -245,34 +243,6 @@ impl Map {
         }
 
         Ok(out)
-    }
-
-    async fn ratings(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<Rating>> {
-        let db: &Database = ctx.data_unchecked();
-        let Some(WebToken { login, token }) = ctx.data_opt::<WebToken>() else {
-            return Err(async_graphql::Error::new("Unauthorized."));
-        };
-
-        let author_login: String = sqlx::query_scalar("SELECT login FROM player WHERE id = ?")
-            .bind(self.inner.player_id)
-            .fetch_one(&db.mysql_pool)
-            .await?;
-
-        let role = if author_login != *login {
-            privilege::ADMIN
-        } else {
-            privilege::PLAYER
-        };
-
-        auth::website_check_auth_for(db, login, token, role).await?;
-
-        Ok(sqlx::query_as("SELECT * FROM rating WHERE map_id = ?")
-            .bind(self.inner.id)
-            .fetch_all(&db.mysql_pool)
-            .await?)
     }
 
     async fn average_rating(

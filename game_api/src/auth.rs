@@ -51,13 +51,16 @@
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
-use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
+#[cfg(auth)]
+use deadpool_redis::redis::AsyncCommands;
 use futures::Future;
 use records_lib::context::{Context, Ctx as _};
 use records_lib::models::ApiStatusKind;
+#[cfg(auth)]
 use records_lib::redis_key::{mp_token_key, web_token_key};
 use records_lib::{acquire, Database};
 use serde::{Deserialize, Serialize};
+#[cfg(auth)]
 use sha256::digest;
 use std::future::{ready, Ready};
 use std::pin::Pin;
@@ -68,7 +71,9 @@ use tokio::time::timeout;
 use tracing::Level;
 use tracing_actix_web::RequestId;
 
-use crate::utils::{generate_token, get_api_status, ApiStatus};
+#[cfg(auth)]
+use crate::utils::generate_token;
+use crate::utils::{get_api_status, ApiStatus};
 use crate::{http::player, RecordsErrorKind, RecordsResult};
 use crate::{
     must, AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, RecordsResultExt, Res,
@@ -249,6 +254,7 @@ impl AuthState {
 /// It returns a couple of (ManiaPlanet token ; Website token).
 ///
 /// The tokens are stored in the Redis database.
+#[cfg(auth)]
 pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String, String)> {
     let mp_token = generate_token(256);
     let web_token = generate_token(32);
@@ -273,62 +279,6 @@ pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String,
     Ok((mp_token, web_token))
 }
 
-async fn inner_check_auth_for(
-    db: &Database,
-    login: &str,
-    token: &str,
-    required: privilege::Flags,
-    key: impl ToRedisArgs + std::marker::Sync + std::marker::Sync,
-) -> RecordsResult<u32> {
-    let conn = acquire!(db.with_api_err()?);
-
-    let player = records_lib::must::have_player(
-        conn.mysql_conn,
-        Context::default().with_player_login(login),
-    )
-    .await?;
-
-    if let Some(ban) = player::check_banned(conn.mysql_conn, player.id).await? {
-        return Err(RecordsErrorKind::BannedPlayer(ban));
-    };
-
-    let stored_token: Option<String> = conn.redis_conn.get(&key).await.with_api_err()?;
-    if !matches!(stored_token, Some(t) if t == digest(token)) {
-        return Err(RecordsErrorKind::Unauthorized);
-    }
-
-    let role: privilege::Flags = sqlx::query_scalar(
-        "SELECT r.privileges
-        FROM players p
-        INNER JOIN role r ON r.id = p.role
-        WHERE p.id = ?",
-    )
-    .bind(player.id)
-    .fetch_one(&db.mysql_pool)
-    .await
-    .with_api_err()?;
-
-    if role & required != required {
-        return Err(RecordsErrorKind::Forbidden);
-    }
-
-    Ok(player.id)
-}
-
-/// Checks for a successful authentication for the player with its login and Website token.
-///
-/// This is generally done when retrieving or updating information with the GraphQL API.
-/// It has the same return value behavior than [`check_auth_for`].
-pub async fn website_check_auth_for(
-    db: &Database,
-    login: &str,
-    token: &str,
-    required: privilege::Flags,
-) -> RecordsResult<u32> {
-    let key = web_token_key(login);
-    inner_check_auth_for(db, login, token, required, key).await
-}
-
 /// Checks for a successful authentication for the player with its login and ManiaPlanet token.
 ///
 /// # Arguments
@@ -345,11 +295,55 @@ pub async fn website_check_auth_for(
 pub async fn check_auth_for(
     db: &Database,
     login: &str,
-    token: &str,
-    required: privilege::Flags,
+    #[cfg_attr(not(auth), allow(unused_variables))] token: &str,
+    #[cfg_attr(not(auth), allow(unused_variables))] required: privilege::Flags,
 ) -> RecordsResult<u32> {
-    let key = mp_token_key(login);
-    inner_check_auth_for(db, login, token, required, key).await
+    let conn = acquire!(db.with_api_err()?);
+
+    let player = records_lib::must::have_player(
+        conn.mysql_conn,
+        Context::default().with_player_login(login),
+    )
+    .await?;
+
+    if let Some(ban) = player::check_banned(conn.mysql_conn, player.id).await? {
+        return Err(RecordsErrorKind::BannedPlayer(ban));
+    };
+
+    #[cfg(not(auth))]
+    {
+        Ok(player.id)
+    }
+
+    #[cfg(auth)]
+    {
+        let stored_token: Option<String> = conn
+            .redis_conn
+            .get(mp_token_key(login))
+            .await
+            .with_api_err()?;
+
+        if !matches!(stored_token, Some(t) if t == digest(token)) {
+            return Err(RecordsErrorKind::Unauthorized);
+        }
+
+        let role: privilege::Flags = sqlx::query_scalar(
+            "SELECT r.privileges
+        FROM players p
+        INNER JOIN role r ON r.id = p.role
+        WHERE p.id = ?",
+        )
+        .bind(player.id)
+        .fetch_one(&db.mysql_pool)
+        .await
+        .with_api_err()?;
+
+        if role & required != required {
+            return Err(RecordsErrorKind::Forbidden);
+        }
+
+        Ok(player.id)
+    }
 }
 
 pub struct ExtAuthHeaders {
@@ -380,45 +374,49 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
     type Future = Pin<Box<dyn Future<Output = RecordsResponse<Self>>>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
+        #[cfg(auth)]
         async fn check<const ROLE: privilege::Flags>(
             request_id: RequestId,
-            #[cfg(not(test))] db: Res<Database>,
+            db: Res<Database>,
             login: Option<String>,
-            #[cfg(not(test))] token: Option<String>,
+            token: Option<String>,
         ) -> RecordsResponse<MPAuthGuard<ROLE>> {
             let Some(login) = login else {
                 return Err(RecordsErrorKind::Unauthorized).fit(request_id);
             };
 
-            #[cfg(not(test))]
-            {
-                let Some(token) = token else {
-                    return Err(RecordsErrorKind::Unauthorized).fit(request_id);
-                };
+            let Some(token) = token else {
+                return Err(RecordsErrorKind::Unauthorized).fit(request_id);
+            };
 
-                check_auth_for(&db, &login, &token, ROLE)
-                    .await
-                    .fit(request_id)?;
-            }
+            check_auth_for(&db, &login, &token, ROLE)
+                .await
+                .fit(request_id)?;
 
             Ok(MPAuthGuard { login })
         }
 
-        let ExtAuthHeaders {
-            player_login,
-            #[cfg(not(test))]
-            authorization,
-            ..
-        } = ext_auth_headers(req);
-
         let req_id = must::have_request_id(req);
-        #[cfg(not(test))]
+
+        #[cfg(auth)]
         {
+            let ExtAuthHeaders {
+                player_login,
+                authorization,
+            } = ext_auth_headers(req);
+
             let db = must::have_db(req);
             Box::pin(check(req_id, db, player_login, authorization))
         }
-        #[cfg(test)]
-        Box::pin(check(req_id, player_login))
+
+        #[cfg(not(auth))]
+        Box::pin(ready(
+            ext_auth_headers(req)
+                .player_login
+                .ok_or(RecordsErrorKind::Unauthorized)
+                .fit(req_id)
+                .map(|login| MPAuthGuard { login }),
+        ))
     }
 }
 
@@ -441,14 +439,31 @@ impl FromRequest for AuthHeader {
             player_login,
             authorization,
         } = ext_auth_headers(req);
-        let (Some(login), Some(token)) = (player_login, authorization) else {
+
+        let Some(login) = player_login else {
             return ready(Err(RecordsError {
                 request_id,
                 kind: RecordsErrorKind::Unauthorized,
             }));
         };
 
-        ready(Ok(Self { login, token }))
+        #[cfg(auth)]
+        {
+            let Some(token) = authorization else {
+                return ready(Err(RecordsError {
+                    request_id,
+                    kind: RecordsErrorKind::Unauthorized,
+                }));
+            };
+
+            ready(Ok(Self { login, token }))
+        }
+
+        #[cfg(not(auth))]
+        ready(Ok(Self {
+            login,
+            token: authorization.unwrap_or_default(),
+        }))
     }
 }
 

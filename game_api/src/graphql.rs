@@ -4,7 +4,7 @@ use actix_web::{HttpResponse, Resource, Responder};
 use async_graphql::dataloader::DataLoader;
 use async_graphql::extensions::ApolloTracing;
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
-use async_graphql::{connection, Enum, ErrorExtensionValues, Object, Value, ID};
+use async_graphql::{connection, Enum, ErrorExtensionValues, Value, ID};
 use async_graphql_actix_web::GraphQLRequest;
 use records_lib::context::{Context, Ctx, ReadOnly, Transactional};
 use records_lib::ranks::get_rank;
@@ -17,11 +17,10 @@ use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
 use std::vec::Vec;
 use tracing_actix_web::RequestId;
 
-use crate::auth::{self, privilege, WebToken, WEB_TOKEN_SESS_KEY};
+use crate::auth::{WebToken, WEB_TOKEN_SESS_KEY};
 use crate::graphql::map::MapLoader;
 use crate::graphql::player::PlayerLoader;
 
-use self::ban::Banishment;
 use self::event::{Event, EventCategoryLoader, EventEdition, EventLoader};
 use self::map::Map;
 use self::mappack::Mappack;
@@ -181,20 +180,6 @@ impl QueryRoot {
     ) -> async_graphql::Result<Mappack> {
         let res = mappack::get_mappack(ctx, mappack_id).await?;
         Ok(res)
-    }
-
-    async fn banishments(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<Banishment>> {
-        let db = ctx.data_unchecked();
-        let Some(WebToken { login, token }) = ctx.data_opt::<WebToken>() else {
-            return Err(async_graphql::Error::new("Unauthorized"));
-        };
-        auth::website_check_auth_for(db, login, token, privilege::ADMIN).await?;
-        Ok(query_as("SELECT * FROM banishments")
-            .fetch_all(&db.mysql_pool)
-            .await?)
     }
 
     async fn event(
@@ -528,76 +513,42 @@ async fn get_records<C: Transactional>(
     Ok(ranked_records)
 }
 
-struct MutationRoot;
-
-#[Object]
-impl MutationRoot {
-    async fn update_resources_content(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-        text: String,
-    ) -> async_graphql::Result<models::ResourcesContent> {
-        let db = ctx.data_unchecked::<Database>();
-
-        let web_token = ctx
-            .data_opt::<WebToken>()
-            .ok_or_else(|| async_graphql::Error::new("Unauthorized"))?;
-        auth::website_check_auth_for(db, &web_token.login, &web_token.token, privilege::ADMIN)
-            .await?;
-
-        let mut mysql_conn = db.mysql_pool.acquire().await?;
-
-        sqlx::query("INSERT INTO resources_content (content, created_at) VALUES (?, SYSDATE())")
-            .bind(text)
-            .execute(&mut *mysql_conn)
-            .await?;
-        let res = sqlx::query_as("SELECT * FROM resources_content")
-            .fetch_one(&mut *mysql_conn)
-            .await?;
-
-        Ok(res)
-    }
-
-    async fn calc_mappack_scores(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-        mappack_id: String,
-    ) -> async_graphql::Result<Mappack> {
-        self::mappack::get_mappack(ctx, mappack_id)
-            .await
-            .map_err(Into::into)
-    }
-}
-
-type Schema = async_graphql::Schema<QueryRoot, MutationRoot, async_graphql::EmptySubscription>;
+type Schema = async_graphql::Schema<
+    QueryRoot,
+    async_graphql::EmptyMutation,
+    async_graphql::EmptySubscription,
+>;
 
 #[allow(clippy::let_and_return)]
 fn create_schema(db: Database, client: Client) -> Schema {
-    let schema =
-        async_graphql::Schema::build(QueryRoot, MutationRoot, async_graphql::EmptySubscription)
-            .extension(ApolloTracing)
-            .data(DataLoader::new(
-                PlayerLoader(db.mysql_pool.clone()),
-                tokio::spawn,
-            ))
-            .data(DataLoader::new(
-                MapLoader(db.mysql_pool.clone()),
-                tokio::spawn,
-            ))
-            .data(DataLoader::new(
-                EventLoader(db.mysql_pool.clone()),
-                tokio::spawn,
-            ))
-            .data(DataLoader::new(
-                EventCategoryLoader(db.mysql_pool.clone()),
-                tokio::spawn,
-            ))
-            .data(db.mysql_pool.clone())
-            .data(db.redis_pool.clone())
-            .data(db)
-            .data(client)
-            .limit_depth(16)
-            .finish();
+    let schema = async_graphql::Schema::build(
+        QueryRoot,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .extension(ApolloTracing)
+    .data(DataLoader::new(
+        PlayerLoader(db.mysql_pool.clone()),
+        tokio::spawn,
+    ))
+    .data(DataLoader::new(
+        MapLoader(db.mysql_pool.clone()),
+        tokio::spawn,
+    ))
+    .data(DataLoader::new(
+        EventLoader(db.mysql_pool.clone()),
+        tokio::spawn,
+    ))
+    .data(DataLoader::new(
+        EventCategoryLoader(db.mysql_pool.clone()),
+        tokio::spawn,
+    ))
+    .data(db.mysql_pool.clone())
+    .data(db.redis_pool.clone())
+    .data(db)
+    .data(client)
+    .limit_depth(16)
+    .finish();
 
     #[cfg(feature = "gql_schema")]
     {
