@@ -375,6 +375,7 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
     type Future = Pin<Box<dyn Future<Output = RecordsResponse<Self>>>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
+        #[cfg(auth)]
         async fn check<const ROLE: privilege::Flags>(
             request_id: RequestId,
             db: Res<Database>,
@@ -396,14 +397,27 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
             Ok(MPAuthGuard { login })
         }
 
-        let ExtAuthHeaders {
-            player_login,
-            authorization,
-        } = ext_auth_headers(req);
-
         let req_id = must::have_request_id(req);
-        let db = must::have_db(req);
-        Box::pin(check(req_id, db, player_login, authorization))
+
+        #[cfg(auth)]
+        {
+            let ExtAuthHeaders {
+                player_login,
+                authorization,
+            } = ext_auth_headers(req);
+
+            let db = must::have_db(req);
+            Box::pin(check(req_id, db, player_login, authorization))
+        }
+
+        #[cfg(not(auth))]
+        Box::pin(ready(
+            ext_auth_headers(req)
+                .player_login
+                .ok_or(RecordsErrorKind::Unauthorized)
+                .fit(req_id)
+                .map(|login| MPAuthGuard { login }),
+        ))
     }
 }
 
@@ -426,14 +440,31 @@ impl FromRequest for AuthHeader {
             player_login,
             authorization,
         } = ext_auth_headers(req);
-        let (Some(login), Some(token)) = (player_login, authorization) else {
+
+        let Some(login) = player_login else {
             return ready(Err(RecordsError {
                 request_id,
                 kind: RecordsErrorKind::Unauthorized,
             }));
         };
 
-        ready(Ok(Self { login, token }))
+        #[cfg(auth)]
+        {
+            let Some(token) = authorization else {
+                return ready(Err(RecordsError {
+                    request_id,
+                    kind: RecordsErrorKind::Unauthorized,
+                }));
+            };
+
+            ready(Ok(Self { login, token }))
+        }
+
+        #[cfg(not(auth))]
+        ready(Ok(Self {
+            login,
+            token: authorization.unwrap_or_default(),
+        }))
     }
 }
 
