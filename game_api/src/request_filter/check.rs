@@ -46,35 +46,54 @@ pub(crate) async fn flag_invalid_req(
     head: RequestHead,
     connection_info: ConnectionInfo,
 ) -> Result<(), actix_web::Error> {
-    let fields = vec![
-        WebhookBodyEmbedField {
-            name: "Request head".to_owned(),
-            value: format!("```{}```", super::FormattedRequestHead { head: &head }),
-            inline: None,
-        },
-        WebhookBodyEmbedField {
-            name: "Connection info".to_owned(),
-            value: format!(
-                "```{}```",
-                super::FormattedConnectionInfo {
-                    connection_info: &connection_info
-                }
-            ),
-            inline: None,
-        },
-    ];
-
     client
         .post(&crate::env().wh_invalid_req_url)
         .json(&WebhookBody {
             content: "Got an invalid request 🥷".to_owned(),
-            embeds: vec![WebhookBodyEmbed {
-                title: "Info".to_owned(),
-                description: None,
-                color: 5814783,
-                fields: Some(fields),
-                url: None,
-            }],
+            embeds: vec![
+                WebhookBodyEmbed {
+                    title: "Request".to_owned(),
+                    description: None,
+                    color: 5814783,
+                    fields: Some(vec![WebhookBodyEmbedField {
+                        name: "Head".to_owned(),
+                        value: format!("```{}```", super::FormattedRequestHead { head: &head }),
+                        inline: None,
+                    }]),
+                    url: None,
+                },
+                WebhookBodyEmbed {
+                    title: "Connection info".to_owned(),
+                    description: None,
+                    color: 5814783,
+                    fields: Some(vec![
+                        WebhookBodyEmbedField {
+                            name: "Host".to_owned(),
+                            value: connection_info.host().to_owned(),
+                            inline: None,
+                        },
+                        WebhookBodyEmbedField {
+                            name: "Peer address".to_owned(),
+                            value: connection_info.peer_addr().unwrap_or("Unknown").to_owned(),
+                            inline: None,
+                        },
+                        WebhookBodyEmbedField {
+                            name: "Real IP remote address".to_owned(),
+                            value: connection_info
+                                .realip_remote_addr()
+                                .unwrap_or("Unknown")
+                                .to_owned(),
+                            inline: None,
+                        },
+                        WebhookBodyEmbedField {
+                            name: "Scheme".to_owned(),
+                            value: connection_info.scheme().to_owned(),
+                            inline: None,
+                        },
+                    ]),
+                    url: None,
+                },
+            ],
         })
         .send()
         .await

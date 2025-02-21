@@ -1,6 +1,6 @@
 use core::fmt;
 
-use actix_web::dev::{ConnectionInfo, RequestHead};
+use actix_web::dev::RequestHead;
 
 pub(super) struct FormattedHeaderValue<'a> {
     inner: Result<&'a str, &'a [u8]>,
@@ -63,29 +63,6 @@ impl fmt::Display for FormattedRequestHead<'_> {
 
             writeln!(f, "{name}: {value}")?;
         }
-
-        Ok(())
-    }
-}
-
-pub(super) struct FormattedConnectionInfo<'a> {
-    pub(super) connection_info: &'a ConnectionInfo,
-}
-
-impl fmt::Display for FormattedConnectionInfo<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Host: {}", self.connection_info.host())?;
-        writeln!(
-            f,
-            "Peer address: {}",
-            self.connection_info.peer_addr().unwrap_or("None"),
-        )?;
-        writeln!(
-            f,
-            "Real IP remote address: {}",
-            self.connection_info.realip_remote_addr().unwrap_or("None"),
-        )?;
-        writeln!(f, "Scheme: {}", self.connection_info.scheme())?;
 
         Ok(())
     }
