@@ -201,7 +201,7 @@ where
             old,
             new,
             current_rank,
-            old_rank: old_rank.map(From::from).into(),
+            old_rank: old_rank.into(),
         },
     })
 }
