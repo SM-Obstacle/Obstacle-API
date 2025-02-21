@@ -8,22 +8,24 @@ use actix_web::body::BoxBody;
 use actix_web::dev::Service as _;
 use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
 use actix_web::web::{JsonConfig, Query};
-use actix_web::{web, HttpResponse, Scope};
+use actix_web::{HttpResponse, Scope, web};
 use records_lib::context::{Context, Ctx};
-use records_lib::{acquire, Database};
+use records_lib::{Database, acquire};
 use serde::Serialize;
 use tracing_actix_web::RequestId;
 
+#[cfg(auth)]
 use self::admin::admin_scope;
 use self::event::event_scope;
 use self::map::map_scope;
 use self::player::player_scope;
 use self::staggered::staggered_scope;
 use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
-use crate::utils::{self, get_api_status, json, ApiStatus};
+use crate::utils::{self, ApiStatus, get_api_status, json};
 use crate::{FitRequestId as _, ModeVersion, RecordsResponse, RecordsResultExt, Res};
 use actix_web::Responder;
 
+#[cfg(auth)]
 pub mod admin;
 pub mod event;
 pub mod map;
@@ -45,7 +47,9 @@ pub fn api_route() -> Scope<
 > {
     let json_config = JsonConfig::default().limit(1024 * 16);
 
-    let scope = web::scope("").app_data(json_config);
+    let scope = web::scope("")
+        .app_data(json_config)
+        .route("/info", web::get().to(info));
 
     #[cfg(feature = "request_filter")]
     let scope = scope.wrap_fn(|req, srv| {
@@ -64,15 +68,16 @@ pub fn api_route() -> Scope<
         }
     });
 
+    #[cfg(auth)]
+    let scope = scope.service(admin_scope());
+
     scope
         .route("/latestnews_image", web::get().to(latestnews_image))
-        .route("/info", web::get().to(info))
         .route("/overview", web::get().to(overview))
         .route("/report", web::post().to(report_error))
         .service(staggered_scope())
         .service(player_scope())
         .service(map_scope())
-        .service(admin_scope())
         .service(event_scope())
 }
 
