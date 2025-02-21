@@ -37,10 +37,12 @@ itertools = { workspace = true }
 once_cell = { workspace = true }
 records-lib = { workspace = true, features = ["tracing"] }
 mkenv = { workspace = true }
+nom = { workspace = true }
 
 [dev-dependencies]
 
 [features]
-default = []
+default = ["request_filter"]
 gql_schema = []
+request_filter = []
 auth = []

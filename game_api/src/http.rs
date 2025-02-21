@@ -3,24 +3,26 @@
 
 use std::fmt;
 
+use actix_web::body::BoxBody;
+#[cfg(feature = "request_filter")]
+use actix_web::dev::Service as _;
+use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
 use actix_web::web::{JsonConfig, Query};
 use actix_web::{web, HttpResponse, Scope};
-
 use records_lib::context::{Context, Ctx};
 use records_lib::{acquire, Database};
 use serde::Serialize;
 use tracing_actix_web::RequestId;
-
-use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
-use crate::utils::{self, get_api_status, json, ApiStatus};
-use crate::{FitRequestId as _, ModeVersion, RecordsResponse, RecordsResultExt, Res};
-use actix_web::Responder;
 
 use self::admin::admin_scope;
 use self::event::event_scope;
 use self::map::map_scope;
 use self::player::player_scope;
 use self::staggered::staggered_scope;
+use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
+use crate::utils::{self, get_api_status, json, ApiStatus};
+use crate::{FitRequestId as _, ModeVersion, RecordsResponse, RecordsResultExt, Res};
+use actix_web::Responder;
 
 pub mod admin;
 pub mod event;
@@ -32,11 +34,37 @@ mod pb;
 mod player_finished;
 mod staggered;
 
-pub fn api_route() -> Scope {
+pub fn api_route() -> Scope<
+    impl ServiceFactory<
+        ServiceRequest,
+        Config = (),
+        Response = ServiceResponse<BoxBody>,
+        Error = actix_web::Error,
+        InitError = (),
+    >,
+> {
     let json_config = JsonConfig::default().limit(1024 * 16);
 
-    web::scope("")
-        .app_data(json_config)
+    let scope = web::scope("").app_data(json_config);
+
+    #[cfg(feature = "request_filter")]
+    let scope = scope.wrap_fn(|req, srv| {
+        let is_valid = crate::request_filter::is_request_valid(&req);
+        let head = req.head().clone();
+        let connection_info = req.connection_info().clone();
+        let client = req.app_data::<reqwest::Client>().cloned().unwrap();
+
+        let fut = srv.call(req);
+        async move {
+            let res = fut.await?;
+            if !is_valid {
+                crate::request_filter::flag_invalid_req(client, head, connection_info).await?;
+            }
+            Ok(res)
+        }
+    });
+
+    scope
         .route("/latestnews_image", web::get().to(latestnews_image))
         .route("/info", web::get().to(info))
         .route("/overview", web::get().to(overview))
