@@ -45,11 +45,7 @@ pub fn api_route() -> Scope<
         InitError = (),
     >,
 > {
-    let json_config = JsonConfig::default().limit(1024 * 16);
-
-    let scope = web::scope("")
-        .app_data(json_config)
-        .route("/info", web::get().to(info));
+    let scope = web::scope("");
 
     #[cfg(feature = "request_filter")]
     let scope = scope.wrap_fn(|req, srv| {
@@ -71,14 +67,21 @@ pub fn api_route() -> Scope<
     #[cfg(auth)]
     let scope = scope.service(admin_scope());
 
-    scope
+    let scope = scope
         .route("/latestnews_image", web::get().to(latestnews_image))
         .route("/overview", web::get().to(overview))
         .route("/report", web::post().to(report_error))
         .service(staggered_scope())
         .service(player_scope())
         .service(map_scope())
-        .service(event_scope())
+        .service(event_scope());
+
+    let json_config = JsonConfig::default().limit(1024 * 16);
+
+    web::scope("")
+        .app_data(json_config)
+        .route("/info", web::get().to(info))
+        .service(scope)
 }
 
 #[derive(serde::Deserialize)]
