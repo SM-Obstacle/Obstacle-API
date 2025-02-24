@@ -1,19 +1,19 @@
 use actix_web::{
-    web::{self, Json, Query},
     HttpResponse, Responder, Scope,
+    web::{self, Json, Query},
 };
 use records_lib::{
-    context::{Context, Ctx},
     Database,
+    context::{Context, Ctx},
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{mysql::MySqlRow, FromRow, Row};
+use sqlx::{FromRow, Row, mysql::MySqlRow};
 use tracing_actix_web::RequestId;
 
 use crate::{
-    auth::{privilege, MPAuthGuard},
-    utils::json,
     FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
+    auth::{MPAuthGuard, privilege},
+    utils::json,
 };
 
 pub fn admin_scope() -> Scope {

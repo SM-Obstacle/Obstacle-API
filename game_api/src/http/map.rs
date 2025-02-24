@@ -1,18 +1,18 @@
 use crate::{
-    auth::{self, privilege, ApiAvailable, AuthHeader, MPAuthGuard},
-    utils::{any_repeated, json},
     FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
+    auth::{self, ApiAvailable, AuthHeader, MPAuthGuard, privilege},
+    request_filter::{CheckRequest, InGameFilter},
+    utils::{any_repeated, json},
 };
 use actix_web::{
-    web::{self, Json, Query},
     HttpResponse, Responder, Scope,
+    web::{self, Json, Query},
 };
-use futures::{future::try_join_all, StreamExt};
+use futures::{StreamExt, future::try_join_all};
 use records_lib::{
-    acquire,
+    Database, acquire,
     context::{Context, Ctx, HasMapUid},
     models::{self, Map, Player},
-    Database,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -40,6 +40,7 @@ struct UpdateMapBody {
 }
 
 async fn insert(
+    _: CheckRequest<InGameFilter>,
     _: ApiAvailable,
     req_id: RequestId,
     db: Res<Database>,
@@ -366,6 +367,7 @@ struct RateResponse {
 
 // TODO: use a SQL transaction
 pub async fn rate(
+    _: CheckRequest<InGameFilter>,
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
@@ -558,6 +560,7 @@ struct ResetRatingsResponse {
 }
 
 pub async fn reset_ratings(
+    _: CheckRequest<InGameFilter>,
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::ADMIN }>,
     db: Res<Database>,

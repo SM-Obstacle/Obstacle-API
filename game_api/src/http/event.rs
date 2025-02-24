@@ -1,10 +1,11 @@
 use actix_web::{
-    web::{self, Path},
     Responder, Scope,
+    web::{self, Path},
 };
 use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{
+    Database, DatabaseConnection, MySqlConnection, NullableInteger, NullableText, RedisConnection,
     acquire,
     context::{
         Context, Ctx as _, HasEditionId, HasEventId, HasEventIds, HasMap, HasPlayerLogin,
@@ -12,17 +13,17 @@ use records_lib::{
     },
     error::RecordsError,
     event::{self, EventMap},
-    models, player, transaction, Database, DatabaseConnection, MySqlConnection, NullableInteger,
-    NullableText, RedisConnection,
+    models, player, transaction,
 };
 use serde::Serialize;
 use sqlx::FromRow;
 use tracing_actix_web::RequestId;
 
 use crate::{
-    auth::MPAuthGuard,
-    utils::{self, json},
     FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
+    auth::MPAuthGuard,
+    request_filter::{CheckRequest, InGameFilter},
+    utils::{self, json},
 };
 
 use super::{overview, pb, player::PlayerInfoNetBody, player_finished as pf};
@@ -460,6 +461,7 @@ async fn edition_overview(
 
 #[inline(always)]
 async fn edition_finished(
+    _: CheckRequest<InGameFilter>,
     MPAuthGuard { login }: MPAuthGuard,
     req_id: RequestId,
     db: Res<Database>,

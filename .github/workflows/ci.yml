@@ -66,4 +66,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Run clippy
-        run: cargo clippy -- -D warnings
+        run: |
+          cargo clippy --all-features -- -D warnings
+          cargo clippy --no-default-features -- -D warnings

@@ -1,15 +1,15 @@
 use actix_session::Session;
 use actix_web::{
-    web::{self, Data, Json, Query},
     HttpResponse, Responder, Scope,
+    web::{self, Data, Json, Query},
 };
 use futures::TryStreamExt;
 use records_lib::{
-    acquire,
+    Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
     context::{Context, Ctx, HasMap, HasMapId, HasPlayerLogin, ReadWrite, Transactional},
     event::{self},
     models::Banishment,
-    must, player, transaction, Database, DatabaseConnection, MySqlConnection, RedisConnection,
+    must, player, transaction,
 };
 use reqwest::Client;
 #[cfg(auth)]
@@ -24,15 +24,16 @@ use tracing_actix_web::RequestId;
 
 #[cfg(auth)]
 use crate::{
-    auth::{Message, WebToken, TIMEOUT},
     AccessTokenErr,
+    auth::{Message, TIMEOUT, WebToken},
 };
 
 use crate::{
-    auth::{self, privilege, ApiAvailable, AuthHeader, AuthState, MPAuthGuard, WEB_TOKEN_SESS_KEY},
-    discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
-    utils::{self, json},
     FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
+    auth::{self, ApiAvailable, AuthHeader, AuthState, MPAuthGuard, WEB_TOKEN_SESS_KEY, privilege},
+    discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
+    request_filter::{CheckRequest, InGameFilter, WebsiteFilter},
+    utils::{self, json},
 };
 
 use super::{pb, player_finished as pf};
@@ -87,6 +88,7 @@ pub async fn get_or_insert(db: &Database, body: &PlayerInfoNetBody) -> RecordsRe
 }
 
 pub async fn update(
+    _: CheckRequest<InGameFilter>,
     _: ApiAvailable,
     req_id: RequestId,
     db: Res<Database>,
@@ -315,6 +317,7 @@ pub async fn finished_at(
 
 #[inline(always)]
 async fn finished(
+    _: CheckRequest<InGameFilter>,
     _: ApiAvailable,
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
@@ -348,6 +351,7 @@ async fn get_token() -> RecordsResponse<impl Responder> {
 
 #[cfg(auth)]
 async fn get_token(
+    _: CheckRequest<InGameFilter>,
     _: ApiAvailable,
     req_id: RequestId,
     db: Res<Database>,
@@ -409,6 +413,7 @@ pub struct GiveTokenBody {
 }
 
 pub async fn post_give_token(
+    _: CheckRequest<WebsiteFilter>,
     req_id: RequestId,
     session: Session,
     state: Data<AuthState>,
@@ -572,6 +577,7 @@ struct ReportErrorBody {
 }
 
 async fn report_error(
+    _: CheckRequest<InGameFilter>,
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     Res(client): Res<Client>,
@@ -667,6 +673,7 @@ struct ACBody {
 }
 
 async fn ac(
+    _: CheckRequest<InGameFilter>,
     req_id: RequestId,
     Res(client): Res<Client>,
     Json(body): Json<ACBody>,
