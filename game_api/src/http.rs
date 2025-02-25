@@ -19,7 +19,8 @@ use self::map::map_scope;
 use self::player::player_scope;
 use self::staggered::staggered_scope;
 use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
-use crate::request_filter::{CheckRequest, InGameFilter};
+#[cfg(feature = "request_filter")]
+use crate::request_filter::{FlagFalseRequest, InGameFilter};
 use crate::utils::{self, ApiStatus, get_api_status, json};
 use crate::{FitRequestId as _, ModeVersion, RecordsResponse, RecordsResultExt, Res};
 use actix_web::Responder;
@@ -45,6 +46,9 @@ pub fn api_route() -> Scope<
     >,
 > {
     let scope = web::scope("");
+
+    #[cfg(feature = "request_filter")]
+    let scope = scope.wrap(FlagFalseRequest::<InGameFilter>::default());
 
     #[cfg(auth)]
     let scope = scope.service(admin_scope());
@@ -93,7 +97,6 @@ struct ReportErrorBody {
 }
 
 async fn report_error(
-    _: CheckRequest<InGameFilter>,
     Res(client): Res<reqwest::Client>,
     req_id: RequestId,
     web::Json(body): web::Json<ReportErrorBody>,

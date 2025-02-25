@@ -67,5 +67,6 @@ jobs:
 
       - name: Run clippy
         run: |
+          cargo clippy -- -D warnings
           cargo clippy --all-features -- -D warnings
           cargo clippy --no-default-features -- -D warnings

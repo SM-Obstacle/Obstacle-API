@@ -22,7 +22,6 @@ use tracing_actix_web::RequestId;
 use crate::{
     FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
     auth::MPAuthGuard,
-    request_filter::{CheckRequest, InGameFilter},
     utils::{self, json},
 };
 
@@ -461,7 +460,6 @@ async fn edition_overview(
 
 #[inline(always)]
 async fn edition_finished(
-    _: CheckRequest<InGameFilter>,
     MPAuthGuard { login }: MPAuthGuard,
     req_id: RequestId,
     db: Res<Database>,

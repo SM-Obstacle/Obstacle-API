@@ -6,6 +6,7 @@ use nom::{
     combinator::map_res,
 };
 
+#[derive(Clone)]
 pub struct InGameAgent {
     pub maniaplanet_version: (u8, u8, u8),
     pub rv: (u16, u8, u8, u8, u8),
