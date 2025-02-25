@@ -1,18 +1,17 @@
 use crate::{
-    auth::{self, privilege, ApiAvailable, AuthHeader, MPAuthGuard},
-    utils::{any_repeated, json},
     FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
+    auth::{self, ApiAvailable, AuthHeader, MPAuthGuard, privilege},
+    utils::{any_repeated, json},
 };
 use actix_web::{
-    web::{self, Json, Query},
     HttpResponse, Responder, Scope,
+    web::{self, Json, Query},
 };
-use futures::{future::try_join_all, StreamExt};
+use futures::{StreamExt, future::try_join_all};
 use records_lib::{
-    acquire,
+    Database, acquire,
     context::{Context, Ctx, HasMapUid},
     models::{self, Map, Player},
-    Database,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;

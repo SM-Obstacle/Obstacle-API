@@ -1,11 +1,11 @@
-use actix_web::{web, Responder, Scope};
+use actix_web::{Responder, Scope, web};
 use chrono::TimeZone;
 use records_lib::Database;
 use tracing_actix_web::RequestId;
 
 use crate::{
-    auth::{ApiAvailable, MPAuthGuard},
     RecordsResponse, Res,
+    auth::{ApiAvailable, MPAuthGuard},
 };
 
 use super::{event, player, player_finished as pf};

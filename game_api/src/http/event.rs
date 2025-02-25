@@ -1,10 +1,11 @@
 use actix_web::{
-    web::{self, Path},
     Responder, Scope,
+    web::{self, Path},
 };
 use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{
+    Database, DatabaseConnection, MySqlConnection, NullableInteger, NullableText, RedisConnection,
     acquire,
     context::{
         Context, Ctx as _, HasEditionId, HasEventId, HasEventIds, HasMap, HasPlayerLogin,
@@ -12,17 +13,16 @@ use records_lib::{
     },
     error::RecordsError,
     event::{self, EventMap},
-    models, player, transaction, Database, DatabaseConnection, MySqlConnection, NullableInteger,
-    NullableText, RedisConnection,
+    models, player, transaction,
 };
 use serde::Serialize;
 use sqlx::FromRow;
 use tracing_actix_web::RequestId;
 
 use crate::{
+    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
     auth::MPAuthGuard,
     utils::{self, json},
-    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
 };
 
 use super::{overview, pb, player::PlayerInfoNetBody, player_finished as pf};

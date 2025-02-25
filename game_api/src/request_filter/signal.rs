@@ -1,47 +1,83 @@
-//! Module which provides some functions to check if a request is valid or not, and to notify such case.
-
 use actix_web::{
-    dev::{ConnectionInfo, RequestHead, ServiceRequest},
+    dev::{ConnectionInfo, RequestHead},
     error::InternalError,
-    http::{header, StatusCode},
+    http::StatusCode,
 };
+use core::fmt;
 
 use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 
-fn is_known_agent(value: &[u8]) -> bool {
-    let Ok((_, parsed)) = super::parse_agent(value) else {
-        return false;
-    };
-
-    match parsed.client {
-        b"Win64" | b"Win32" | b"Linux" => (),
-        _ => return false,
-    }
-
-    match parsed.maniaplanet_version {
-        // Please let me know when Nadeo releases a new version of ManiaPlanet... :(
-        (..3, ..) | (3, ..3, _) | (3, 3, 0) => (),
-        _ => return false,
-    }
-
-    match parsed.rv {
-        (..2019, ..)
-        | (2019, ..11, ..)
-        | (2019, 11, ..19, ..)
-        | (2019, 11, 19, ..18, _)
-        | (2019, 11, 19, 18, ..=50) => (),
-        _ => return false,
-    }
-
-    match parsed.context {
-        b"none" => (),
-        _ => return false,
-    }
-
-    true
+#[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
+struct FormattedHeaderValue<'a> {
+    inner: Result<&'a str, &'a [u8]>,
 }
 
-pub(crate) async fn flag_invalid_req(
+impl<'a> FormattedHeaderValue<'a> {
+    #[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
+    fn new(val: &'a [u8]) -> Self {
+        Self {
+            inner: std::str::from_utf8(val).map_err(|_| val),
+        }
+    }
+}
+
+impl fmt::Display for FormattedHeaderValue<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct List<'a> {
+            inner: &'a [u8],
+        }
+
+        impl fmt::Display for List<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let mut list = f.debug_list();
+                list.entries(&self.inner[..self.inner.len().min(100)]);
+                if self.inner.len() > 100 {
+                    list.finish_non_exhaustive()
+                } else {
+                    list.finish()
+                }
+            }
+        }
+
+        match &self.inner {
+            Ok(s) => f.write_str(s),
+            Err(b) => write!(f, "Invalid UTF-8: {}", List { inner: b }),
+        }
+    }
+}
+
+#[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
+struct FormattedRequestHead<'a> {
+    head: &'a RequestHead,
+}
+
+impl fmt::Display for FormattedRequestHead<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "{method} {uri} {version:?}",
+            method = self.head.method,
+            uri = self.head.uri,
+            version = self.head.version,
+        )?;
+
+        for (name, value) in self.head.headers.iter() {
+            let value = if name == "Authorization" {
+                b"***"
+            } else {
+                value.as_bytes()
+            };
+            let value = FormattedHeaderValue::new(value);
+
+            writeln!(f, "{name}: {value}")?;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
+pub(super) async fn send_notif(
     client: reqwest::Client,
     head: RequestHead,
     connection_info: ConnectionInfo,
@@ -57,7 +93,7 @@ pub(crate) async fn flag_invalid_req(
                     color: 5814783,
                     fields: Some(vec![WebhookBodyEmbedField {
                         name: "Head".to_owned(),
-                        value: format!("```{}```", super::FormattedRequestHead { head: &head }),
+                        value: format!("```{}```", FormattedRequestHead { head: &head }),
                         inline: None,
                     }]),
                     url: None,
@@ -105,11 +141,4 @@ pub(crate) async fn flag_invalid_req(
         })?;
 
     Ok(())
-}
-
-pub(crate) fn is_request_valid(req: &ServiceRequest) -> bool {
-    req.headers()
-        .get(header::USER_AGENT)
-        .filter(|value| is_known_agent(value.as_bytes()))
-        .is_some()
 }

@@ -1,15 +1,15 @@
 use actix_session::Session;
 use actix_web::{
-    web::{self, Data, Json, Query},
     HttpResponse, Responder, Scope,
+    web::{self, Data, Json, Query},
 };
 use futures::TryStreamExt;
 use records_lib::{
-    acquire,
+    Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
     context::{Context, Ctx, HasMap, HasMapId, HasPlayerLogin, ReadWrite, Transactional},
     event::{self},
     models::Banishment,
-    must, player, transaction, Database, DatabaseConnection, MySqlConnection, RedisConnection,
+    must, player, transaction,
 };
 use reqwest::Client;
 #[cfg(auth)]
@@ -24,30 +24,43 @@ use tracing_actix_web::RequestId;
 
 #[cfg(auth)]
 use crate::{
-    auth::{Message, WebToken, TIMEOUT},
     AccessTokenErr,
+    auth::{Message, TIMEOUT, WebToken},
 };
 
 use crate::{
-    auth::{self, privilege, ApiAvailable, AuthHeader, AuthState, MPAuthGuard, WEB_TOKEN_SESS_KEY},
+    FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
+    auth::{self, ApiAvailable, AuthHeader, AuthState, MPAuthGuard, WEB_TOKEN_SESS_KEY, privilege},
     discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
     utils::{self, json},
-    FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
 };
+
+#[cfg(feature = "request_filter")]
+use crate::request_filter::{FlagFalseRequest, WebsiteFilter};
 
 use super::{pb, player_finished as pf};
 
 pub fn player_scope() -> Scope {
-    web::scope("/player")
+    let scope = web::scope("/player")
         .route("/update", web::post().to(update))
         .route("/finished", web::post().to(finished))
         .route("/get_token", web::post().to(get_token))
-        .route("/give_token", web::post().to(post_give_token))
         .route("/pb", web::get().to(pb))
         .route("/times", web::post().to(times))
         .route("/info", web::get().to(info))
         .route("/report_error", web::post().to(report_error))
-        .route("/ac", web::post().to(ac))
+        .route("/ac", web::post().to(ac));
+
+    #[cfg(feature = "request_filter")]
+    let scope = scope.service(
+        web::scope("")
+            .wrap(FlagFalseRequest::<WebsiteFilter>::default())
+            .route("/give_token", web::post().to(post_give_token)),
+    );
+    #[cfg(not(feature = "request_filter"))]
+    let scope = scope.route("/give_token", web::post().to(post_give_token));
+
+    scope
 }
 
 #[derive(Serialize, Deserialize, Clone, FromRow, Debug)]

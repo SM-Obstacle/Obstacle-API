@@ -4,8 +4,6 @@
 use std::fmt;
 
 use actix_web::body::BoxBody;
-#[cfg(feature = "request_filter")]
-use actix_web::dev::Service as _;
 use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
 use actix_web::web::{JsonConfig, Query};
 use actix_web::{HttpResponse, Scope, web};
@@ -21,6 +19,8 @@ use self::map::map_scope;
 use self::player::player_scope;
 use self::staggered::staggered_scope;
 use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
+#[cfg(feature = "request_filter")]
+use crate::request_filter::{FlagFalseRequest, InGameFilter};
 use crate::utils::{self, ApiStatus, get_api_status, json};
 use crate::{FitRequestId as _, ModeVersion, RecordsResponse, RecordsResultExt, Res};
 use actix_web::Responder;
@@ -48,21 +48,7 @@ pub fn api_route() -> Scope<
     let scope = web::scope("");
 
     #[cfg(feature = "request_filter")]
-    let scope = scope.wrap_fn(|req, srv| {
-        let is_valid = crate::request_filter::is_request_valid(&req);
-        let head = req.head().clone();
-        let connection_info = req.connection_info().clone();
-        let client = req.app_data::<reqwest::Client>().cloned().unwrap();
-
-        let fut = srv.call(req);
-        async move {
-            let res = fut.await?;
-            if !is_valid {
-                crate::request_filter::flag_invalid_req(client, head, connection_info).await?;
-            }
-            Ok(res)
-        }
-    });
+    let scope = scope.wrap(FlagFalseRequest::<InGameFilter>::default());
 
     #[cfg(auth)]
     let scope = scope.service(admin_scope());

@@ -1,9 +1,5 @@
-mod check;
-mod format;
-mod parse;
+mod filter;
+mod signal;
 
-// Used accross the sub-modules
-use format::FormattedRequestHead;
-use parse::parse_agent;
-
-pub(crate) use check::{flag_invalid_req, is_request_valid};
+#[cfg_attr(not(feature = "request_filter"), allow(unused_imports))]
+pub use filter::*;

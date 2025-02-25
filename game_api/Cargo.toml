@@ -38,6 +38,7 @@ once_cell = { workspace = true }
 records-lib = { workspace = true, features = ["tracing"] }
 mkenv = { workspace = true }
 nom = { workspace = true }
+pin-project-lite = "0.2.16"
 
 [dev-dependencies]
 
