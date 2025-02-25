@@ -8,8 +8,6 @@ use actix_web::{
     FromRequest, HttpMessage,
     dev::{ConnectionInfo, RequestHead, Service, ServiceRequest, ServiceResponse, Transform},
 };
-#[cfg(feature = "request_filter")]
-use futures::future::Either;
 use futures::future::{Ready, ready};
 #[cfg(feature = "request_filter")]
 use std::pin::Pin;
@@ -143,7 +141,7 @@ where
     type Response = S::Response;
     type Error = S::Error;
     #[cfg(feature = "request_filter")]
-    type Future = Either<FlagFalseRequestServiceFut<S::Future, B, Self::Error>, S::Future>;
+    type Future = FlagFalseRequestServiceFut<S::Future, B, Self::Error>;
     #[cfg(not(feature = "request_filter"))]
     type Future = S::Future;
 
@@ -152,39 +150,34 @@ where
     fn call(&self, req: ServiceRequest) -> Self::Future {
         #[cfg(feature = "request_filter")]
         {
-            if req.extensions().contains::<RequestFlagged>() {
-                Either::Right(self.service.call(req))
-            } else {
-                let filtered_agent = req
-                    .headers()
-                    .get(header::USER_AGENT)
-                    .and_then(|header| {
-                        <<F as FilterAgent>::AgentType as FromBytes>::from_bytes(header.as_bytes())
-                            .ok()
-                    })
-                    .filter(<F as FilterAgent>::is_valid);
-
-                let invalid_req_inventory = if filtered_agent.is_some() {
-                    None
-                } else {
-                    Some((
-                        req.app_data::<reqwest::Client>().cloned().unwrap(),
-                        req.head().clone(),
-                        req.connection_info().clone(),
-                    ))
-                };
-
-                req.extensions_mut().insert(CurrentUserAgent::<F> {
-                    user_agent: filtered_agent,
-                });
-
-                let res = self.service.call(req);
-
-                Either::Left(FlagFalseRequestServiceFut {
-                    fut: res,
-                    invalid_req_inventory,
-                    _marker: PhantomData,
+            let filtered_agent = req
+                .headers()
+                .get(header::USER_AGENT)
+                .and_then(|header| {
+                    <<F as FilterAgent>::AgentType as FromBytes>::from_bytes(header.as_bytes()).ok()
                 })
+                .filter(<F as FilterAgent>::is_valid);
+
+            let invalid_req_inventory = if filtered_agent.is_some() {
+                None
+            } else {
+                Some((
+                    req.app_data::<reqwest::Client>().cloned().unwrap(),
+                    req.head().clone(),
+                    req.connection_info().clone(),
+                ))
+            };
+
+            req.extensions_mut().insert(CurrentUserAgent::<F> {
+                user_agent: filtered_agent,
+            });
+
+            let res = self.service.call(req);
+
+            FlagFalseRequestServiceFut {
+                fut: res,
+                invalid_req_inventory,
+                _marker: PhantomData,
             }
         }
 
