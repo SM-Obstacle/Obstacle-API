@@ -5,23 +5,24 @@
 
 use actix_cors::Cors;
 use actix_session::{
+    SessionMiddleware,
     config::{CookieContentSecurity, PersistentSession},
     storage::CookieSessionStore,
-    SessionMiddleware,
 };
 use actix_web::{
-    cookie::{time::Duration as CookieDuration, Key},
-    web::{self, Data},
     App, HttpServer, Responder,
+    cookie::{Key, time::Duration as CookieDuration},
+    web::{self, Data},
 };
 use anyhow::Context;
 use game_api_lib::{
-    api_route, graphql_route, AuthState, FitRequestId, RecordsErrorKind, RecordsResponse,
+    AuthState, FitRequestId, RecordsErrorKind, RecordsResponse, api_route, graphql_route,
 };
-use records_lib::{get_mysql_pool, get_redis_pool, Database};
+use records_lib::{Database, get_mysql_pool, get_redis_pool};
 use reqwest::Client;
+use tracing::level_filters::LevelFilter;
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId, RootSpanBuilder, TracingLogger};
-use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 struct CustomRootSpanBuilder;
 
@@ -69,6 +70,11 @@ async fn main() -> anyhow::Result<()> {
 
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::CLOSE)
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
         .init();
 
     tracing::info!(
