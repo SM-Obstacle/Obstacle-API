@@ -1,8 +1,9 @@
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
 use records_lib::{
+    DatabaseConnection, MySqlConnection, NullableInteger,
     context::{HasMap, HasMapId, HasPlayerId, HasPlayerLogin, ReadWrite, Transactional},
-    models, ranks, DatabaseConnection, MySqlConnection, NullableInteger,
+    models, ranks,
 };
 use serde::{Deserialize, Serialize};
 
@@ -53,8 +54,8 @@ where
     C: HasPlayerId + HasMapId,
 {
     let record_id: u32 = sqlx::query_scalar(
-        "INSERT INTO records (record_player_id, map_id, time, respawn_count, record_date, flags, event_record_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING record_id",
+        "INSERT INTO records (record_player_id, map_id, time, respawn_count, record_date, flags, event_record_id, modeversion)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING record_id",
     )
     .bind(ctx.get_player_id())
     .bind(ctx.get_map_id())
@@ -63,6 +64,7 @@ where
     .bind(at)
     .bind(body.flags)
     .bind(event_record_id)
+    .bind(ctx.get_mode_version())
     .fetch_one(&mut **db)
     .await?;
 

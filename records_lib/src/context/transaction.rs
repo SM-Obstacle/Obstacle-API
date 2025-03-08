@@ -1,6 +1,6 @@
 use sqlx::MySqlPool;
 
-use crate::{mappack::AnyMappackId, models, RedisPool};
+use crate::{RedisPool, mappack::AnyMappackId, models};
 
 use super::{
     Ctx, HasEdition, HasEditionId, HasEvent, HasEventHandle, HasEventId, HasMap, HasMapId,
@@ -140,6 +140,11 @@ impl<E: Ctx, M: TransactionMode> Ctx for WithTransactionMode<E, M> {
     #[inline(always)]
     fn get_opt_edition_id(&self) -> Option<u32> {
         <E as Ctx>::get_opt_edition_id(&self.extra)
+    }
+
+    #[inline(always)]
+    fn get_mode_version(&self) -> Option<crate::ModeVersion> {
+        <E as Ctx>::get_mode_version(&self.extra)
     }
 }
 

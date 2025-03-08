@@ -21,7 +21,8 @@
 
 use sqlx::MySqlPool;
 
-use crate::{mappack::AnyMappackId, models, Database, RedisPool};
+use crate::ModeVersion;
+use crate::{Database, RedisPool, mappack::AnyMappackId, models};
 
 mod macros;
 
@@ -90,6 +91,11 @@ pub trait Ctx: Send + Sync {
     #[inline]
     fn get_opt_edition_id(&self) -> Option<u32> {
         None
+    }
+
+    /// Returns the current mode version used by the client.
+    fn get_mode_version(&self) -> Option<ModeVersion> {
+        None // this isn't working and always returns None
     }
 
     /// Returns the optional event and its edition the context has.
@@ -412,6 +418,11 @@ impl<T: Ctx> Ctx for &T {
     fn get_opt_edition_id(&self) -> Option<u32> {
         <T as Ctx>::get_opt_edition_id(self)
     }
+
+    #[inline(always)]
+    fn get_mode_version(&self) -> Option<ModeVersion> {
+        <T as Ctx>::get_mode_version(self)
+    }
 }
 
 impl<T: Ctx> Ctx for &mut T {
@@ -434,6 +445,11 @@ impl<T: Ctx> Ctx for &mut T {
     fn get_opt_edition_id(&self) -> Option<u32> {
         <T as Ctx>::get_opt_edition_id(self)
     }
+
+    #[inline(always)]
+    fn get_mode_version(&self) -> Option<ModeVersion> {
+        <T as Ctx>::get_mode_version(self)
+    }
 }
 
 /// The default context type.
@@ -441,10 +457,20 @@ impl<T: Ctx> Ctx for &mut T {
 /// This is the base type that implements the [`Ctx`] trait. It doesn't have any data by default.
 #[derive(Default)]
 pub struct Context {
-    _priv: (),
+    /// The mode version used by the client.
+    ///
+    /// This mode version will be forwarded to other context types when using the methods of the
+    /// [`Ctx`] trait. This means that for any context type, the returned version of the
+    /// [`Ctx::get_mode_version`] method is the one provided here, or `None` if not provided
+    /// (by using [`Context::default()`] for example).
+    pub mode_version: Option<ModeVersion>,
 }
 
-impl Ctx for Context {}
+impl Ctx for Context {
+    fn get_mode_version(&self) -> Option<ModeVersion> {
+        self.mode_version
+    }
+}
 
 impl HasPersistentMode for Context {
     #[cold]

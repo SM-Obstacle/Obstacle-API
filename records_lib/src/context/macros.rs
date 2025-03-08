@@ -78,6 +78,12 @@ macro_rules! new_combinator {
 
         impl <$($lt,)? E: $crate::context::Ctx> $crate::context::Ctx for $Combinator <$($lt,)? E> {
             $crate::context::macros::impl_ctx!($($($ctx_impl_tt)*)?);
+
+            // The implementation of this method is in the `Context` base type.
+            #[inline(always)]
+            fn get_mode_version(&self) -> Option<$crate::modeversion::ModeVersion> {
+                <E as $crate::context::Ctx>::get_mode_version(&self.extra)
+            }
         }
 
         $(
