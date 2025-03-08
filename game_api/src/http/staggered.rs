@@ -39,13 +39,22 @@ type StaggeredBody<B> = web::Json<Staggered<B>>;
 #[inline(always)]
 async fn staggered_finished(
     _: ApiAvailable,
+    mode_version: Option<crate::ModeVersion>,
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     body: StaggeredBody<pf::HasFinishedBody>,
 ) -> RecordsResponse<impl Responder> {
     let time = body.get_time();
-    player::finished_at(req_id, login, db, body.0.body, time).await
+    player::finished_at(
+        req_id,
+        mode_version.map(|x| x.0),
+        login,
+        db,
+        body.0.body,
+        time,
+    )
+    .await
 }
 
 #[inline(always)]

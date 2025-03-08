@@ -1,9 +1,9 @@
 use std::{fmt, str::FromStr};
 
 use nom::{
+    Parser as _,
     bytes::complete::{tag, take_while1},
     combinator::{map, map_res},
-    Parser as _,
 };
 
 /// The error emitted by the parse of the [`ModeVersion`] type.
@@ -12,6 +12,7 @@ use nom::{
 pub struct ModeVersionParseErr;
 
 /// The ShootMania Obstacle Mode version, like `2.7.4`.
+#[derive(Clone, Copy)]
 pub struct ModeVersion {
     /// The MAJOR part.
     pub major: u8,
@@ -31,6 +32,43 @@ impl fmt::Debug for ModeVersion {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
+    }
+}
+
+impl<'a> sqlx::Encode<'a, sqlx::MySql> for ModeVersion {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <sqlx::MySql as sqlx::Database>::ArgumentBuffer<'a>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        use std::io::Write as _;
+
+        /// We cap the length to 3 because the total length can't exceed 11 = 9 + 2 (the dots).
+        #[inline]
+        fn part_len(x: u8) -> u8 {
+            match x {
+                0..=9 => 1,
+                10..=99 => 2,
+                _ => 3,
+            }
+        }
+
+        let len = part_len(self.major) + part_len(self.minor) + part_len(self.patch) + 2;
+        buf.push(len);
+        write!(buf, "{self}")?;
+
+        Ok(sqlx::encode::IsNull::No)
+    }
+}
+
+impl sqlx::Type<sqlx::MySql> for ModeVersion {
+    #[inline(always)]
+    fn type_info() -> <sqlx::MySql as sqlx::Database>::TypeInfo {
+        <str as sqlx::Type<sqlx::MySql>>::type_info()
+    }
+
+    #[inline(always)]
+    fn compatible(ty: &<sqlx::MySql as sqlx::Database>::TypeInfo) -> bool {
+        <str as sqlx::Type<sqlx::MySql>>::compatible(ty)
     }
 }
 

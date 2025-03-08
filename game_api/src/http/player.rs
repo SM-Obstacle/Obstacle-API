@@ -5,7 +5,7 @@ use actix_web::{
 };
 use futures::TryStreamExt;
 use records_lib::{
-    Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
+    Database, DatabaseConnection, ModeVersion, MySqlConnection, RedisConnection, acquire,
     context::{Context, Ctx, HasMap, HasMapId, HasPlayerLogin, ReadWrite, Transactional},
     event::{self},
     models::Banishment,
@@ -294,6 +294,7 @@ where
 
 pub async fn finished_at(
     req_id: RequestId,
+    mode_version: Option<ModeVersion>,
     login: String,
     db: Res<Database>,
     body: pf::HasFinishedBody,
@@ -301,7 +302,7 @@ pub async fn finished_at(
 ) -> RecordsResponse<impl Responder> {
     let conn = acquire!(db.with_api_err().fit(req_id)?);
 
-    let ctx = Context::default().with_player_login(&login);
+    let ctx = Context { mode_version }.with_player_login(&login);
 
     let map = must::have_map(conn.mysql_conn, ctx.by_ref().with_map_uid(&body.map_uid))
         .await
@@ -329,12 +330,21 @@ pub async fn finished_at(
 #[inline(always)]
 async fn finished(
     _: ApiAvailable,
+    mode_version: Option<crate::ModeVersion>,
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
-    finished_at(req_id, login, db, body.0, chrono::Utc::now().naive_utc()).await
+    finished_at(
+        req_id,
+        mode_version.map(|x| x.0),
+        login,
+        db,
+        body.0,
+        chrono::Utc::now().naive_utc(),
+    )
+    .await
 }
 
 #[cfg(auth)]
