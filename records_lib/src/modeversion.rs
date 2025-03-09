@@ -20,6 +20,33 @@ pub struct ModeVersion {
     pub minor: u8,
     /// The PATCH part.
     pub patch: u8,
+
+    /// The total length of the string of the version.
+    ///
+    /// This is used to encode the version in a column in the database.
+    len: u8,
+}
+
+impl ModeVersion {
+    /// Returns a mode version from the major, minor, and patch parts.
+    pub fn new(major: u8, minor: u8, patch: u8) -> Self {
+        // We cap the length to 3 because the total length can't exceed 11 = 9 + 2 (the dots).
+        #[inline]
+        fn part_len(x: u8) -> u8 {
+            match x {
+                0..=9 => 1,
+                10..=99 => 2,
+                _ => 3,
+            }
+        }
+
+        Self {
+            major,
+            minor,
+            patch,
+            len: part_len(major) + part_len(minor) + part_len(patch) + 2,
+        }
+    }
 }
 
 impl fmt::Display for ModeVersion {
@@ -42,18 +69,7 @@ impl<'a> sqlx::Encode<'a, sqlx::MySql> for ModeVersion {
     ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
         use std::io::Write as _;
 
-        /// We cap the length to 3 because the total length can't exceed 11 = 9 + 2 (the dots).
-        #[inline]
-        fn part_len(x: u8) -> u8 {
-            match x {
-                0..=9 => 1,
-                10..=99 => 2,
-                _ => 3,
-            }
-        }
-
-        let len = part_len(self.major) + part_len(self.minor) + part_len(self.patch) + 2;
-        buf.push(len);
+        buf.push(self.len);
         write!(buf, "{self}")?;
 
         Ok(sqlx::encode::IsNull::No)
@@ -82,11 +98,7 @@ fn parse_u8(input: &str) -> nom::IResult<&str, u8> {
 fn parse_mode_version(input: &str) -> nom::IResult<&str, ModeVersion> {
     map(
         (parse_u8, tag("."), parse_u8, tag("."), parse_u8),
-        |(major, _, minor, _, patch)| ModeVersion {
-            major,
-            minor,
-            patch,
-        },
+        |(major, _, minor, _, patch)| ModeVersion::new(major, minor, patch),
     )
     .parse(input)
 }
