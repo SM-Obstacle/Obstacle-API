@@ -1,17 +1,18 @@
 use std::{collections::HashMap, sync::Arc};
 
-use async_graphql::{connection, dataloader::Loader, Enum, ID};
+use async_graphql::{Enum, ID, connection, dataloader::Loader};
 use records_lib::{
-    acquire,
+    Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
     context::{Context, Ctx as _, HasPlayerId, ReadOnly, Transactional},
     models::{self, Role},
-    transaction, Database, DatabaseConnection, MySqlConnection, RedisConnection,
+    transaction,
 };
-use sqlx::{mysql, FromRow, MySqlPool, Row};
+use sqlx::{FromRow, MySqlPool, Row, mysql};
 
 use crate::RecordsErrorKind;
 
 use super::{
+    SortState,
     ban::Banishment,
     get_rank,
     map::Map,
@@ -21,7 +22,6 @@ use super::{
         connections_bind_query_parameters_order, connections_bind_query_parameters_page,
         connections_pages_info, decode_id,
     },
-    SortState,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Enum)]
@@ -167,28 +167,19 @@ impl Player {
             conn.mysql_conn,
             Context::default().with_player(&self.inner),
             ReadOnly,
-            GetPlayerRecordsParam {
-                date_sort_by,
-                redis_conn: conn.redis_conn,
+            async |mysql_conn, ctx| {
+                get_player_records(mysql_conn, conn.redis_conn, ctx, date_sort_by).await
             },
-            get_player_records,
         ))
         .await
     }
 }
 
-struct GetPlayerRecordsParam<'a> {
-    redis_conn: &'a mut RedisConnection,
-    date_sort_by: Option<SortState>,
-}
-
 async fn get_player_records<C>(
     mysql_conn: MySqlConnection<'_>,
+    redis_conn: &mut RedisConnection,
     ctx: C,
-    GetPlayerRecordsParam {
-        redis_conn,
-        date_sort_by,
-    }: GetPlayerRecordsParam<'_>,
+    date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<Vec<RankedRecord>>
 where
     C: HasPlayerId + Transactional,

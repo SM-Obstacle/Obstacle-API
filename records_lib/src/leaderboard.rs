@@ -3,11 +3,12 @@
 use deadpool_redis::redis::AsyncCommands as _;
 
 use crate::{
+    DatabaseConnection,
     context::{Ctx, HasMapId, HasPersistentMode, ReadOnly, Transactional},
     error::RecordsResult,
     ranks,
     redis_key::map_key,
-    transaction, DatabaseConnection, MySqlConnection, RedisConnection,
+    transaction,
 };
 
 /// The type returned by the [`compet_rank_by_key`](CompetRankingByKeyIter::compet_rank_by_key)
@@ -133,12 +134,6 @@ pub struct Row {
     pub time: i32,
 }
 
-struct LeaderboardImplParam<'a> {
-    redis_conn: &'a mut RedisConnection,
-    start: Option<i64>,
-    end: Option<i64>,
-}
-
 /// Returns the leaderboard of a map.
 pub async fn leaderboard_txn<C>(
     conn: &mut DatabaseConnection<'_>,
@@ -210,30 +205,6 @@ where
     Ok(records)
 }
 
-async fn leaderboard_impl<C>(
-    mysql_conn: MySqlConnection<'_>,
-    ctx: C,
-    LeaderboardImplParam {
-        redis_conn,
-        start,
-        end,
-    }: LeaderboardImplParam<'_>,
-) -> RecordsResult<Vec<Row>>
-where
-    C: HasMapId + Transactional,
-{
-    leaderboard_txn(
-        &mut DatabaseConnection {
-            redis_conn,
-            mysql_conn,
-        },
-        ctx,
-        start,
-        end,
-    )
-    .await
-}
-
 /// Returns the leaderboard of a map.
 ///
 /// This function simply makes a transaction and returns the result of
@@ -247,16 +218,17 @@ pub async fn leaderboard<C>(
 where
     C: HasMapId + HasPersistentMode,
 {
-    transaction::within(
-        conn.mysql_conn,
-        ctx,
-        ReadOnly,
-        LeaderboardImplParam {
-            redis_conn: conn.redis_conn,
-            start: offset,
-            end: limit.map(|x| offset.unwrap_or_default() + x),
-        },
-        leaderboard_impl,
-    )
+    transaction::within(conn.mysql_conn, ctx, ReadOnly, async |mysql_conn, ctx| {
+        leaderboard_txn(
+            &mut DatabaseConnection {
+                redis_conn: conn.redis_conn,
+                mysql_conn,
+            },
+            ctx,
+            offset,
+            limit.map(|x| offset.unwrap_or_default() + x),
+        )
+        .await
+    })
     .await
 }

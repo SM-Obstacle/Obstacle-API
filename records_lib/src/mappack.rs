@@ -5,6 +5,7 @@ use std::{fmt, time::SystemTime};
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
 
 use crate::{
+    DatabaseConnection, MySqlConnection, RedisConnection,
     context::{Ctx as _, HasMappackId, HasPersistentMode, ReadOnly, Transactional},
     error::RecordsResult,
     models, must,
@@ -14,7 +15,7 @@ use crate::{
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
-    transaction, DatabaseConnection, MySqlConnection, RedisConnection,
+    transaction,
 };
 
 #[derive(Default, Clone, Debug)]
@@ -150,10 +151,7 @@ where
         db.mysql_conn,
         &ctx,
         ReadOnly,
-        CalcScoresParam {
-            redis_conn: db.redis_conn,
-        },
-        calc_scores,
+        async |conn, ctx| calc_scores(conn, db.redis_conn, ctx).await,
     ))
     .await?;
 
@@ -330,10 +328,6 @@ async fn save(
     Ok(())
 }
 
-struct CalcScoresParam<'a> {
-    redis_conn: &'a mut RedisConnection,
-}
-
 /// Returns an `Option` because the mappack may have expired.
 #[cfg_attr(
     feature = "tracing",
@@ -341,8 +335,8 @@ struct CalcScoresParam<'a> {
 )]
 async fn calc_scores<C>(
     mysql_conn: MySqlConnection<'_>,
+    redis_conn: &mut RedisConnection,
     ctx: C,
-    CalcScoresParam { redis_conn }: CalcScoresParam<'_>,
 ) -> RecordsResult<Option<MappackScores>>
 where
     C: HasMappackId + Transactional,

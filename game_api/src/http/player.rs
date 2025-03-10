@@ -38,7 +38,10 @@ use crate::{
 #[cfg(feature = "request_filter")]
 use crate::request_filter::{FlagFalseRequest, WebsiteFilter};
 
-use super::{pb, player_finished as pf};
+use super::{
+    pb,
+    player_finished::{self as pf, InsertRecordParams},
+};
 
 pub fn player_scope() -> Scope {
     let scope = web::scope("/player")
@@ -238,20 +241,12 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
     Ok(res_login.to_lowercase() == login.to_lowercase())
 }
 
-struct FinishedImplParams<'a> {
-    redis_conn: &'a mut RedisConnection,
-    at: chrono::NaiveDateTime,
-    body: pf::InsertRecordParams,
-}
-
 async fn finished_impl<C>(
     mysql_conn: MySqlConnection<'_>,
+    redis_conn: &mut RedisConnection,
     ctx: C,
-    FinishedImplParams {
-        redis_conn,
-        at,
-        body,
-    }: FinishedImplParams<'_>,
+    at: chrono::NaiveDateTime,
+    body: InsertRecordParams,
 ) -> RecordsResult<pf::FinishedOutput>
 where
     C: HasPlayerLogin + HasMap + Transactional<Mode = ReadWrite>,
@@ -310,17 +305,9 @@ pub async fn finished_at(
         .fit(req_id)?;
     let ctx = ctx.with_map(&map);
 
-    let res = transaction::within(
-        conn.mysql_conn,
-        ctx,
-        ReadWrite,
-        FinishedImplParams {
-            redis_conn: conn.redis_conn,
-            at,
-            body: body.rest,
-        },
-        finished_impl,
-    )
+    let res = transaction::within(conn.mysql_conn, ctx, ReadWrite, async |mysql_conn, ctx| {
+        finished_impl(mysql_conn, conn.redis_conn, ctx, at, body.rest).await
+    })
     .await
     .fit(req_id)?;
 

@@ -3,21 +3,21 @@ use actix_web::web::{self, Data};
 use actix_web::{HttpResponse, Resource, Responder};
 use async_graphql::dataloader::DataLoader;
 use async_graphql::extensions::ApolloTracing;
-use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
-use async_graphql::{connection, Enum, ErrorExtensionValues, Value, ID};
+use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
+use async_graphql::{Enum, ErrorExtensionValues, ID, Value, connection};
 use async_graphql_actix_web::GraphQLRequest;
 use records_lib::context::{Context, Ctx, ReadOnly, Transactional};
 use records_lib::ranks::get_rank;
+use records_lib::{Database, must};
 use records_lib::{
-    acquire, models, transaction, DatabaseConnection, MySqlConnection, RedisConnection,
+    DatabaseConnection, MySqlConnection, RedisConnection, acquire, models, transaction,
 };
-use records_lib::{must, Database};
 use reqwest::Client;
-use sqlx::{mysql, query_as, FromRow, MySqlPool, Row};
+use sqlx::{FromRow, MySqlPool, Row, mysql, query_as};
 use std::vec::Vec;
 use tracing_actix_web::RequestId;
 
-use crate::auth::{WebToken, WEB_TOKEN_SESS_KEY};
+use crate::auth::{WEB_TOKEN_SESS_KEY, WebToken};
 use crate::graphql::map::MapLoader;
 use crate::graphql::player::PlayerLoader;
 
@@ -365,11 +365,7 @@ impl QueryRoot {
             conn.mysql_conn,
             Context::default(),
             ReadOnly,
-            GetRecordParam {
-                redis_conn: conn.redis_conn,
-                record_id,
-            },
-            get_record,
+            async |mysql_conn, ctx| get_record(mysql_conn, conn.redis_conn, ctx, record_id).await,
         )
         .await
     }
@@ -411,28 +407,19 @@ impl QueryRoot {
             conn.mysql_conn,
             Context::default(),
             ReadOnly,
-            GetRecordsParam {
-                redis_conn: conn.redis_conn,
-                date_sort_by,
+            async |mysql_conn, ctx| {
+                get_records(mysql_conn, conn.redis_conn, ctx, date_sort_by).await
             },
-            get_records,
         )
         .await
     }
 }
 
-struct GetRecordParam<'a> {
-    redis_conn: &'a mut RedisConnection,
-    record_id: u32,
-}
-
 async fn get_record<C>(
     mysql_conn: MySqlConnection<'_>,
+    redis_conn: &mut RedisConnection,
     ctx: C,
-    GetRecordParam {
-        redis_conn,
-        record_id,
-    }: GetRecordParam<'_>,
+    record_id: u32,
 ) -> async_graphql::Result<RankedRecord>
 where
     C: Transactional,
@@ -466,18 +453,11 @@ where
     Ok(out)
 }
 
-struct GetRecordsParam<'a> {
-    redis_conn: &'a mut RedisConnection,
-    date_sort_by: Option<SortState>,
-}
-
 async fn get_records<C: Transactional>(
     mysql_conn: MySqlConnection<'_>,
+    redis_conn: &mut RedisConnection,
     ctx: C,
-    GetRecordsParam {
-        redis_conn,
-        date_sort_by,
-    }: GetRecordsParam<'_>,
+    date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<Vec<RankedRecord>> {
     let mut conn = DatabaseConnection {
         mysql_conn,

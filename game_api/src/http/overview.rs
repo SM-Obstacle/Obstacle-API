@@ -7,7 +7,7 @@ use records_lib::context::{
 use records_lib::leaderboard::{self, Row};
 use records_lib::ranks::update_leaderboard;
 use records_lib::{
-    player, redis_key::map_key, transaction, DatabaseConnection, MySqlConnection, RedisConnection,
+    DatabaseConnection, MySqlConnection, RedisConnection, player, redis_key::map_key, transaction,
 };
 
 #[derive(serde::Deserialize)]
@@ -45,8 +45,8 @@ pub struct ResponseBody {
 
 async fn build_records_array<C>(
     mysql_conn: MySqlConnection<'_>,
-    ctx: C,
     redis_conn: &mut RedisConnection,
+    ctx: C,
 ) -> RecordsResult<Vec<Row>>
 where
     C: HasPlayerLogin + HasMap + Transactional<Mode = ReadOnly>,
@@ -133,14 +133,11 @@ pub async fn overview<C>(conn: DatabaseConnection<'_>, ctx: C) -> RecordsResult<
 where
     C: HasPlayerLogin + HasMap + HasPersistentMode,
 {
-    let ranked_records = transaction::within(
-        conn.mysql_conn,
-        ctx,
-        ReadOnly,
-        conn.redis_conn,
-        build_records_array,
-    )
-    .await?;
+    let ranked_records =
+        transaction::within(conn.mysql_conn, ctx, ReadOnly, async |mysql_conn, ctx| {
+            build_records_array(mysql_conn, conn.redis_conn, ctx).await
+        })
+        .await?;
 
     Ok(ResponseBody {
         response: ranked_records,
