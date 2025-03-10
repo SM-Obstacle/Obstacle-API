@@ -1,27 +1,27 @@
 use std::{collections::HashMap, iter::repeat, sync::Arc};
 
 use async_graphql::{
-    dataloader::{DataLoader, Loader},
     ID,
+    dataloader::{DataLoader, Loader},
 };
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
-    acquire,
+    Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
     context::{Context, Ctx, HasMapId, HasPersistentMode, ReadOnly, Transactional},
     models::{self, Record},
     ranks::{get_rank, update_leaderboard},
     redis_key::alone_map_key,
-    transaction, Database, DatabaseConnection, MySqlConnection, RedisConnection,
+    transaction,
 };
-use sqlx::{mysql, FromRow, MySqlPool};
+use sqlx::{FromRow, MySqlPool, mysql};
 
 use super::{
+    SortState,
     event::EventEdition,
     player::{Player, PlayerLoader},
     rating::PlayerRating,
     record::RankedRecord,
-    SortState,
 };
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -36,22 +36,12 @@ impl From<models::Map> for Map {
     }
 }
 
-struct GetMapRecordsParams<'a> {
-    redis_conn: &'a mut RedisConnection,
-    map_id: u32,
-    rank_sort_by: Option<SortState>,
-    date_sort_by: Option<SortState>,
-}
-
 async fn get_map_records<C>(
     mysql_conn: MySqlConnection<'_>,
+    redis_conn: &mut RedisConnection,
     ctx: C,
-    GetMapRecordsParams {
-        redis_conn,
-        map_id,
-        rank_sort_by,
-        date_sort_by,
-    }: GetMapRecordsParams<'_>,
+    rank_sort_by: Option<SortState>,
+    date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<Vec<RankedRecord>>
 where
     C: Transactional + HasMapId,
@@ -60,7 +50,7 @@ where
         mysql_conn,
         redis_conn,
     };
-    let key = alone_map_key(map_id);
+    let key = alone_map_key(ctx.get_map_id());
 
     update_leaderboard(&mut conn, &ctx).await?;
 
@@ -81,7 +71,7 @@ where
     builder
         .push_event_view_name(&mut query, "r")
         .push(" where r.map_id = ")
-        .push_bind(map_id)
+        .push_bind(ctx.get_map_id())
         .push(" ");
 
     if let Some(ref s) = date_sort_by {
@@ -147,13 +137,9 @@ impl Map {
             conn.mysql_conn,
             ctx,
             ReadOnly,
-            GetMapRecordsParams {
-                redis_conn: conn.redis_conn,
-                map_id: self.inner.id,
-                rank_sort_by,
-                date_sort_by,
+            async |mysql_conn, ctx| {
+                get_map_records(mysql_conn, conn.redis_conn, ctx, rank_sort_by, date_sort_by).await
             },
-            get_map_records,
         ))
         .await
     }

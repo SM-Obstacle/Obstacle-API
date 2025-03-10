@@ -57,10 +57,10 @@
 //! and minimize inconsistencies between Redis and MariaDB.
 
 use crate::{
+    DatabaseConnection, RedisConnection,
     context::{HasMapId, HasPlayerId, Transactional},
     error::{RecordsError, RecordsResult},
-    redis_key::{map_key, MapKey},
-    DatabaseConnection, RedisConnection,
+    redis_key::{MapKey, map_key},
 };
 use deadpool_redis::redis::{self, AsyncCommands};
 use futures::TryStreamExt;
@@ -332,7 +332,7 @@ where
     let player_id = ctx.get_player_id();
     let map_id = ctx.get_map_id();
 
-    let key = &map_key(ctx.get_map_id(), event);
+    let key = &map_key(map_id, event);
     let redis_lb: Vec<i64> = db.redis_conn.zrange_withscores(key, 0, -1).await?;
 
     let mariadb_lb = get_mariadb_lb_query(&ctx)
@@ -415,7 +415,9 @@ where
     }
 
     #[cfg(feature = "tracing")]
-    tracing::error!("missing player rank ({player_id} on map {map_id} with time {time}); tested time: {tested_time:?}\n{msg}");
+    tracing::error!(
+        "missing player rank ({player_id} on map {map_id} with time {time}); tested time: {tested_time:?}\n{msg}"
+    );
 
     Ok(RecordsError::Internal)
 }

@@ -25,7 +25,11 @@ use crate::{
     utils::{self, json},
 };
 
-use super::{overview, pb, player::PlayerInfoNetBody, player_finished as pf};
+use super::{
+    overview, pb,
+    player::PlayerInfoNetBody,
+    player_finished::{self as pf, HasFinishedBody},
+};
 
 pub fn event_scope() -> Scope {
     web::scope("/event")
@@ -477,22 +481,13 @@ async fn edition_finished(
     .await
 }
 
-struct EditionFinishedParams<'a> {
-    redis_conn: &'a mut RedisConnection,
-    original_map_id: Option<u32>,
-    at: chrono::NaiveDateTime,
-    body: pf::HasFinishedBody,
-}
-
 async fn edition_finished_impl<C>(
     mysql_conn: MySqlConnection<'_>,
+    redis_conn: &mut RedisConnection,
     ctx: C,
-    EditionFinishedParams {
-        redis_conn,
-        original_map_id,
-        at,
-        body,
-    }: EditionFinishedParams<'_>,
+    original_map_id: Option<u32>,
+    at: chrono::NaiveDateTime,
+    body: HasFinishedBody,
 ) -> RecordsResult<pf::FinishedOutput>
 where
     C: HasPlayerLogin + HasMap + HasEventIds + Transactional<Mode = ReadWrite>,
@@ -580,13 +575,9 @@ pub async fn edition_finished_at(
         conn.mysql_conn,
         ctx.with_event_edition(&event, &edition).with_map(&map),
         ReadWrite,
-        EditionFinishedParams {
-            redis_conn: conn.redis_conn,
-            original_map_id,
-            at,
-            body,
+        async |mysql_conn, ctx| {
+            edition_finished_impl(mysql_conn, conn.redis_conn, ctx, original_map_id, at, body).await
         },
-        edition_finished_impl,
     )
     .await
     .fit(req_id)?;
