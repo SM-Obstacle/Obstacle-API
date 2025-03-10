@@ -29,11 +29,9 @@ async fn extend_range<C>(
 where
     C: HasMapId + Transactional,
 {
-    records.extend(
-        leaderboard::leaderboard_txn(conn, ctx, Some(start), Some(end - 1))
-            .await
-            .with_api_err()?,
-    );
+    leaderboard::leaderboard_txn_into(conn, ctx, Some(start), Some(end - 1), records)
+        .await
+        .with_api_err()?;
     Ok(())
 }
 
