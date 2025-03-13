@@ -1,12 +1,11 @@
 use std::{
     convert::Infallible,
-    future::{ready, Ready},
+    future::{Ready, ready},
     ops::{Deref, DerefMut},
 };
 
-use actix_web::{dev::Payload, FromRequest, HttpRequest, HttpResponse};
-use rand::Rng;
-use records_lib::{models, Database};
+use actix_web::{FromRequest, HttpRequest, HttpResponse, dev::Payload};
+use records_lib::{Database, models};
 use serde::Serialize;
 
 use crate::{RecordsResult, RecordsResultExt};
@@ -24,16 +23,6 @@ pub fn any_repeated<T: PartialEq>(slice: &[T]) -> bool {
         }
     }
     false
-}
-
-/// Returns a randomly-generated token with the `len` length. It contains alphanumeric characters.
-#[allow(dead_code)]
-pub fn generate_token(len: usize) -> String {
-    rand::thread_rng()
-        .sample_iter(rand::distributions::Alphanumeric)
-        .map(char::from)
-        .take(len)
-        .collect()
 }
 
 #[derive(Serialize, sqlx::FromRow)]

@@ -39,6 +39,8 @@ const V3_MAPPACK_LB_RANKS: &str = "ranks";
 const V3_MAPPACK_MAP_KEY_PREFIX: &str = "map";
 const V3_MAPPACK_MAP_LAST_RANK: &str = "last_rank";
 
+const V3_CACHED: &str = "cached";
+
 macro_rules! create_key {
     (
         $(#[$($attr:tt)*])*
@@ -82,6 +84,16 @@ macro_rules! create_key {
             }
         }
     }
+}
+
+create_key! {
+    ///
+    /// The cached key is a key that was copied from another.
+    struct CachedKey = cached_key {
+        /// The cached key name.
+        key_name: String,
+    }
+    |self, f| write!(f, "{V3_KEY_PREFIX}:{V3_CACHED}:{}", self.key_name)
 }
 
 create_key! {

@@ -58,26 +58,26 @@ use records_lib::context::{Context, Ctx as _};
 use records_lib::models::ApiStatusKind;
 #[cfg(auth)]
 use records_lib::redis_key::{mp_token_key, web_token_key};
-use records_lib::{acquire, Database};
+use records_lib::{Database, acquire};
 use serde::{Deserialize, Serialize};
 #[cfg(auth)]
 use sha256::digest;
-use std::future::{ready, Ready};
+use std::future::{Ready, ready};
 use std::pin::Pin;
 use std::{collections::HashMap, time::Duration};
-use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio::sync::Mutex;
+use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio::time::timeout;
 use tracing::Level;
 use tracing_actix_web::RequestId;
 
-#[cfg(auth)]
-use crate::utils::generate_token;
-use crate::utils::{get_api_status, ApiStatus};
-use crate::{http::player, RecordsErrorKind, RecordsResult};
+use crate::utils::{ApiStatus, get_api_status};
 use crate::{
-    must, AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, RecordsResultExt, Res,
+    AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, RecordsResultExt, Res, must,
 };
+use crate::{RecordsErrorKind, RecordsResult, http::player};
+#[cfg(auth)]
+use records_lib::gen_random_str;
 
 #[allow(unused)]
 pub mod privilege {
@@ -224,7 +224,7 @@ impl AuthState {
                     Message::Ok(web_token) => web_token,
                     Message::InvalidMPCode => return Err(RecordsErrorKind::InvalidMPCode),
                     Message::AccessTokenErr(err) => {
-                        return Err(RecordsErrorKind::AccessTokenErr(err))
+                        return Err(RecordsErrorKind::AccessTokenErr(err));
                     }
                     _ => unreachable!(),
                 },
@@ -256,8 +256,8 @@ impl AuthState {
 /// The tokens are stored in the Redis database.
 #[cfg(auth)]
 pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String, String)> {
-    let mp_token = generate_token(256);
-    let web_token = generate_token(32);
+    let mp_token = gen_random_str(256);
+    let web_token = gen_random_str(32);
 
     let mut connection = db.redis_pool.get().await.with_api_err()?;
     let mp_key = mp_token_key(login);

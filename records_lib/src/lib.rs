@@ -40,6 +40,7 @@ use std::future::Future;
 pub use env::*;
 pub use modeversion::*;
 pub use mptypes::*;
+use rand::Rng as _;
 
 /// Asserts that the type of the provided future is Send, and returns an opaque type from it.
 ///
@@ -51,6 +52,15 @@ where
     T: Future<Output = R> + Send,
 {
     t
+}
+
+/// Returns a randomly-generated string with the `len` length. It contains alphanumeric characters.
+pub fn gen_random_str(len: usize) -> String {
+    rand::thread_rng()
+        .sample_iter(rand::distributions::Alphanumeric)
+        .map(char::from)
+        .take(len)
+        .collect()
 }
 
 /// Represents a connection to the API database, both MariaDB and Redis.
