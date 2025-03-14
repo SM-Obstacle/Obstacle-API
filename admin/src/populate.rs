@@ -1,3 +1,4 @@
+use core::fmt;
 use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::Context as _;
@@ -76,7 +77,7 @@ struct Row {
 
 #[derive(serde::Deserialize)]
 struct MxMapItem {
-    #[serde(rename = "TrackID")]
+    #[serde(rename = "MapID")]
     mx_id: i64,
     #[serde(rename = "AuthorLogin")]
     author_login: String,
@@ -128,7 +129,9 @@ async fn insert_mx_maps(
         inserted_count += 1;
     }
 
-    tracing::info!("Inserted {inserted_count} new map(s) from MX");
+    if inserted_count > 0 {
+        tracing::info!("Inserted {inserted_count} new map(s) from MX");
+    }
 
     Ok(out)
 }
@@ -186,7 +189,7 @@ async fn populate_mx_maps(
                 }),
             ) => MxIdIter::single(*mx_id),
         })
-        .chunks(25);
+        .chunks(10);
 
     let mx_ids: Vec<_> = stream::iter(&mx_ids)
         .map(|mut chunk| {
@@ -299,6 +302,23 @@ pub async fn populate(
     Ok(())
 }
 
+struct CsvReadErr {
+    line: u64,
+}
+
+impl From<u64> for CsvReadErr {
+    #[inline(always)]
+    fn from(line: u64) -> Self {
+        Self { line }
+    }
+}
+
+impl fmt::Display for CsvReadErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to read the CSV on line {}", self.line)
+    }
+}
+
 async fn populate_from_csv<C>(
     conn: &mut DatabaseConnection<'_>,
     client: &reqwest::Client,
@@ -374,8 +394,8 @@ where
                 Some(mx_id),
                 mx_maps
                     .get(&mx_id)
-                    .ok_or_else(|| anyhow::anyhow!("missing map with mx_id {mx_id}"))
-                    .with_context(|| format!("Failed to load the event on line {i}"))?
+                    .ok_or_else(|| anyhow::anyhow!("Missing map with MX ID {mx_id}"))
+                    .with_context(|| CsvReadErr::from(i))?
                     .clone(),
             ),
         };
@@ -398,9 +418,9 @@ where
                         mx_maps
                             .get(&original_mx_id)
                             .ok_or_else(|| {
-                                anyhow::anyhow!("missing map with mx_id {original_mx_id}")
+                                anyhow::anyhow!("Missing map with MX ID {original_mx_id}")
                             })
-                            .with_context(|| format!("Failed to load the event on line {i}"))?
+                            .with_context(|| CsvReadErr::from(i))?
                             .clone(),
                     ),
                 ),
@@ -480,7 +500,7 @@ where
             provided_id
         }
         (Some(id), _) | (_, Some(id)) => id,
-        (None, None) => anyhow::bail!("no MX id provided"),
+        (None, None) => anyhow::bail!("No MX id provided"),
     };
 
     let maps =
