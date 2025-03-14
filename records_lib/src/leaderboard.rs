@@ -134,13 +134,14 @@ pub struct Row {
     pub time: i32,
 }
 
-/// Returns the leaderboard of a map.
-pub async fn leaderboard_txn<C>(
+/// Gets the leaderboard of a map and extends it to the provided vec.
+pub async fn leaderboard_txn_into<C>(
     conn: &mut DatabaseConnection<'_>,
     ctx: C,
     start: Option<i64>,
     end: Option<i64>,
-) -> RecordsResult<Vec<Row>>
+    rows: &mut Vec<Row>,
+) -> RecordsResult<()>
 where
     C: HasMapId + Transactional,
 {
@@ -158,7 +159,7 @@ where
         .await?;
 
     if player_ids.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
 
     let builder = ctx.sql_frag_builder();
@@ -191,10 +192,10 @@ where
         .fetch_all(&mut **conn.mysql_conn)
         .await?;
 
-    let mut records = Vec::with_capacity(result.len());
+    rows.reserve(result.len());
 
     for r in result {
-        records.push(Row {
+        rows.push(Row {
             rank: ranks::get_rank(conn, ctx.by_ref().with_player_id(r.player_id), r.time).await?,
             login: r.login,
             nickname: r.nickname,
@@ -202,7 +203,22 @@ where
         });
     }
 
-    Ok(records)
+    Ok(())
+}
+
+/// Returns the leaderboard of a map.
+pub async fn leaderboard_txn<C>(
+    conn: &mut DatabaseConnection<'_>,
+    ctx: C,
+    start: Option<i64>,
+    end: Option<i64>,
+) -> RecordsResult<Vec<Row>>
+where
+    C: HasMapId + Transactional,
+{
+    let mut out = Vec::new();
+    leaderboard_txn_into(conn, ctx, start, end, &mut out).await?;
+    Ok(out)
 }
 
 /// Returns the leaderboard of a map.
