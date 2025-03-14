@@ -3,26 +3,26 @@ use std::{borrow::Cow, collections::HashMap, iter::repeat, sync::Arc};
 use async_graphql::dataloader::{DataLoader, Loader};
 use deadpool_redis::redis::AsyncCommands;
 use futures::{StreamExt as _, TryStreamExt};
-use sqlx::{mysql, FromRow, MySqlPool, Row};
+use sqlx::{FromRow, MySqlPool, Row, mysql};
 
 use records_lib::{
+    RedisPool,
     context::{Context, Ctx},
     event::{self, EventMap, MedalTimes},
     mappack::AnyMappackId,
     models::{self, EventCategory},
     must,
     redis_key::{mappack_map_last_rank, mappack_player_ranks_key},
-    RedisPool,
 };
 
 use crate::{RecordsResult, RecordsResultExt};
 
 use super::{
+    SortState,
     map::{Map, MapLoader},
     mappack::{self, Mappack},
     player::Player,
     record::RankedRecord,
-    SortState,
 };
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -582,6 +582,22 @@ impl EventEditionMap<'_> {
                 date_sort_by,
             )
             .await
+    }
+
+    async fn medal_times(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<MedalTimes>> {
+        let db = ctx.data_unchecked::<MySqlPool>();
+        let mut db = db.acquire().await?;
+        let medal_times = event::get_medal_times_of(
+            &mut db,
+            Context::default()
+                .with_edition(&self.edition.inner)
+                .with_map_id(self.map.inner.id),
+        )
+        .await?;
+        Ok(medal_times)
     }
 }
 
