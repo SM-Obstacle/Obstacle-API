@@ -21,6 +21,7 @@ futures = { workspace = true }
 tokio = { workspace = true }
 itertools = { workspace = true }
 nom = { workspace = true }
+rand = { workspace = true }
 
 [features]
 default = []
