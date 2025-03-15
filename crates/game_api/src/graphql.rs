@@ -532,22 +532,17 @@ fn create_schema(db: Database, client: Client) -> Schema {
 
     #[cfg(feature = "gql_schema")]
     {
-        use std::fs::{self, OpenOptions};
+        use std::fs::OpenOptions;
         use std::io::Write;
-        use std::path::Path;
-
-        let schema_name = format!("schema_{}.graphql", chrono::Utc::now().timestamp());
 
         OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open(Path::new("schemas").join(&schema_name))
+            .open("schema.graphql")
             .unwrap()
             .write_all(schema.sdl().as_bytes())
             .unwrap();
-
-        fs::write("./etc/api_last_gql_schema", schema_name).unwrap();
     }
 
     schema
