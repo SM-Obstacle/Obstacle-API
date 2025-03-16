@@ -230,11 +230,15 @@ where
     let event_key = mappack_key(AnyMappackId::Event(ctx.get_event(), ctx.get_edition()));
     let saved_mappack_key = cached_key(records_lib::gen_random_str(10));
 
-    let _: () = redis::cmd("COPY")
-        .arg(&event_key)
-        .arg(&saved_mappack_key)
-        .exec_async(conn.redis_conn)
-        .await?;
+    let key_exists: bool = conn.redis_conn.exists(&event_key).await?;
+
+    if key_exists {
+        let _: () = redis::cmd("COPY")
+            .arg(&event_key)
+            .arg(&saved_mappack_key)
+            .exec_async(conn.redis_conn)
+            .await?;
+    }
 
     match transaction::within(conn.mysql_conn, &ctx, ReadWrite, async |mysql_conn, ctx| {
         let conn = &mut DatabaseConnection {
@@ -257,16 +261,20 @@ where
     {
         Ok(_) => {
             // Remove the cached key
-            let _: () = conn.redis_conn.del(&saved_mappack_key).await?;
+            if key_exists {
+                let _: () = conn.redis_conn.del(&saved_mappack_key).await?;
+            }
             tracing::info!("Success");
             Ok(())
         }
         Err(e) => {
             // Restore the cached key
-            let _: () = conn
-                .redis_conn
-                .rename(&saved_mappack_key, &event_key)
-                .await?;
+            if key_exists {
+                let _: () = conn
+                    .redis_conn
+                    .rename(&saved_mappack_key, &event_key)
+                    .await?;
+            }
             tracing::info!("Operation failed, restored old content");
             Err(e)
         }
