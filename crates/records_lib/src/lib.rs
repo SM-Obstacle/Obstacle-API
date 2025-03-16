@@ -56,8 +56,8 @@ where
 
 /// Returns a randomly-generated string with the `len` length. It contains alphanumeric characters.
 pub fn gen_random_str(len: usize) -> String {
-    rand::thread_rng()
-        .sample_iter(rand::distributions::Alphanumeric)
+    rand::rng()
+        .sample_iter(rand::distr::Alphanumeric)
         .map(char::from)
         .take(len)
         .collect()
