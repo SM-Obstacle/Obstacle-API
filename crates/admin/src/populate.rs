@@ -15,6 +15,7 @@ use records_lib::{
     mappack::{self, AnyMappackId},
     models, must,
     redis_key::{cached_key, mappack_key},
+    time::Time,
     transaction,
 };
 
@@ -319,6 +320,48 @@ impl fmt::Display for CsvReadErr {
     }
 }
 
+fn warn_inconsistent_medal_times(
+    line: u64,
+    (medal_time, medal_label): (i32, &str),
+    (next_medal_time, next_medal_label): (i32, &str),
+) {
+    tracing::warn!(
+        "Inconsistent medal times on line {line}: {medal_label} time is lower than {next_medal_label} time;
+{} < {} ({medal_time} < {next_medal_time})",
+        Time(medal_time),
+        Time(next_medal_time)
+    );
+}
+
+fn check_medal_times_consistency(
+    line: u64,
+    bronze_time: Option<i32>,
+    silver_time: Option<i32>,
+    gold_time: Option<i32>,
+    author_time: Option<i32>,
+) {
+    let (Some(bronze_time), Some(silver_time), Some(gold_time), Some(author_time)) =
+        (bronze_time, silver_time, gold_time, author_time)
+    else {
+        return;
+    };
+
+    let bronze_span = (bronze_time, "bronze");
+    let silver_span = (silver_time, "silver");
+    let gold_span = (gold_time, "gold");
+    let author_span = (author_time, "champion");
+
+    if bronze_time < silver_time {
+        warn_inconsistent_medal_times(line, bronze_span, silver_span);
+    }
+    if silver_time < gold_time {
+        warn_inconsistent_medal_times(line, silver_span, gold_span);
+    }
+    if gold_span < author_span {
+        warn_inconsistent_medal_times(line, gold_span, author_span);
+    }
+}
+
 async fn populate_from_csv<C>(
     conn: &mut DatabaseConnection<'_>,
     client: &reqwest::Client,
@@ -437,6 +480,8 @@ where
         let silver_time = times.map(|m| m.silver_time);
         let gold_time = times.map(|m| m.gold_time);
         let author_time = times.map(|m| m.champion_time);
+
+        check_medal_times_consistency(i, bronze_time, silver_time, gold_time, author_time);
 
         sqlx::query(
             "replace into event_edition_maps (
