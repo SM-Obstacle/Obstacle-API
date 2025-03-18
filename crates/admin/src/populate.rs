@@ -323,22 +323,24 @@ impl From<u64> for CsvReadErr {
 }
 
 impl fmt::Display for CsvReadErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Failed to read the CSV on line {}", self.line)
     }
 }
 
-fn warn_inconsistent_medal_times(
+fn check_inconsistent_medal_times(
     line: u64,
     (medal_time, medal_label): (i32, &str),
     (next_medal_time, next_medal_label): (i32, &str),
 ) {
-    tracing::warn!(
-        "Inconsistent medal times on line {line}: {medal_label} time is lower than {next_medal_label} time;
-{} < {} ({medal_time} < {next_medal_time})",
-        Time(medal_time),
-        Time(next_medal_time)
-    );
+    if medal_time < next_medal_time {
+        tracing::warn!(
+            "Inconsistent medal times on line {line}: {medal_label} time is lower than {next_medal_label} time;\n\
+            {} < {} ({medal_time} < {next_medal_time})",
+            Time(medal_time),
+            Time(next_medal_time)
+        );
+    }
 }
 
 fn check_medal_times_consistency(
@@ -359,15 +361,9 @@ fn check_medal_times_consistency(
     let gold_span = (gold_time, "gold");
     let author_span = (author_time, "champion");
 
-    if bronze_time < silver_time {
-        warn_inconsistent_medal_times(line, bronze_span, silver_span);
-    }
-    if silver_time < gold_time {
-        warn_inconsistent_medal_times(line, silver_span, gold_span);
-    }
-    if gold_span < author_span {
-        warn_inconsistent_medal_times(line, gold_span, author_span);
-    }
+    check_inconsistent_medal_times(line, bronze_span, silver_span);
+    check_inconsistent_medal_times(line, silver_span, gold_span);
+    check_inconsistent_medal_times(line, gold_span, author_span);
 }
 
 async fn populate_from_csv<C>(
