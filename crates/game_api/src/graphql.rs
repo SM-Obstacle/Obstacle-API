@@ -105,54 +105,6 @@ struct QueryRoot;
 
 #[async_graphql::Object]
 impl QueryRoot {
-    async fn latest_news(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<Article>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let article = sqlx::query_as(
-            "select * from article
-            where hide is null or hide = 0
-            order by article_date desc
-            limit 1",
-        )
-        .fetch_optional(db)
-        .await?;
-        Ok(article.map(From::<models::Article>::from))
-    }
-
-    async fn article(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-        slug: String,
-    ) -> async_graphql::Result<Option<Article>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let article = sqlx::query_as(
-            "select * from article
-            where (hide is null or hide = 0) and slug = ?",
-        )
-        .bind(slug)
-        .fetch_optional(db)
-        .await?;
-        Ok(article.map(From::<models::Article>::from))
-    }
-
-    async fn resources_content(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<models::ResourcesContent> {
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let txt = sqlx::query_as(
-            "SELECT content, created_at AS last_modified
-            FROM resources_content
-            ORDER BY created_at DESC
-            LIMIT 1",
-        )
-        .fetch_one(mysql_pool)
-        .await?;
-        Ok(txt)
-    }
-
     async fn event_edition_from_mx_id(
         &self,
         ctx: &async_graphql::Context<'_>,
@@ -543,6 +495,8 @@ fn create_schema(db: Database, client: Client) -> Schema {
             .unwrap()
             .write_all(schema.sdl().as_bytes())
             .unwrap();
+
+        tracing::info!("Generated GraphQL schema file to schema.graphql");
     }
 
     schema
