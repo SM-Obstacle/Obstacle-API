@@ -9,7 +9,7 @@ use std::fmt;
 
 use async_graphql::{Enum, SimpleObject};
 use serde::Serialize;
-use sqlx::{mysql::MySqlRow, FromRow, Row};
+use sqlx::{FromRow, Row, mysql::MySqlRow};
 
 /// A player in the database.
 #[derive(Serialize, FromRow, Clone, Debug)]
@@ -420,28 +420,4 @@ impl<'r> FromRow<'r, MySqlRow> for ApiStatusKind {
             }),
         }
     }
-}
-
-/// The content of the website "Resources" page.
-#[derive(Serialize, FromRow, Clone, Debug, SimpleObject)]
-pub struct ResourcesContent {
-    /// The content of the page, in markdown.
-    pub content: String,
-    /// The UTC date of the last edit of the page.
-    pub last_modified: chrono::NaiveDateTime,
-}
-
-/// An article on the website.
-#[derive(Serialize, FromRow, Clone, Debug)]
-pub struct Article {
-    /// The ID of the article.
-    pub id: u32,
-    /// The slug of the article, meaning the end part in the URL.
-    pub slug: String,
-    /// The path to the file containing the content of the article.
-    pub path: String,
-    /// The date of the article.
-    pub article_date: chrono::DateTime<chrono::Utc>,
-    /// Whether to hide the article on the website or not.
-    pub hide: Option<bool>,
 }
