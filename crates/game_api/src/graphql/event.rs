@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, iter::repeat, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, iter::repeat_n, sync::Arc};
 
 use async_graphql::dataloader::{DataLoader, Loader};
 use deadpool_redis::redis::AsyncCommands;
@@ -146,8 +146,7 @@ impl Loader<u32> for EventLoader {
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
         let q = format!(
             "SELECT * FROM event WHERE id IN ({})",
-            repeat("?".to_string())
-                .take(keys.len())
+            repeat_n("?".to_string(), keys.len())
                 .collect::<Vec<_>>()
                 .join(",")
         );
@@ -178,8 +177,7 @@ impl Loader<u32> for EventCategoryLoader {
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
         let q = format!(
             "SELECT * FROM event_category WHERE id IN ({})",
-            repeat("?".to_string())
-                .take(keys.len())
+            repeat_n("?".to_string(), keys.len())
                 .collect::<Vec<_>>()
                 .join(",")
         );

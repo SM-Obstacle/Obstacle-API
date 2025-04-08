@@ -1,4 +1,4 @@
-use std::{collections::HashMap, iter::repeat, sync::Arc};
+use std::{collections::HashMap, iter::repeat_n, sync::Arc};
 
 use async_graphql::{
     ID,
@@ -267,8 +267,7 @@ impl Loader<u32> for MapLoader {
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
         let query = format!(
             "SELECT * FROM maps WHERE id IN ({})",
-            repeat("?".to_string())
-                .take(keys.len())
+            repeat_n("?".to_string(), keys.len())
                 .collect::<Vec<_>>()
                 .join(",")
         );
