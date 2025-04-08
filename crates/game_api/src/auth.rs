@@ -171,7 +171,7 @@ impl AuthState {
     /// # Arguments
     ///
     /// * `state`, the state string, that is the same as the one retrieved by the `/player/give_token`
-    ///    endpoint.
+    ///   endpoint.
     pub async fn connect_with_browser(
         &self,
         state: String,

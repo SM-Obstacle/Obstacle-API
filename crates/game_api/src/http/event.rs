@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use actix_web::{
     Responder, Scope,
     web::{self, Path},
@@ -56,6 +58,7 @@ struct MapWithCategory {
     map: models::Map,
     category_id: Option<u32>,
     mx_id: Option<i64>,
+    original_map_id: Option<u32>,
 }
 
 async fn get_maps_by_edition_id(
@@ -64,7 +67,7 @@ async fn get_maps_by_edition_id(
     edition_id: u32,
 ) -> RecordsResult<Vec<MapWithCategory>> {
     let r = sqlx::query_as(
-        "SELECT m.*, category_id, mx_id
+        "SELECT m.*, category_id, mx_id, original_map_id
         FROM maps m
         INNER JOIN event_edition_maps eem ON id = map_id
         AND event_id = ? AND edition_id = ?
@@ -95,6 +98,20 @@ struct EventHandleResponse {
     raw: RawEventHandleResponse,
 }
 
+#[derive(sqlx::FromRow)]
+struct RawOriginalMap {
+    original_mx_id: Option<i64>,
+    #[sqlx(flatten)]
+    map: models::Map,
+}
+
+#[derive(Serialize, Default)]
+struct OriginalMap {
+    mx_id: NullableInteger<0>,
+    name: NullableText,
+    map_uid: NullableText,
+}
+
 #[derive(Serialize)]
 struct Map {
     mx_id: NullableInteger<0>,
@@ -107,6 +124,7 @@ struct Map {
     champion_time: NullableInteger,
     personal_best: NullableInteger,
     next_opponent: NextOpponent,
+    original_map: OriginalMap,
 }
 
 #[derive(Serialize, Default)]
@@ -268,6 +286,23 @@ async fn edition(
     .await
     .fit(req_id)?;
 
+    let original_maps: Vec<RawOriginalMap> = sqlx::query_as(
+        r#"select m.*, eem.original_mx_id from event_edition_maps eem
+        inner join maps m on m.id = eem.original_map_id
+        where eem.event_id = ? and eem.edition_id = ? and eem.transitive_save = TRUE"#,
+    )
+    .bind(edition.event_id)
+    .bind(edition.id)
+    .fetch_all(&db.mysql_pool)
+    .await
+    .with_api_err()
+    .fit(req_id)?;
+
+    let original_maps = original_maps
+        .into_iter()
+        .map(|map| (map.map.id, map))
+        .collect::<HashMap<_, _>>();
+
     let mut categories = Vec::with_capacity(cat.len());
 
     for (cat_id, cat_maps) in maps {
@@ -279,7 +314,13 @@ async fn edition(
 
         let mut maps = Vec::with_capacity(cat_maps.size_hint().0);
 
-        for MapWithCategory { map, mx_id, .. } in cat_maps {
+        for MapWithCategory {
+            map,
+            mx_id,
+            original_map_id,
+            ..
+        } in cat_maps
+        {
             let AuthorWithPlayerTime {
                 main_author,
                 personal_best,
@@ -358,6 +399,15 @@ async fn edition(
                     .with_api_err()
                     .fit(req_id)?;
 
+            let original_map = original_map_id
+                .and_then(|id| original_maps.get(&id))
+                .map(|map| OriginalMap {
+                    mx_id: NullableInteger(map.original_mx_id.map(|x| x as i32)),
+                    name: NullableText(Some(map.map.name.clone())),
+                    map_uid: NullableText(Some(map.map.game_id.clone())),
+                })
+                .unwrap_or_default();
+
             maps.push(Map {
                 mx_id: mx_id.map(|id| id as _).into(),
                 main_author,
@@ -367,6 +417,7 @@ async fn edition(
                 silver_time: medal_times.map(|m| m.silver_time).into(),
                 gold_time: medal_times.map(|m| m.gold_time).into(),
                 champion_time: medal_times.map(|m| m.champion_time).into(),
+                original_map,
                 personal_best,
                 next_opponent: next_opponent.unwrap_or_default(),
             });
@@ -390,18 +441,6 @@ async fn edition(
         });
     }
 
-    let original_map_uids = sqlx::query_scalar(
-        "select m.game_id as map_uid from event_edition_maps eem
-        inner join maps m on m.id = eem.original_map_id
-        where eem.event_id = ? and eem.edition_id = ? and eem.transitive_save",
-    )
-    .bind(edition.event_id)
-    .bind(edition.id)
-    .fetch_all(&db.mysql_pool)
-    .await
-    .with_api_err()
-    .fit(req_id)?;
-
     let res = EventHandleEditionResponse {
         expired: edition.has_expired(),
         end_date: edition
@@ -421,7 +460,10 @@ async fn edition(
         banner_img_url: edition.banner_img_url.unwrap_or_default(),
         banner2_img_url: edition.banner2_img_url.unwrap_or_default(),
         mx_id: edition.mx_id.map(|id| id as _).into(),
-        original_map_uids,
+        original_map_uids: original_maps
+            .into_values()
+            .map(|map| map.map.game_id)
+            .collect(),
         categories,
     };
 
