@@ -289,7 +289,7 @@ async fn edition(
     let original_maps: Vec<RawOriginalMap> = sqlx::query_as(
         "select m.*, eem.original_mx_id from event_edition_maps eem
         inner join maps m on m.id = eem.original_map_id
-        where eem.event_id = ? and eem.edition_id = ? and eem.transitive_save",
+        where eem.event_id = ? and eem.edition_id = ? and eem.transitive_save = TRUE",
     )
     .bind(edition.event_id)
     .bind(edition.id)
