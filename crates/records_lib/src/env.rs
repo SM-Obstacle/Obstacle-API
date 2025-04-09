@@ -3,7 +3,7 @@ use std::time::Duration;
 use deadpool_redis::Runtime;
 use once_cell::sync::OnceCell;
 
-use crate::{MySqlPool, RedisPool};
+use crate::{MySqlPool, RedisPool, models};
 
 mkenv::make_env! {
 /// The environment used to set up a connection to the MySQL/MariaDB database.
@@ -50,6 +50,23 @@ mkenv::make_env! {
 
 const DEFAULT_MAPPACK_TTL: i64 = 604_800;
 
+// In game default parameter values
+
+const DEFAULT_INGAME_SUBTITLE_ON_NEWLINE: bool = false;
+
+const DEFAULT_INGAME_TITLES_POS: models::InGamePosition = models::InGamePosition::Left;
+const DEFAULT_INGAME_LB_LINK_POS: models::InGamePosition = models::InGamePosition::Left;
+const DEFAULT_INGAME_AUTHORS_POS: models::InGamePosition = models::InGamePosition::Right;
+
+const DEFAULT_INGAME_TITLES_POS_X: f64 = 181.;
+const DEFAULT_INGAME_TITLES_POS_Y: f64 = -29.5;
+
+const DEFAULT_INGAME_LB_LINK_POS_X: f64 = 181.;
+const DEFAULT_INGAME_LB_LINK_POS_Y: f64 = -29.5;
+
+const DEFAULT_INGAME_AUTHORS_POS_X: f64 = 181.;
+const DEFAULT_INGAME_AUTHORS_POS_Y: f64 = -29.5;
+
 mkenv::make_env! {
 /// The environment used by this crate.
 pub LibEnv:
@@ -60,7 +77,108 @@ pub LibEnv:
         var: "RECORDS_API_MAPPACK_TTL",
         desc: "The TTL (time-to-live) of the mappacks stored in Redis",
         default: DEFAULT_MAPPACK_TTL,
-    }
+    },
+
+    /// The default position of the titles of an event edition in the Titlepack menu.
+    ingame_default_titles_pos: {
+        id: InGameDefaultTitlesPos(models::InGamePosition),
+        kind: parse,
+        var: "RECORDS_API_INGAME_DEFAULT_TITLES_POS",
+        desc: "The default position (either L for left or R for right) of the titles of \
+            an event edition in the Titlepack menu",
+        default: DEFAULT_INGAME_TITLES_POS,
+    },
+
+    /// The default position of an event edition title in the Titlepack menu.
+    ingame_default_lb_link_pos: {
+        id: InGameDefaultLbLinkPos(models::InGamePosition),
+        kind: parse,
+        var: "RECORDS_API_INGAME_DEFAULT_LB_LINK_POS",
+        desc: "The default position (either L for left or R for right) of the leaderboards link of \
+            an event edition in the Titlepack menu",
+        default: DEFAULT_INGAME_LB_LINK_POS,
+    },
+
+    /// The default position of an event edition title in the Titlepack menu.
+    ingame_default_authors_pos: {
+        id: InGameDefaultAuthorsPos(models::InGamePosition),
+        kind: parse,
+        var: "RECORDS_API_INGAME_DEFAULT_AUTHORS_POS",
+        desc: "The default position (either L for left or R for right) of the author list of \
+            an event edition in the Titlepack menu",
+        default: DEFAULT_INGAME_AUTHORS_POS,
+    },
+
+    /// The default position in X axis of the titles of an event edition in the Titlepack menu.
+    ingame_default_titles_pos_x: {
+        id: InGameDefaultTitlesPosX(f64),
+        kind: parse,
+        var: "RECORDS_API_INGAME_DEFAULT_TITLES_POS_X",
+        desc: "The default position in X axis of the titles of an event edition in \
+            the Titlepack menu (double)",
+        default: DEFAULT_INGAME_TITLES_POS_X,
+    },
+
+    /// The default position in Y axis of the titles of an event edition in the Titlepack menu.
+    ingame_default_titles_pos_y: {
+        id: InGameDefaultTitlesPosY(f64),
+        kind: parse,
+        var: "RECORDS_API_INGAME_DEFAULT_TITLES_POS_Y",
+        desc: "The default position in Y axis of the titles of an event edition in \
+            the Titlepack menu (double)",
+        default: DEFAULT_INGAME_TITLES_POS_Y,
+    },
+
+    /// The default value of the boolean related to either to put the subtitle of an event edition
+    /// on a new line or not, in the Titlepack menu.
+    ingame_default_subtitle_on_newline: {
+        id: InGameDefaultSubtitleOnNewLine(bool),
+        kind: parse,
+        var: "RECORDS_API_INGAME_DEFAULT_SUBTITLE_ON_NEWLINE",
+        desc: "The default value of the boolean related to either to put the subtitle of an \
+            event edition on a new line or not in the Titlepack menu (boolean)",
+        default: DEFAULT_INGAME_SUBTITLE_ON_NEWLINE,
+    },
+
+    /// The default position in X axis of the leaderboards link of an event edition in the Titlepack menu.
+    ingame_default_lb_link_pos_x: {
+        id: InGameDefaultLbLinkPosX(f64),
+        kind: parse,
+        var: "RECORDS_API_INGAME_DEFAULT_LB_LINK_POS_X",
+        desc: "The default position in X axis of the leaderboards link of an event edition in \
+            the Titlepack menu (double)",
+        default: DEFAULT_INGAME_LB_LINK_POS_X,
+    },
+
+    /// The default position in Y axis of the leaderboards link of an event edition in the Titlepack menu.
+    ingame_default_lb_link_pos_y: {
+        id: InGameDefaultLbLinkPosY(f64),
+        kind: parse,
+        var: "RECORDS_API_INGAME_DEFAULT_LB_LINK_POS_Y",
+        desc: "The default position in Y axis of the leaderboards link of an event edition in \
+            the Titlepack menu (double)",
+        default: DEFAULT_INGAME_LB_LINK_POS_Y,
+    },
+
+    /// The default position in X axis of the author list of an event edition in the Titlepack menu.
+    ingame_default_authors_pos_x: {
+        id: InGameDefaultAuthorsPosX(f64),
+        kind: parse,
+        var: "RECORDS_API_INGAME_DEFAULT_AUTHORS_POS_X",
+        desc: "The default position in X axis of the author list of an event edition in \
+            the Titlepack menu (double)",
+        default: DEFAULT_INGAME_AUTHORS_POS_X,
+    },
+
+    /// The default position in Y axis of the author list of an event edition in the Titlepack menu.
+    ingame_default_authors_pos_y: {
+        id: InGameDefaultAuthorsPosY(f64),
+        kind: parse,
+        var: "RECORDS_API_INGAME_DEFAULT_AUTHORS_POS_Y",
+        desc: "The default position in Y axis of the author list of an event edition in \
+            the Titlepack menu (double)",
+        default: DEFAULT_INGAME_AUTHORS_POS_Y,
+    },
 }
 
 static ENV: OnceCell<LibEnv> = OnceCell::new();

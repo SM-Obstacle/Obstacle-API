@@ -7,8 +7,8 @@ use actix_web::{
 use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{
-    Database, DatabaseConnection, MySqlConnection, NullableInteger, NullableText, RedisConnection,
-    acquire,
+    Database, DatabaseConnection, MySqlConnection, NullableInteger, NullableReal, NullableText,
+    RedisConnection, acquire,
     context::{
         Context, Ctx as _, HasEditionId, HasEventId, HasEventIds, HasMap, HasPlayerLogin,
         ReadWrite, Transactional,
@@ -144,6 +144,87 @@ impl From<Vec<Map>> for Category {
     }
 }
 
+#[derive(Serialize)]
+struct EventEditionInGameParams {
+    titles_pos: NullableText,
+    lb_link_pos: NullableText,
+    authors_pos: NullableText,
+    put_subtitle_on_newline: bool,
+    titles_pos_x: NullableReal,
+    titles_pos_y: NullableReal,
+    lb_link_pos_x: NullableReal,
+    lb_link_pos_y: NullableReal,
+    authors_pos_x: NullableReal,
+    authors_pos_y: NullableReal,
+}
+
+fn pos_to_mp_pos(
+    pos: Option<models::InGamePosition>,
+    pos_x: Option<f64>,
+    pos_y: Option<f64>,
+) -> NullableText {
+    match pos {
+        None if pos_x.is_none() && pos_y.is_none() => {
+            Some(records_lib::env().ingame_default_titles_pos)
+        }
+        Some(_) if pos_x.is_some() || pos_y.is_some() => None,
+        other => other,
+    }
+    .map(|p| p.to_char().to_string())
+    .into()
+}
+
+impl From<models::InGameEventEditionParams> for EventEditionInGameParams {
+    fn from(value: models::InGameEventEditionParams) -> Self {
+        Self {
+            titles_pos: pos_to_mp_pos(value.titles_pos, value.titles_pos_x, value.titles_pos_y),
+            lb_link_pos: pos_to_mp_pos(value.lb_link_pos, value.lb_link_pos_x, value.lb_link_pos_y),
+            authors_pos: pos_to_mp_pos(value.authors_pos, value.authors_pos_x, value.authors_pos_y),
+            put_subtitle_on_newline: value
+                .put_subtitle_on_newline
+                .unwrap_or_else(|| records_lib::env().ingame_default_subtitle_on_newline),
+            titles_pos_x: value.titles_pos_x.into(),
+            titles_pos_y: value.titles_pos_y.into(),
+            lb_link_pos_x: value.lb_link_pos_x.into(),
+            lb_link_pos_y: value.lb_link_pos_y.into(),
+            authors_pos_x: value.authors_pos_x.into(),
+            authors_pos_y: value.authors_pos_y.into(),
+        }
+    }
+}
+
+impl Default for EventEditionInGameParams {
+    fn default() -> Self {
+        Self {
+            titles_pos: NullableText(Some(
+                records_lib::env()
+                    .ingame_default_titles_pos
+                    .to_char()
+                    .to_string(),
+            )),
+            lb_link_pos: NullableText(Some(
+                records_lib::env()
+                    .ingame_default_lb_link_pos
+                    .to_char()
+                    .to_string(),
+            )),
+            authors_pos: NullableText(Some(
+                records_lib::env()
+                    .ingame_default_authors_pos
+                    .to_char()
+                    .to_string(),
+            )),
+            put_subtitle_on_newline: records_lib::env().ingame_default_subtitle_on_newline,
+            titles_pos_x: NullableReal(None),
+            titles_pos_y: NullableReal(None),
+            lb_link_pos_x: NullableReal(None),
+            lb_link_pos_y: NullableReal(None),
+            authors_pos_x: NullableReal(None),
+            authors_pos_y: NullableReal(None),
+        }
+    }
+}
+
 /// An event edition from the point of view of the Obstacle gamemode.
 #[derive(Serialize)]
 struct EventHandleEditionResponse {
@@ -164,6 +245,7 @@ struct EventHandleEditionResponse {
     ///
     /// It is `None` if the edition never ends.
     end_date: NullableInteger,
+    ingame_params: EventEditionInGameParams,
     /// The URL to the banner image of the edition, used in the Titlepack menu.
     banner_img_url: String,
     /// The URL to the small banner image of the edition, used in game in the Campaign mode.
@@ -441,6 +523,14 @@ async fn edition(
         });
     }
 
+    let ingame_params = edition
+        .get_ingame_params(&mut mysql_conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?
+        .map(EventEditionInGameParams::from)
+        .unwrap_or_default();
+
     let res = EventHandleEditionResponse {
         expired: edition.has_expired(),
         end_date: edition
@@ -457,6 +547,7 @@ async fn edition(
         name: edition.name,
         subtitle: edition.subtitle.unwrap_or_default(),
         start_date: edition.start_date.and_utc().timestamp() as _,
+        ingame_params,
         banner_img_url: edition.banner_img_url.unwrap_or_default(),
         banner2_img_url: edition.banner2_img_url.unwrap_or_default(),
         mx_id: edition.mx_id.map(|id| id as _).into(),
