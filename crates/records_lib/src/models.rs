@@ -5,11 +5,13 @@
 //! the types correspond to the raw tables in the database. This means that relations between models
 //! are only represented by a foreign key like an ID.
 
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use async_graphql::{Enum, SimpleObject};
 use serde::Serialize;
 use sqlx::{FromRow, Row, mysql::MySqlRow};
+
+use crate::error::RecordsResult;
 
 /// A player in the database.
 #[derive(Serialize, FromRow, Clone, Debug)]
@@ -286,6 +288,122 @@ pub struct EventCategory {
     pub hex_color: Option<String>,
 }
 
+/// The alignment of an item in the Titlepack menu.
+#[derive(Serialize, Clone, Copy, Debug)]
+#[repr(u8)]
+#[serde(into = "char")]
+pub enum InGameAlignment {
+    /// The item is positioned on left.
+    Left = b'L',
+    /// The item is positioned on right.
+    Right = b'R',
+}
+
+impl From<InGameAlignment> for char {
+    fn from(pos: InGameAlignment) -> Self {
+        pos.to_char()
+    }
+}
+
+impl InGameAlignment {
+    fn try_from_char(c: char) -> Result<Self, sqlx::error::BoxDynError> {
+        match c {
+            'L' => Ok(Self::Left),
+            'R' => Ok(Self::Right),
+            c => Err(format!("invalid character: '{c}', expected 'L' or 'R'").into()),
+        }
+    }
+
+    /// Converts an [`InGameAlignment`] into a character (either 'L' or 'R').
+    pub fn to_char(self) -> char {
+        self as u8 as char
+    }
+}
+
+impl FromStr for InGameAlignment {
+    type Err = sqlx::error::BoxDynError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.chars().next() {
+            Some(c) if s.len() == 1 => Self::try_from_char(c),
+            _ => Err("expected one character, either 'L' or 'R'"
+                .to_owned()
+                .into()),
+        }
+    }
+}
+
+impl<'a> sqlx::Decode<'a, sqlx::MySql> for InGameAlignment {
+    fn decode(
+        value: <sqlx::MySql as sqlx::Database>::ValueRef<'a>,
+    ) -> Result<Self, sqlx::error::BoxDynError> {
+        let s = <&'a str as sqlx::Decode<'a, sqlx::MySql>>::decode(value)?;
+        Self::from_str(s)
+    }
+}
+
+impl sqlx::Type<sqlx::MySql> for InGameAlignment {
+    #[inline(always)]
+    fn type_info() -> <sqlx::MySql as sqlx::Database>::TypeInfo {
+        <str as sqlx::Type<sqlx::MySql>>::type_info()
+    }
+
+    #[inline(always)]
+    fn compatible(ty: &<sqlx::MySql as sqlx::Database>::TypeInfo) -> bool {
+        <str as sqlx::Type<sqlx::MySql>>::compatible(ty)
+    }
+}
+
+/// Contains some additional parameters related to an [event edition](EventEdition).
+#[derive(Serialize, FromRow, Clone, Debug)]
+pub struct InGameEventEditionParams {
+    /// The ID of the additional parameters. This is just used as a foreign key by the event edition.
+    pub id: i32,
+
+    /// The boolean value of either to put the subtitle on a new line or not in the Titlepack menu.
+    ///
+    /// The default value is defined [here](crate::LibEnv::ingame_default_subtitle_on_newline).
+    pub put_subtitle_on_newline: Option<bool>,
+
+    /// The alignment of the event edition titles.
+    ///
+    /// The default value is defined [here](crate::LibEnv::ingame_default_titles_align).
+    pub titles_align: Option<InGameAlignment>,
+    /// The alignment of the leaderboards link of the event edition.
+    ///
+    /// The default value is defined [here](crate::LibEnv::ingame_default_lb_link_align).
+    pub lb_link_align: Option<InGameAlignment>,
+    /// The alignment of the author list of the event edition.
+    ///
+    /// The default value is defined [here](crate::LibEnv::ingame_default_authors_align).
+    pub authors_align: Option<InGameAlignment>,
+
+    /// The X position of the event edition titles in the Titlepack menu.
+    ///
+    /// The default value is defined [here](crate::LibEnv::ingame_default_titles_pos_x).
+    pub titles_pos_x: Option<f64>,
+    /// The Y position of the event edition titles in the Titlepack menu.
+    ///
+    /// The default value is defined [here](crate::LibEnv::ingame_default_titles_pos_y).
+    pub titles_pos_y: Option<f64>,
+    /// The X position of the leaderboards link of the event edition in the Titlepack menu.
+    ///
+    /// The default value is defined [here](crate::LibEnv::ingame_default_lb_link_pos_x).
+    pub lb_link_pos_x: Option<f64>,
+    /// The Y position of the leaderboards link of the event edition in the Titlepack menu.
+    ///
+    /// The default value is defined [here](crate::LibEnv::ingame_default_lb_link_pos_y).
+    pub lb_link_pos_y: Option<f64>,
+    /// The X position of the author list of the event edition in the Titlepack menu.
+    ///
+    /// The default value is defined [here](crate::LibEnv::ingame_default_authors_pos_x).
+    pub authors_pos_x: Option<f64>,
+    /// The Y position of the author list of the event edition in the Titlepack menu.
+    ///
+    /// The default value is defined [here](crate::LibEnv::ingame_default_authors_pos_y).
+    pub authors_pos_y: Option<f64>,
+}
+
 /// An event edition in the database.
 #[derive(Serialize, FromRow, Clone, Debug)]
 pub struct EventEdition {
@@ -324,6 +442,10 @@ pub struct EventEdition {
     /// This is used by the `global_records` view to retrieve the records of the events that don't
     /// have original maps.
     pub non_original_maps: bool,
+    /// The foreign key to the in-game parameters of this event edition.
+    ///
+    /// The related model is [`InGameEventEditionParams`].
+    pub ingame_params_id: Option<i32>,
 }
 
 impl EventEdition {
@@ -346,6 +468,23 @@ impl EventEdition {
     /// Returns whether the edition has expired or not.
     pub fn has_expired(&self) -> bool {
         self.expires_in().filter(|n| *n < 0).is_some()
+    }
+
+    /// Returns the additional in-game parameters of this event edition.
+    pub async fn get_ingame_params(
+        &self,
+        mysql_conn: &mut sqlx::MySqlConnection,
+    ) -> RecordsResult<Option<InGameEventEditionParams>> {
+        let Some(id) = self.ingame_params_id else {
+            return Ok(None);
+        };
+
+        let params = sqlx::query_as("select * from in_game_event_edition_params where id = ?")
+            .bind(id)
+            .fetch_optional(mysql_conn)
+            .await?;
+
+        Ok(params)
     }
 }
 
