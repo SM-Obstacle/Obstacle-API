@@ -613,7 +613,7 @@ pub async fn edition_finished_at(
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    let res = transaction::within(
+    let res: pf::FinishedOutput = transaction::within(
         conn.mysql_conn,
         ctx.with_event_edition(&event, &edition).with_map(&map),
         ReadWrite,
