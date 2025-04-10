@@ -288,24 +288,24 @@ pub struct EventCategory {
     pub hex_color: Option<String>,
 }
 
-/// The position of an item in the Titlepack menu.
+/// The alignment of an item in the Titlepack menu.
 #[derive(Serialize, Clone, Copy, Debug)]
 #[repr(u8)]
 #[serde(into = "char")]
-pub enum InGamePosition {
+pub enum InGameAlignment {
     /// The item is positioned on left.
     Left = b'L',
     /// The item is positioned on right.
     Right = b'R',
 }
 
-impl From<InGamePosition> for char {
-    fn from(pos: InGamePosition) -> Self {
+impl From<InGameAlignment> for char {
+    fn from(pos: InGameAlignment) -> Self {
         pos.to_char()
     }
 }
 
-impl InGamePosition {
+impl InGameAlignment {
     fn try_from_char(c: char) -> Result<Self, sqlx::error::BoxDynError> {
         match c {
             'L' => Ok(Self::Left),
@@ -314,13 +314,13 @@ impl InGamePosition {
         }
     }
 
-    /// Converts an [`InGamePosition`] into a character (either 'L' or 'R').
+    /// Converts an [`InGameAlignment`] into a character (either 'L' or 'R').
     pub fn to_char(self) -> char {
         self as u8 as char
     }
 }
 
-impl FromStr for InGamePosition {
+impl FromStr for InGameAlignment {
     type Err = sqlx::error::BoxDynError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -333,7 +333,7 @@ impl FromStr for InGamePosition {
     }
 }
 
-impl<'a> sqlx::Decode<'a, sqlx::MySql> for InGamePosition {
+impl<'a> sqlx::Decode<'a, sqlx::MySql> for InGameAlignment {
     fn decode(
         value: <sqlx::MySql as sqlx::Database>::ValueRef<'a>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
@@ -342,7 +342,7 @@ impl<'a> sqlx::Decode<'a, sqlx::MySql> for InGamePosition {
     }
 }
 
-impl sqlx::Type<sqlx::MySql> for InGamePosition {
+impl sqlx::Type<sqlx::MySql> for InGameAlignment {
     #[inline(always)]
     fn type_info() -> <sqlx::MySql as sqlx::Database>::TypeInfo {
         <str as sqlx::Type<sqlx::MySql>>::type_info()
@@ -365,18 +365,18 @@ pub struct InGameEventEditionParams {
     /// The default value is defined [here](crate::LibEnv::ingame_default_subtitle_on_newline).
     pub put_subtitle_on_newline: Option<bool>,
 
-    /// The position of the event edition titles.
+    /// The alignment of the event edition titles.
     ///
-    /// The default value is defined [here](crate::LibEnv::ingame_default_titles_pos).
-    pub titles_pos: Option<InGamePosition>,
-    /// The position of the leaderboards link of the event edition.
+    /// The default value is defined [here](crate::LibEnv::ingame_default_titles_align).
+    pub titles_align: Option<InGameAlignment>,
+    /// The alignment of the leaderboards link of the event edition.
     ///
-    /// The default value is defined [here](crate::LibEnv::ingame_default_lb_link_pos).
-    pub lb_link_pos: Option<InGamePosition>,
-    /// The position of the author list of the event edition.
+    /// The default value is defined [here](crate::LibEnv::ingame_default_lb_link_align).
+    pub lb_link_align: Option<InGameAlignment>,
+    /// The alignment of the author list of the event edition.
     ///
-    /// The default value is defined [here](crate::LibEnv::ingame_default_authors_pos).
-    pub authors_pos: Option<InGamePosition>,
+    /// The default value is defined [here](crate::LibEnv::ingame_default_authors_align).
+    pub authors_align: Option<InGameAlignment>,
 
     /// The X position of the event edition titles in the Titlepack menu.
     ///

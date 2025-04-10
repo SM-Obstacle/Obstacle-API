@@ -158,14 +158,18 @@ struct EventEditionInGameParams {
     authors_pos_y: NullableReal,
 }
 
-fn pos_to_mp_pos(
-    pos: Option<models::InGamePosition>,
+/// Converts the given "raw" alignment retrieved from the DB, into the alignment that will received
+/// by the Titlepack.
+///
+/// If X or Y positions are precised, then they're used instead of the given alignment.
+fn db_align_to_mp_align(
+    alignment: Option<models::InGameAlignment>,
     pos_x: Option<f64>,
     pos_y: Option<f64>,
 ) -> NullableText {
-    match pos {
+    match alignment {
         None if pos_x.is_none() && pos_y.is_none() => {
-            Some(records_lib::env().ingame_default_titles_pos)
+            Some(records_lib::env().ingame_default_titles_align)
         }
         Some(_) if pos_x.is_some() || pos_y.is_some() => None,
         other => other,
@@ -177,9 +181,21 @@ fn pos_to_mp_pos(
 impl From<models::InGameEventEditionParams> for EventEditionInGameParams {
     fn from(value: models::InGameEventEditionParams) -> Self {
         Self {
-            titles_pos: pos_to_mp_pos(value.titles_pos, value.titles_pos_x, value.titles_pos_y),
-            lb_link_pos: pos_to_mp_pos(value.lb_link_pos, value.lb_link_pos_x, value.lb_link_pos_y),
-            authors_pos: pos_to_mp_pos(value.authors_pos, value.authors_pos_x, value.authors_pos_y),
+            titles_pos: db_align_to_mp_align(
+                value.titles_align,
+                value.titles_pos_x,
+                value.titles_pos_y,
+            ),
+            lb_link_pos: db_align_to_mp_align(
+                value.lb_link_align,
+                value.lb_link_pos_x,
+                value.lb_link_pos_y,
+            ),
+            authors_pos: db_align_to_mp_align(
+                value.authors_align,
+                value.authors_pos_x,
+                value.authors_pos_y,
+            ),
             put_subtitle_on_newline: value
                 .put_subtitle_on_newline
                 .unwrap_or_else(|| records_lib::env().ingame_default_subtitle_on_newline),
@@ -198,19 +214,19 @@ impl Default for EventEditionInGameParams {
         Self {
             titles_pos: NullableText(Some(
                 records_lib::env()
-                    .ingame_default_titles_pos
+                    .ingame_default_titles_align
                     .to_char()
                     .to_string(),
             )),
             lb_link_pos: NullableText(Some(
                 records_lib::env()
-                    .ingame_default_lb_link_pos
+                    .ingame_default_lb_link_align
                     .to_char()
                     .to_string(),
             )),
             authors_pos: NullableText(Some(
                 records_lib::env()
-                    .ingame_default_authors_pos
+                    .ingame_default_authors_align
                     .to_char()
                     .to_string(),
             )),

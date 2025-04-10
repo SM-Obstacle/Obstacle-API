@@ -54,9 +54,9 @@ const DEFAULT_MAPPACK_TTL: i64 = 604_800;
 
 const DEFAULT_INGAME_SUBTITLE_ON_NEWLINE: bool = false;
 
-const DEFAULT_INGAME_TITLES_POS: models::InGamePosition = models::InGamePosition::Left;
-const DEFAULT_INGAME_LB_LINK_POS: models::InGamePosition = models::InGamePosition::Left;
-const DEFAULT_INGAME_AUTHORS_POS: models::InGamePosition = models::InGamePosition::Right;
+const DEFAULT_INGAME_TITLES_ALIGN: models::InGameAlignment = models::InGameAlignment::Left;
+const DEFAULT_INGAME_LB_LINK_ALIGN: models::InGameAlignment = models::InGameAlignment::Left;
+const DEFAULT_INGAME_AUTHORS_ALIGN: models::InGameAlignment = models::InGameAlignment::Right;
 
 const DEFAULT_INGAME_TITLES_POS_X: f64 = 181.;
 const DEFAULT_INGAME_TITLES_POS_Y: f64 = -29.5;
@@ -79,34 +79,34 @@ pub LibEnv:
         default: DEFAULT_MAPPACK_TTL,
     },
 
-    /// The default position of the titles of an event edition in the Titlepack menu.
-    ingame_default_titles_pos: {
-        id: InGameDefaultTitlesPos(models::InGamePosition),
+    /// The default alignment of the titles of an event edition in the Titlepack menu.
+    ingame_default_titles_align: {
+        id: InGameDefaultTitlesAlign(models::InGameAlignment),
         kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_TITLES_POS",
-        desc: "The default position (either L for left or R for right) of the titles of \
+        var: "RECORDS_API_INGAME_DEFAULT_TITLES_ALIGN",
+        desc: "The default alignment (either L for left or R for right) of the titles of \
             an event edition in the Titlepack menu",
-        default: DEFAULT_INGAME_TITLES_POS,
+        default: DEFAULT_INGAME_TITLES_ALIGN,
     },
 
-    /// The default position of an event edition title in the Titlepack menu.
-    ingame_default_lb_link_pos: {
-        id: InGameDefaultLbLinkPos(models::InGamePosition),
+    /// The default alignment of an event edition title in the Titlepack menu.
+    ingame_default_lb_link_align: {
+        id: InGameDefaultLbLinkAlign(models::InGameAlignment),
         kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_LB_LINK_POS",
-        desc: "The default position (either L for left or R for right) of the leaderboards link of \
+        var: "RECORDS_API_INGAME_DEFAULT_LB_LINK_ALIGN",
+        desc: "The default alignment (either L for left or R for right) of the leaderboards link of \
             an event edition in the Titlepack menu",
-        default: DEFAULT_INGAME_LB_LINK_POS,
+        default: DEFAULT_INGAME_LB_LINK_ALIGN,
     },
 
-    /// The default position of an event edition title in the Titlepack menu.
-    ingame_default_authors_pos: {
-        id: InGameDefaultAuthorsPos(models::InGamePosition),
+    /// The default alignment of an event edition title in the Titlepack menu.
+    ingame_default_authors_align: {
+        id: InGameDefaultAuthorsAlign(models::InGameAlignment),
         kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_AUTHORS_POS",
-        desc: "The default position (either L for left or R for right) of the author list of \
+        var: "RECORDS_API_INGAME_DEFAULT_AUTHORS_ALIGN",
+        desc: "The default alignment (either L for left or R for right) of the author list of \
             an event edition in the Titlepack menu",
-        default: DEFAULT_INGAME_AUTHORS_POS,
+        default: DEFAULT_INGAME_AUTHORS_ALIGN,
     },
 
     /// The default position in X axis of the titles of an event edition in the Titlepack menu.
