@@ -2,14 +2,13 @@ use std::time::Duration;
 
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
-    acquire,
+    Database, DatabaseConnection, acquire,
     context::{
         Context, Ctx, HasEditionId, HasEventHandle, HasEventId, HasMappackId, HasPersistentMode,
     },
     event,
     mappack::{self, AnyMappackId},
     redis_key::{mappack_key, mappacks_key},
-    Database, DatabaseConnection,
 };
 
 const PROCESS_DURATION_SECS: u64 = 3600 * 24; // Every day
@@ -27,7 +26,7 @@ async fn update_mappack<C: HasMappackId + HasPersistentMode>(
 
 async fn update_event_mappacks(conn: &mut DatabaseConnection<'_>) -> anyhow::Result<()> {
     let ctx = Context::default();
-    for event in event::event_list(conn.mysql_conn).await? {
+    for event in event::event_list(conn.mysql_conn, true).await? {
         let mut ctx = ctx.by_ref().with_event_handle(event.handle.as_str());
         for edition in event::event_editions_list(conn.mysql_conn, ctx.get_event_handle()).await? {
             tracing::info!(
