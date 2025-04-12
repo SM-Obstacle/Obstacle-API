@@ -146,9 +146,9 @@ impl From<Vec<Map>> for Category {
 
 #[derive(Serialize)]
 struct EventEditionInGameParams {
-    titles_pos: NullableText,
-    lb_link_pos: NullableText,
-    authors_pos: NullableText,
+    titles_align: NullableText,
+    lb_link_align: NullableText,
+    authors_align: NullableText,
     put_subtitle_on_newline: bool,
     titles_pos_x: NullableReal,
     titles_pos_y: NullableReal,
@@ -181,17 +181,17 @@ fn db_align_to_mp_align(
 impl From<models::InGameEventEditionParams> for EventEditionInGameParams {
     fn from(value: models::InGameEventEditionParams) -> Self {
         Self {
-            titles_pos: db_align_to_mp_align(
+            titles_align: db_align_to_mp_align(
                 value.titles_align,
                 value.titles_pos_x,
                 value.titles_pos_y,
             ),
-            lb_link_pos: db_align_to_mp_align(
+            lb_link_align: db_align_to_mp_align(
                 value.lb_link_align,
                 value.lb_link_pos_x,
                 value.lb_link_pos_y,
             ),
-            authors_pos: db_align_to_mp_align(
+            authors_align: db_align_to_mp_align(
                 value.authors_align,
                 value.authors_pos_x,
                 value.authors_pos_y,
@@ -212,19 +212,19 @@ impl From<models::InGameEventEditionParams> for EventEditionInGameParams {
 impl Default for EventEditionInGameParams {
     fn default() -> Self {
         Self {
-            titles_pos: NullableText(Some(
+            titles_align: NullableText(Some(
                 records_lib::env()
                     .ingame_default_titles_align
                     .to_char()
                     .to_string(),
             )),
-            lb_link_pos: NullableText(Some(
+            lb_link_align: NullableText(Some(
                 records_lib::env()
                     .ingame_default_lb_link_align
                     .to_char()
                     .to_string(),
             )),
-            authors_pos: NullableText(Some(
+            authors_align: NullableText(Some(
                 records_lib::env()
                     .ingame_default_authors_align
                     .to_char()
