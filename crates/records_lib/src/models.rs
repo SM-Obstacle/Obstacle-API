@@ -297,6 +297,8 @@ pub enum InGameAlignment {
     Left = b'L',
     /// The item is positioned on right.
     Right = b'R',
+    /// The item is positioned on the center.
+    Center = b'C',
 }
 
 impl From<InGameAlignment> for char {
@@ -310,7 +312,8 @@ impl InGameAlignment {
         match c {
             'L' => Ok(Self::Left),
             'R' => Ok(Self::Right),
-            c => Err(format!("invalid character: '{c}', expected 'L' or 'R'").into()),
+            'C' => Ok(Self::Center),
+            c => Err(format!("invalid character: '{c}', expected 'L', 'R', or 'C'").into()),
         }
     }
 
@@ -326,7 +329,7 @@ impl FromStr for InGameAlignment {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.chars().next() {
             Some(c) if s.len() == 1 => Self::try_from_char(c),
-            _ => Err("expected one character, either 'L' or 'R'"
+            _ => Err("expected one character, either 'L', 'R', or 'C'"
                 .to_owned()
                 .into()),
         }

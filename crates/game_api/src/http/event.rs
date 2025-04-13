@@ -158,7 +158,7 @@ struct EventEditionInGameParams {
     authors_pos_y: NullableReal,
 }
 
-/// Converts the given "raw" alignment retrieved from the DB, into the alignment that will received
+/// Converts the given "raw" alignment retrieved from the DB, into the alignment that will be received
 /// by the Titlepack.
 ///
 /// If X or Y positions are precised, then they're used instead of the given alignment.
