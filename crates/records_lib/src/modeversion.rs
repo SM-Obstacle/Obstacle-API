@@ -95,10 +95,18 @@ fn parse_u8(input: &str) -> nom::IResult<&str, u8> {
     .parse(input)
 }
 
+fn parse_patch_or_0(input: &str) -> nom::IResult<&str, u8> {
+    let out = (tag("."), parse_u8)
+        .parse(input)
+        .map(|(input, (_, patch))| (input, patch))
+        .unwrap_or((input, 0));
+    Ok(out)
+}
+
 fn parse_mode_version(input: &str) -> nom::IResult<&str, ModeVersion> {
     map(
-        (parse_u8, tag("."), parse_u8, tag("."), parse_u8),
-        |(major, _, minor, _, patch)| ModeVersion::new(major, minor, patch),
+        (parse_u8, tag("."), parse_u8, parse_patch_or_0),
+        |(major, _, minor, patch)| ModeVersion::new(major, minor, patch),
     )
     .parse(input)
 }
