@@ -39,8 +39,8 @@ jobs:
           sudo mariadb -e "CREATE USER 'api'@'localhost' IDENTIFIED BY '${{ secrets.MARIADB_PW }}'";
           sudo mariadb -e "GRANT ALL PRIVILEGES ON obs_records.* TO 'api'@'localhost'";
           sudo mariadb -e "FLUSH PRIVILEGES";
-          sudo mariadb -D obs_records < migrations/last_dump.sql;
-          sudo mariadb -D obs_records < migrations/init_db.sql;
+          sudo mariadb -D obs_records < db/last_dump.sql;
+          sudo mariadb -D obs_records < db/init_db.sql;
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
