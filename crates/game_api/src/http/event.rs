@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use actix_web::{
     Responder, Scope,
-    web::{self, Path},
+    web::{self, Path, Query},
 };
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -180,10 +180,20 @@ struct EventHandleEditionResponse {
     categories: Vec<Category>,
 }
 
-async fn event_list(req_id: RequestId, db: Res<Database>) -> RecordsResponse<impl Responder> {
+#[derive(serde::Deserialize)]
+struct EventListQuery {
+    #[serde(default)]
+    include_expired: bool,
+}
+
+async fn event_list(
+    req_id: RequestId,
+    db: Res<Database>,
+    Query(EventListQuery { include_expired }): Query<EventListQuery>,
+) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let out = event::event_list(&mut mysql_conn)
+    let out = event::event_list(&mut mysql_conn, !include_expired)
         .await
         .with_api_err()
         .fit(req_id)?;
@@ -613,7 +623,7 @@ pub async fn edition_finished_at(
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    let res = transaction::within(
+    let res: pf::FinishedOutput = transaction::within(
         conn.mysql_conn,
         ctx.with_event_edition(&event, &edition).with_map(&map),
         ReadWrite,

@@ -47,22 +47,30 @@ impl From<RawSqlEventListItem> for EventListItem {
 }
 
 /// Returns the list of events from the database.
-pub async fn event_list(conn: &mut sqlx::MySqlConnection) -> RecordsResult<Vec<EventListItem>> {
-    sqlx::query_as::<_, RawSqlEventListItem>(
+pub async fn event_list(
+    conn: &mut sqlx::MySqlConnection,
+    ignore_expired: bool,
+) -> RecordsResult<Vec<EventListItem>> {
+    let mut query = sqlx::QueryBuilder::new(
         "select ev.handle as handle, max(ee.id) as last_edition_id, ev.*
         from event ev
         inner join event_edition ee on ev.id = ee.event_id
         inner join event_edition_maps eem on ee.id = eem.edition_id and ee.event_id = eem.event_id
-        where ee.start_date < sysdate()
-            and (ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate())
-        group by ev.id, ev.handle
-        order by ev.id",
-    )
-    .fetch(conn)
-    .map_ok(From::from)
-    .map_err(From::from)
-    .try_collect()
-    .await
+        where ee.start_date < sysdate()",
+    );
+
+    if ignore_expired {
+        query.push(" and (ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate())");
+    }
+
+    query
+        .push(" group by ev.id, ev.handle order by ev.id")
+        .build_query_as::<RawSqlEventListItem>()
+        .fetch(conn)
+        .map_ok(From::from)
+        .map_err(From::from)
+        .try_collect()
+        .await
 }
 
 /// Returns the list of event editions bound to the provided event handle.
