@@ -61,6 +61,10 @@ async fn main() -> anyhow::Result<()> {
     let redis_pool =
         get_redis_pool(env.db_env.redis_url.redis_url).context("Cannot create Redis pool")?;
 
+    sqlx::migrate!("../../db/migrations")
+        .run(&mysql_pool)
+        .await?;
+
     let db = Database {
         mysql_pool,
         redis_pool,
