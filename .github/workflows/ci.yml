@@ -65,6 +65,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.86.0
 
+      - name: Setup Clippy
+        run: rustup component add clippy
+
       - name: Run clippy
         run: |
           cargo clippy --no-default-features -- -D warnings
