@@ -50,30 +50,38 @@ struct MedalTimes {
     bronze_time: i32,
 }
 
-#[derive(serde::Deserialize, Debug)]
-#[serde(untagged)]
-enum Id {
-    MapUid { map_uid: String },
+#[derive(Debug)]
+enum Id<'a> {
+    MapUid { map_uid: &'a str },
     MxId { mx_id: i64 },
 }
 
 #[derive(serde::Deserialize, Debug)]
-#[serde(untagged)]
-enum OriginalId {
-    MapUid { original_map_uid: String },
-    MxId { original_mx_id: i64 },
-}
-
-#[derive(serde::Deserialize, Debug)]
 struct Row {
-    #[serde(flatten)]
-    id: Id,
+    map_uid: Option<String>,
+    mx_id: Option<i64>,
     category_handle: Option<String>,
     #[serde(flatten)]
     times: Option<MedalTimes>,
-    #[serde(flatten)]
-    original_id: Option<OriginalId>,
+    original_map_uid: Option<String>,
+    original_mx_id: Option<i64>,
     transitive_save: Option<bool>,
+}
+
+fn get_id_impl(uid: Option<&str>, mx_id: Option<i64>) -> Option<Id<'_>> {
+    uid.map(|map_uid| Id::MapUid { map_uid })
+        .or(mx_id.map(|mx_id| Id::MxId { mx_id }))
+}
+
+impl Row {
+    fn get_id(&self) -> anyhow::Result<Id<'_>> {
+        get_id_impl(self.map_uid.as_deref(), self.mx_id)
+            .ok_or_else(|| anyhow::anyhow!("You must provide either the map UID or the MX ID"))
+    }
+
+    fn get_original_id(&self) -> Option<Id<'_>> {
+        get_id_impl(self.original_map_uid.as_deref(), self.original_mx_id)
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -177,18 +185,15 @@ async fn populate_mx_maps(
 
     let mx_ids = rows
         .iter()
-        .flat_map(|(row, _)| match (&row.id, &row.original_id) {
-            (Id::MapUid { .. }, Some(OriginalId::MapUid { .. }) | None) => MxIdIter::None,
-            (Id::MxId { mx_id }, Some(OriginalId::MxId { original_mx_id })) => {
-                MxIdIter::both(*mx_id, *original_mx_id)
-            }
-            (Id::MxId { mx_id }, _)
-            | (
-                _,
-                Some(OriginalId::MxId {
-                    original_mx_id: mx_id,
+        .flat_map(|(row, _)| match (row.get_id(), row.get_original_id()) {
+            (Ok(Id::MapUid { .. }) | Err(_), Some(Id::MapUid { .. }) | None) => MxIdIter::None,
+            (
+                Ok(Id::MxId { mx_id }),
+                Some(Id::MxId {
+                    mx_id: original_mx_id,
                 }),
-            ) => MxIdIter::single(*mx_id),
+            ) => MxIdIter::both(mx_id, original_mx_id),
+            (Ok(Id::MxId { mx_id }), _) | (_, Some(Id::MxId { mx_id })) => MxIdIter::single(mx_id),
         })
         .chunks(10);
 
@@ -421,21 +426,11 @@ where
 
     let mx_maps = populate_mx_maps(client, ctx.get_mysql_pool(), &rows).await?;
 
-    for (
-        Row {
-            id,
-            category_handle,
-            times,
-            original_id,
-            transitive_save,
-        },
-        i,
-    ) in rows
-    {
-        let (mx_id, map) = match id {
+    for (row, i) in rows {
+        let (mx_id, map) = match row.get_id().with_context(|| format!("Parsing row {i}"))? {
             Id::MapUid { map_uid } => (
                 None,
-                must::have_map(conn.mysql_conn, ctx.by_ref().with_map_uid(&map_uid)).await?,
+                must::have_map(conn.mysql_conn, ctx.by_ref().with_map_uid(map_uid)).await?,
             ),
             Id::MxId { mx_id } => (
                 Some(mx_id),
@@ -447,26 +442,20 @@ where
             ),
         };
 
-        let (original_mx_id, original_map) = match original_id {
+        let (original_mx_id, original_map) = match row.get_original_id() {
             Some(id) => match id {
-                OriginalId::MapUid { original_map_uid } => (
+                Id::MapUid { map_uid } => (
                     None,
                     Some(
-                        must::have_map(
-                            conn.mysql_conn,
-                            ctx.by_ref().with_map_uid(&original_map_uid),
-                        )
-                        .await?,
+                        must::have_map(conn.mysql_conn, ctx.by_ref().with_map_uid(map_uid)).await?,
                     ),
                 ),
-                OriginalId::MxId { original_mx_id } => (
-                    Some(original_mx_id),
+                Id::MxId { mx_id } => (
+                    Some(mx_id),
                     Some(
                         mx_maps
-                            .get(&original_mx_id)
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("Missing map with MX ID {original_mx_id}")
-                            })
+                            .get(&mx_id)
+                            .ok_or_else(|| anyhow::anyhow!("Missing map with MX ID {mx_id}"))
                             .with_context(|| CsvReadErr::from(i))?
                             .clone(),
                     ),
@@ -475,15 +464,16 @@ where
             None => (None, None),
         };
 
-        let opt_category_id = category_handle
+        let opt_category_id = row
+            .category_handle
             .filter(|s| !s.is_empty())
             .and_then(|s| categories.iter().find(|c| c.handle == s))
             .map(|c| c.id);
 
-        let bronze_time = times.map(|m| m.bronze_time);
-        let silver_time = times.map(|m| m.silver_time);
-        let gold_time = times.map(|m| m.gold_time);
-        let author_time = times.map(|m| m.champion_time);
+        let bronze_time = row.times.map(|m| m.bronze_time);
+        let silver_time = row.times.map(|m| m.silver_time);
+        let gold_time = row.times.map(|m| m.gold_time);
+        let author_time = row.times.map(|m| m.champion_time);
 
         check_medal_times_consistency(i, bronze_time, silver_time, gold_time, author_time);
 
@@ -512,7 +502,7 @@ where
         .bind(i)
         .bind(original_map.as_ref().map(|m| m.id))
         .bind(original_mx_id)
-        .bind(transitive_save.unwrap_or(default_transitive_save))
+        .bind(row.transitive_save.unwrap_or(default_transitive_save))
         .bind(bronze_time)
         .bind(silver_time)
         .bind(gold_time)
