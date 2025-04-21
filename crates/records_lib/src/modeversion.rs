@@ -7,12 +7,12 @@ use nom::{
 };
 
 /// The error emitted by the parse of the [`ModeVersion`] type.
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 #[error("invalid mode version (must respect x.y.z form)")]
 pub struct ModeVersionParseErr;
 
 /// The ShootMania Obstacle Mode version, like `2.7.4`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ModeVersion {
     /// The MAJOR part.
     pub major: u8,
@@ -118,5 +118,20 @@ impl FromStr for ModeVersion {
         parse_mode_version(s)
             .map(|(_, o)| o)
             .map_err(|_| ModeVersionParseErr)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ModeVersion;
+
+    #[test]
+    fn parse_2_7_4() {
+        assert_eq!(Ok(ModeVersion::new(2, 7, 4)), "2.7.4".parse());
+    }
+
+    #[test]
+    fn parse_2_8() {
+        assert_eq!(Ok(ModeVersion::new(2, 8, 0)), "2.8".parse());
     }
 }

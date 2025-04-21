@@ -43,7 +43,7 @@ jobs:
           sudo mariadb -D obs_records < db/init_db.sql;
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.86.0
 
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
@@ -63,7 +63,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.86.0
 
       - name: Run clippy
         run: |
