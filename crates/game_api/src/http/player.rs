@@ -1,7 +1,10 @@
+#[cfg(auth)]
 use actix_session::Session;
+#[cfg(auth)]
+use actix_web::web::Data;
 use actix_web::{
     HttpResponse, Responder, Scope,
-    web::{self, Data, Json, Query},
+    web::{self, Json, Query},
 };
 use futures::TryStreamExt;
 use records_lib::{
@@ -25,12 +28,12 @@ use tracing_actix_web::RequestId;
 #[cfg(auth)]
 use crate::{
     AccessTokenErr,
-    auth::{Message, TIMEOUT, WebToken},
+    auth::{AuthState, Message, TIMEOUT, WEB_TOKEN_SESS_KEY, WebToken},
 };
 
 use crate::{
     FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
-    auth::{self, ApiAvailable, AuthHeader, AuthState, MPAuthGuard, WEB_TOKEN_SESS_KEY, privilege},
+    auth::{self, ApiAvailable, AuthHeader, MPAuthGuard, privilege},
     discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
     utils::{self, json},
 };
@@ -412,13 +415,21 @@ async fn get_token(
     json(GetTokenResponse { token: mp_token })
 }
 
+#[cfg(not(auth))]
+#[inline(always)]
+async fn post_give_token() -> RecordsResponse<impl Responder> {
+    Ok(HttpResponse::Ok().finish())
+}
+
+#[cfg(auth)]
 #[derive(Deserialize)]
 pub struct GiveTokenBody {
     code: String,
     state: String,
 }
 
-pub async fn post_give_token(
+#[cfg(auth)]
+async fn post_give_token(
     req_id: RequestId,
     session: Session,
     state: Data<AuthState>,
