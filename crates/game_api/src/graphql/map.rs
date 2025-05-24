@@ -71,15 +71,13 @@ where
     builder
         .push_event_view_name(&mut query, "r")
         .push(" where r.map_id = ")
-        .push_bind(ctx.get_map_id())
-        .push(" ");
+        .push_bind(ctx.get_map_id());
 
     if let Some(ref s) = date_sort_by {
-        query.push("order by r.record_date ");
-        query.push(match s {
-            SortState::Reverse => "asc",
-            SortState::Sort => "desc",
-        });
+        query.push(" order by r.record_date");
+        if let SortState::Sort = s {
+            query.push(" desc");
+        }
     } else {
         let mut sep = builder
             .push_event_filter(&mut query, "r")

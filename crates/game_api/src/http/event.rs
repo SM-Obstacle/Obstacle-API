@@ -457,31 +457,66 @@ async fn edition(
                 .with_api_err()
                 .fit(req_id)?;
 
-                let next_opponent = sqlx::query_as(
-                    "select p.login, p.name, gr2.time from global_event_records gr
-                    inner join players player_from
-                    on player_from.id = gr.record_player_id
-                    inner join global_event_records gr2
-                    on gr2.map_id = gr.map_id
-                        and gr2.event_id = gr.event_id
-                        and gr2.edition_id = gr.edition_id
-                        and gr2.time < gr.time
-                    inner join players p on p.id = gr2.record_player_id
-                    where player_from.login = ?
-                        and gr.map_id = ?
-                        and gr.event_id = ?
-                        and gr.edition_id = ?
-                    order by gr2.time desc
-                    limit 1",
-                )
-                .bind(login)
-                .bind(map.id)
-                .bind(event.id)
-                .bind(edition_id)
-                .fetch_optional(&db.mysql_pool)
-                .await
-                .with_api_err()
-                .fit(req_id)?;
+                let mut next_opponent_query =
+                    sqlx::QueryBuilder::new("select p.login, p.name, gr2.time from");
+
+                if edition.is_transparent {
+                    next_opponent_query.push(" global_records");
+                } else {
+                    next_opponent_query.push(" global_event_records");
+                }
+
+                next_opponent_query.push(
+                    " gr
+                    inner join players player_from on player_from.id = gr.record_player_id
+                    inner join",
+                );
+
+                if edition.is_transparent {
+                    next_opponent_query.push(" global_records");
+                } else {
+                    next_opponent_query.push(" global_event_records");
+                }
+
+                next_opponent_query.push(" gr2 on gr2.map_id = gr.map_id and gr2.time < gr.time");
+
+                if edition.is_transparent {
+                    next_opponent_query
+                        .push(" inner join event_edition_maps eem on eem.map_id = gr.map_id");
+                } else {
+                    next_opponent_query
+                        .push(" and gr2.event_id = gr.event_id and gr2.edition_id = gr.edition_id");
+                }
+
+                next_opponent_query
+                    .push(
+                        " inner join players p on p.id = gr2.record_player_id
+                        and player_from.login = ",
+                    )
+                    .push_bind(login)
+                    .push(" and gr.map_id = ")
+                    .push_bind(map.id);
+
+                if edition.is_transparent {
+                    next_opponent_query
+                        .push(" and eem.event_id = ")
+                        .push_bind(event.id)
+                        .push(" and eem.edition_id = ")
+                        .push_bind(edition.id);
+                } else {
+                    next_opponent_query
+                        .push(" and gr.event_id = ")
+                        .push_bind(event.id)
+                        .push(" and gr.edition_id = ")
+                        .push_bind(edition.id);
+                }
+
+                let next_opponent = next_opponent_query
+                    .build_query_as()
+                    .fetch_optional(&db.mysql_pool)
+                    .await
+                    .with_api_err()
+                    .fit(req_id)?;
 
                 AuthorWithPlayerTime {
                     main_author,

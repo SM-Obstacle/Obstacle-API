@@ -94,7 +94,7 @@ pub trait Ctx: Send + Sync {
     }
 
     /// Returns the current mode version used by the client.
-    fn get_mode_version(&self) -> Option<ModeVersion> {
+    fn get_opt_mode_version(&self) -> Option<ModeVersion> {
         None // this isn't working and always returns None
     }
 
@@ -420,8 +420,8 @@ impl<T: Ctx> Ctx for &T {
     }
 
     #[inline(always)]
-    fn get_mode_version(&self) -> Option<ModeVersion> {
-        <T as Ctx>::get_mode_version(self)
+    fn get_opt_mode_version(&self) -> Option<ModeVersion> {
+        <T as Ctx>::get_opt_mode_version(self)
     }
 }
 
@@ -447,8 +447,8 @@ impl<T: Ctx> Ctx for &mut T {
     }
 
     #[inline(always)]
-    fn get_mode_version(&self) -> Option<ModeVersion> {
-        <T as Ctx>::get_mode_version(self)
+    fn get_opt_mode_version(&self) -> Option<ModeVersion> {
+        <T as Ctx>::get_opt_mode_version(self)
     }
 }
 
@@ -467,7 +467,7 @@ pub struct Context {
 }
 
 impl Ctx for Context {
-    fn get_mode_version(&self) -> Option<ModeVersion> {
+    fn get_opt_mode_version(&self) -> Option<ModeVersion> {
         self.mode_version
     }
 }
@@ -499,10 +499,19 @@ impl<C: Ctx> SqlFragmentBuilder<'_, C> {
         qb: &'a mut sqlx::QueryBuilder<'args, DB>,
         label: &str,
     ) -> &'a mut sqlx::QueryBuilder<'args, DB> {
-        match self.ctx.get_opt_event_edition_ids() {
-            Some(_) => qb.push("global_event_records "),
-            None => qb.push("global_records "),
-        }
+        qb.push(
+            if self
+                .ctx
+                .get_opt_edition()
+                .filter(|ed| !ed.is_transparent)
+                .is_some()
+                || self.ctx.get_opt_edition().is_none() && self.ctx.get_opt_edition_id().is_some()
+            {
+                "global_event_records "
+            } else {
+                "global_records "
+            },
+        )
         .push(label)
     }
 

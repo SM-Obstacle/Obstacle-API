@@ -81,8 +81,8 @@ macro_rules! new_combinator {
 
             // The implementation of this method is in the `Context` base type.
             #[inline(always)]
-            fn get_mode_version(&self) -> Option<$crate::modeversion::ModeVersion> {
-                <E as $crate::context::Ctx>::get_mode_version(&self.extra)
+            fn get_opt_mode_version(&self) -> Option<$crate::modeversion::ModeVersion> {
+                <E as $crate::context::Ctx>::get_opt_mode_version(&self.extra)
             }
         }
 

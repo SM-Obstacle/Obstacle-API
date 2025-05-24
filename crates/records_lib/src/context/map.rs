@@ -1,11 +1,11 @@
 use sqlx::MySqlPool;
 
-use crate::{mappack::AnyMappackId, models, RedisPool};
+use crate::{RedisPool, mappack::AnyMappackId, models};
 
 use super::{
-    macros::new_combinator, transaction::HasPersistentMode, HasEdition, HasEditionId, HasEvent,
-    HasEventHandle, HasEventId, HasMappackId, HasMySqlPool, HasPlayer, HasPlayerId, HasPlayerLogin,
-    HasRedisPool, Transactional,
+    HasEdition, HasEditionId, HasEvent, HasEventHandle, HasEventId, HasMappackId, HasMySqlPool,
+    HasPlayer, HasPlayerId, HasPlayerLogin, HasRedisPool, Transactional, macros::new_combinator,
+    transaction::HasPersistentMode,
 };
 
 new_combinator! {

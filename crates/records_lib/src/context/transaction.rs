@@ -143,8 +143,8 @@ impl<E: Ctx, M: TransactionMode> Ctx for WithTransactionMode<E, M> {
     }
 
     #[inline(always)]
-    fn get_mode_version(&self) -> Option<crate::ModeVersion> {
-        <E as Ctx>::get_mode_version(&self.extra)
+    fn get_opt_mode_version(&self) -> Option<crate::ModeVersion> {
+        <E as Ctx>::get_opt_mode_version(&self.extra)
     }
 }
 

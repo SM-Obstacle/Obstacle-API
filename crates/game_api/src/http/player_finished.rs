@@ -64,7 +64,7 @@ where
     .bind(at)
     .bind(body.flags)
     .bind(event_record_id)
-    .bind(ctx.get_mode_version())
+    .bind(ctx.get_opt_mode_version())
     .fetch_one(&mut **db)
     .await?;
 
