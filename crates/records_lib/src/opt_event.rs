@@ -18,9 +18,13 @@ impl<'a> OptEvent<'a> {
 }
 
 impl fmt::Debug for OptEvent<'_> {
-    #[inline(always)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.event, f)
+        match self.event {
+            Some((ev, ed)) => {
+                write!(f, "Some({}/{})", ev.handle, ed.id)
+            }
+            None => write!(f, "None"),
+        }
     }
 }
 
