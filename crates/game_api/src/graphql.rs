@@ -6,8 +6,9 @@ use async_graphql::extensions::ApolloTracing;
 use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
 use async_graphql::{Enum, ErrorExtensionValues, ID, Value, connection};
 use async_graphql_actix_web::GraphQLRequest;
-use records_lib::context::{Context, Ctx, ReadOnly, Transactional};
+use records_lib::opt_event::OptEvent;
 use records_lib::ranks::get_rank;
+use records_lib::transaction::{ReadOnly, Transactional};
 use records_lib::{Database, must};
 use records_lib::{
     DatabaseConnection, MySqlConnection, RedisConnection, acquire, models, transaction,
@@ -103,9 +104,7 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<MySqlPool>();
 
         let mut conn = db.acquire().await?;
-        let event =
-            must::have_event_handle(&mut conn, Context::default().with_event_handle(&handle))
-                .await?;
+        let event = must::have_event_handle(&mut conn, &handle).await?;
 
         Ok(event.into())
     }
@@ -274,12 +273,16 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<Database>();
         let conn = acquire!(db?);
 
-        transaction::within(
-            conn.mysql_conn,
-            Context::default(),
-            ReadOnly,
-            async |mysql_conn, ctx| get_record(mysql_conn, conn.redis_conn, ctx, record_id).await,
-        )
+        transaction::within(conn.mysql_conn, ReadOnly, async |mysql_conn, guard| {
+            get_record(
+                mysql_conn,
+                conn.redis_conn,
+                guard,
+                record_id,
+                Default::default(),
+            )
+            .await
+        })
         .await
     }
 
@@ -316,26 +319,29 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<Database>();
         let conn = acquire!(db?);
 
-        transaction::within(
-            conn.mysql_conn,
-            Context::default(),
-            ReadOnly,
-            async |mysql_conn, ctx| {
-                get_records(mysql_conn, conn.redis_conn, ctx, date_sort_by).await
-            },
-        )
+        transaction::within(conn.mysql_conn, ReadOnly, async |mysql_conn, guard| {
+            get_records(
+                mysql_conn,
+                conn.redis_conn,
+                guard,
+                date_sort_by,
+                Default::default(),
+            )
+            .await
+        })
         .await
     }
 }
 
-async fn get_record<C>(
+async fn get_record<T>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
-    ctx: C,
+    guard: T,
     record_id: u32,
+    event: OptEvent<'_>,
 ) -> async_graphql::Result<RankedRecord>
 where
-    C: Transactional,
+    T: Transactional,
 {
     let mut conn = DatabaseConnection {
         mysql_conn,
@@ -354,9 +360,11 @@ where
     let out = models::RankedRecord {
         rank: get_rank(
             &mut conn,
-            ctx.with_map_id(record.map_id)
-                .with_player_id(record.record_player_id),
+            record.map_id,
+            record.record_player_id,
             record.time,
+            event,
+            guard,
         )
         .await?,
         record,
@@ -366,12 +374,16 @@ where
     Ok(out)
 }
 
-async fn get_records<C: Transactional>(
+async fn get_records<T>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
-    ctx: C,
+    guard: T,
     date_sort_by: Option<SortState>,
-) -> async_graphql::Result<Vec<RankedRecord>> {
+    event: OptEvent<'_>,
+) -> async_graphql::Result<Vec<RankedRecord>>
+where
+    T: Transactional,
+{
     let mut conn = DatabaseConnection {
         mysql_conn,
         redis_conn,
@@ -393,10 +405,11 @@ async fn get_records<C: Transactional>(
     for record in records {
         let rank = get_rank(
             &mut conn,
-            ctx.by_ref()
-                .with_map_id(record.map_id)
-                .with_player_id(record.record_player_id),
+            record.map_id,
+            record.record_player_id,
             record.time,
+            event,
+            &guard,
         )
         .await?;
 

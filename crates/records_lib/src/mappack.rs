@@ -6,16 +6,16 @@ use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
 
 use crate::{
     DatabaseConnection, MySqlConnection, RedisConnection,
-    context::{Ctx as _, HasMappackId, HasPersistentMode, ReadOnly, Transactional},
     error::RecordsResult,
     models, must,
+    opt_event::OptEvent,
     ranks::get_rank,
     redis_key::{
         mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_nb_map_key,
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
-    transaction,
+    transaction::{self, ReadOnly, Transactional},
 };
 
 #[derive(Default, Clone, Debug)]
@@ -140,18 +140,18 @@ impl AnyMappackId<'_> {
 /// * `redis_conn`: a connection to the Redis database, to store the scores.
 #[cfg_attr(
     feature = "tracing",
-    tracing::instrument(skip(db, ctx), fields(mappack = %ctx.get_mappack_id().mappack_id()), err)
+    tracing::instrument(skip(db), fields(mappack = %mappack.mappack_id()), err)
 )]
-pub async fn update_mappack<C>(ctx: C, db: &mut DatabaseConnection<'_>) -> RecordsResult<usize>
-where
-    C: HasMappackId + HasPersistentMode,
-{
+pub async fn update_mappack(
+    db: &mut DatabaseConnection<'_>,
+    mappack: AnyMappackId<'_>,
+    event: OptEvent<'_>,
+) -> RecordsResult<usize> {
     // Calculate the scores
     let scores = crate::assert_future_send(transaction::within(
         db.mysql_conn,
-        &ctx,
         ReadOnly,
-        async |conn, ctx| calc_scores(conn, db.redis_conn, ctx).await,
+        async |conn, guard| calc_scores(conn, db.redis_conn, mappack, event, guard).await,
     ))
     .await?;
 
@@ -159,8 +159,6 @@ where
     let Some(scores) = scores else {
         return Ok(0);
     };
-
-    let mappack = ctx.get_mappack_id();
 
     let total_scores = scores.scores.len();
 
@@ -331,22 +329,24 @@ async fn save(
 /// Returns an `Option` because the mappack may have expired.
 #[cfg_attr(
     feature = "tracing",
-    tracing::instrument(skip(mysql_conn, ctx, redis_conn), fields(mappack = %ctx.get_mappack_id().mappack_id()))
+    tracing::instrument(skip(mysql_conn, redis_conn, guard), fields(mappack = %mappack.mappack_id()))
 )]
-async fn calc_scores<C>(
+async fn calc_scores<T>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
-    ctx: C,
+    mappack: AnyMappackId<'_>,
+    event: OptEvent<'_>,
+    guard: T,
 ) -> RecordsResult<Option<MappackScores>>
 where
-    C: HasMappackId + Transactional,
+    T: Transactional,
 {
     let db = &mut DatabaseConnection {
         mysql_conn,
         redis_conn,
     };
 
-    let mappack_key = mappack_key(ctx.get_mappack_id());
+    let mappack_key = mappack_key(mappack);
     let mappack_uids: Vec<String> = db.redis_conn.smembers(&mappack_key).await?;
 
     let mut maps = Vec::with_capacity(mappack_uids.len().max(5));
@@ -358,15 +358,14 @@ where
         // be deleted too.
         let _: i32 = db
             .redis_conn
-            .srem(mappacks_key(), ctx.get_mappack_id().mappack_id())
+            .srem(mappacks_key(), mappack.mappack_id())
             .await?;
         return Ok(None);
     } else {
         let mut out = Vec::with_capacity(mappack_uids.len());
 
         for map_uid in &mappack_uids {
-            let map =
-                must::have_map(db.mysql_conn, ctx.by_ref().with_map_uid(map_uid.as_str())).await?;
+            let map = must::have_map(db.mysql_conn, map_uid).await?;
             maps.push(MappackMap {
                 map_id: map.game_id.clone(),
                 last_rank: 0,
@@ -380,7 +379,7 @@ where
     let mut scores = Vec::<PlayerScore>::with_capacity(mappack.len());
 
     for (i, map) in mappack.iter().enumerate() {
-        let builder = ctx.sql_frag_builder();
+        let builder = event.sql_frag_builder();
 
         let mut query = sqlx::QueryBuilder::new(
             "SELECT r.*, p.id as player_id2, p.login as player_login, p.name as player_name
@@ -415,10 +414,11 @@ where
             let record = RankedRecordRow {
                 rank: get_rank(
                     db,
-                    ctx.by_ref()
-                        .with_map_id(map.id)
-                        .with_player_id(record.record.record_player_id),
+                    map.id,
+                    record.record.record_player_id,
                     record.record.time,
+                    event,
+                    &guard,
                 )
                 .await?,
                 record,

@@ -2,17 +2,7 @@
 
 use futures::{Stream, TryStreamExt as _};
 
-use crate::{
-    context::{HasEventIds, HasMapId, HasMapUid},
-    error::RecordsResult,
-    models,
-};
-
-/// Utility type definition for optional events.
-pub type OptEvent<'ev, 'ed> = Option<(&'ev models::Event, &'ed models::EventEdition)>;
-
-/// Utility type definition for optional event ID and edition ID.
-pub type OptEventIds = Option<(u32, u32)>;
+use crate::{error::RecordsResult, models};
 
 /// Represents an item in the event list.
 ///
@@ -187,20 +177,18 @@ pub struct MedalTimes {
 /// * `event_id`: the database ID of the event.
 /// * `edition_id` the ID of the edition bound to this event.
 /// * `map_id`: the database ID of the map.
-pub async fn get_medal_times_of<C>(
+pub async fn get_medal_times_of(
     conn: &mut sqlx::MySqlConnection,
-    ctx: C,
-) -> RecordsResult<Option<MedalTimes>>
-where
-    C: HasEventIds + HasMapId,
-{
-    let (event_id, edition_id) = ctx.get_event_ids();
+    event_id: u32,
+    edition_id: u32,
+    map_id: u32,
+) -> RecordsResult<Option<MedalTimes>> {
     let (bronze_time, silver_time, gold_time, champion_time) = sqlx::query_as(
         "select eem.bronze_time, eem.silver_time, eem.gold_time, eem.author_time
         from event_edition_maps eem
         where eem.map_id = ? and eem.event_id = ? and eem.edition_id = ?",
     )
-    .bind(ctx.get_map_id())
+    .bind(map_id)
     .bind(event_id)
     .bind(edition_id)
     .fetch_optional(conn)
@@ -306,14 +294,12 @@ pub struct EventMap {
 ///
 /// For example for the Benchmark, with `map_uid` as `"X"` or `"X_benchmark"`, the function returns
 /// the map with the UID `X_benchmark`, and the ID of the map with UID `X`.
-pub async fn get_map_in_edition<C>(
+pub async fn get_map_in_edition(
     conn: &mut sqlx::MySqlConnection,
-    ctx: C,
-) -> RecordsResult<Option<EventMap>>
-where
-    C: HasEventIds + HasMapUid,
-{
-    let (event_id, edition_id) = ctx.get_event_ids();
+    map_uid: &str,
+    event_id: u32,
+    edition_id: u32,
+) -> RecordsResult<Option<EventMap>> {
     let map = sqlx::query_as(
         "select m.*, eem.original_map_id from event_edition_maps eem
         inner join maps m on m.id = eem.map_id
@@ -323,7 +309,7 @@ where
     )
     .bind(event_id)
     .bind(edition_id)
-    .bind(ctx.get_map_uid())
+    .bind(map_uid)
     .fetch_optional(conn)
     .await?;
 

@@ -4,11 +4,11 @@ use deadpool_redis::redis::AsyncCommands as _;
 
 use crate::{
     DatabaseConnection,
-    context::{Ctx, HasMapId, HasPersistentMode, ReadOnly, Transactional},
     error::RecordsResult,
+    opt_event::OptEvent,
     ranks,
     redis_key::map_key,
-    transaction,
+    transaction::{self, ReadOnly, Transactional},
 };
 
 /// The type returned by the [`compet_rank_by_key`](CompetRankingByKeyIter::compet_rank_by_key)
@@ -135,34 +135,32 @@ pub struct Row {
 }
 
 /// Gets the leaderboard of a map and extends it to the provided vec.
-pub async fn leaderboard_txn_into<C>(
+pub async fn leaderboard_txn_into<T>(
     conn: &mut DatabaseConnection<'_>,
-    ctx: C,
+    guard: T,
+    map_id: u32,
     start: Option<i64>,
     end: Option<i64>,
     rows: &mut Vec<Row>,
+    event: OptEvent<'_>,
 ) -> RecordsResult<()>
 where
-    C: HasMapId + Transactional,
+    T: Transactional,
 {
-    ranks::update_leaderboard(conn, &ctx).await?;
+    ranks::update_leaderboard(conn, map_id, &guard, event).await?;
 
     let start = start.unwrap_or_default();
     let end = end.unwrap_or(-1);
     let player_ids: Vec<i32> = conn
         .redis_conn
-        .zrange(
-            map_key(ctx.get_map_id(), ctx.get_opt_event_edition()),
-            start as isize,
-            end as isize,
-        )
+        .zrange(map_key(map_id, event), start as isize, end as isize)
         .await?;
 
     if player_ids.is_empty() {
         return Ok(());
     }
 
-    let builder = ctx.sql_frag_builder();
+    let builder = event.sql_frag_builder();
 
     let mut query = sqlx::QueryBuilder::new(
         "SELECT p.id AS player_id,
@@ -178,7 +176,7 @@ where
             " INNER JOIN players p ON r.record_player_id = p.id
             WHERE map_id = ",
         )
-        .push_bind(ctx.get_map_id())
+        .push_bind(map_id)
         .push(" AND record_player_id IN (");
     let mut sep = query.separated(", ");
     for id in player_ids {
@@ -196,7 +194,7 @@ where
 
     for r in result {
         rows.push(Row {
-            rank: ranks::get_rank(conn, ctx.by_ref().with_player_id(r.player_id), r.time).await?,
+            rank: ranks::get_rank(conn, map_id, r.player_id, r.time, event, &guard).await?,
             login: r.login,
             nickname: r.nickname,
             time: r.time,
@@ -207,17 +205,19 @@ where
 }
 
 /// Returns the leaderboard of a map.
-pub async fn leaderboard_txn<C>(
+pub async fn leaderboard_txn<T>(
     conn: &mut DatabaseConnection<'_>,
-    ctx: C,
+    guard: T,
+    map_id: u32,
     start: Option<i64>,
     end: Option<i64>,
+    event: OptEvent<'_>,
 ) -> RecordsResult<Vec<Row>>
 where
-    C: HasMapId + Transactional,
+    T: Transactional,
 {
     let mut out = Vec::new();
-    leaderboard_txn_into(conn, ctx, start, end, &mut out).await?;
+    leaderboard_txn_into(conn, guard, map_id, start, end, &mut out, event).await?;
     Ok(out)
 }
 
@@ -225,24 +225,24 @@ where
 ///
 /// This function simply makes a transaction and returns the result of
 /// the [`leaderboard_txn`]. function.
-pub async fn leaderboard<C>(
+pub async fn leaderboard(
     conn: &mut DatabaseConnection<'_>,
-    ctx: C,
+    event: OptEvent<'_>,
+    map_id: u32,
     offset: Option<i64>,
     limit: Option<i64>,
-) -> RecordsResult<Vec<Row>>
-where
-    C: HasMapId + HasPersistentMode,
-{
-    transaction::within(conn.mysql_conn, ctx, ReadOnly, async |mysql_conn, ctx| {
+) -> RecordsResult<Vec<Row>> {
+    transaction::within(conn.mysql_conn, ReadOnly, async |mysql_conn, guard| {
         leaderboard_txn(
             &mut DatabaseConnection {
                 redis_conn: conn.redis_conn,
                 mysql_conn,
             },
-            ctx,
+            guard,
+            map_id,
             offset,
             limit.map(|x| offset.unwrap_or_default() + x),
+            event,
         )
         .await
     })

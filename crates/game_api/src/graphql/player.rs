@@ -3,9 +3,9 @@ use std::{collections::HashMap, sync::Arc};
 use async_graphql::{Enum, ID, connection, dataloader::Loader};
 use records_lib::{
     Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
-    context::{Context, Ctx as _, HasPlayerId, ReadOnly, Transactional},
     models::{self, Role},
-    transaction,
+    opt_event::OptEvent,
+    transaction::{self, ReadOnly, Transactional},
 };
 use sqlx::{FromRow, MySqlPool, Row, mysql};
 
@@ -165,24 +165,33 @@ impl Player {
 
         records_lib::assert_future_send(transaction::within(
             conn.mysql_conn,
-            Context::default().with_player(&self.inner),
             ReadOnly,
-            async |mysql_conn, ctx| {
-                get_player_records(mysql_conn, conn.redis_conn, ctx, date_sort_by).await
+            async |mysql_conn, guard| {
+                get_player_records(
+                    mysql_conn,
+                    conn.redis_conn,
+                    guard,
+                    self.inner.id,
+                    Default::default(),
+                    date_sort_by,
+                )
+                .await
             },
         ))
         .await
     }
 }
 
-async fn get_player_records<C>(
+async fn get_player_records<T>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
-    ctx: C,
+    guard: T,
+    player_id: u32,
+    event: OptEvent<'_>,
     date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<Vec<RankedRecord>>
 where
-    C: HasPlayerId + Transactional,
+    T: Transactional,
 {
     let mut conn = DatabaseConnection {
         mysql_conn,
@@ -201,7 +210,7 @@ where
     );
 
     let records = sqlx::query_as::<_, models::Record>(&query)
-        .bind(ctx.get_player_id())
+        .bind(player_id)
         .fetch_all(&mut **conn.mysql_conn)
         .await?;
 
@@ -210,10 +219,11 @@ where
     for record in records {
         let rank = get_rank(
             &mut conn,
-            ctx.by_ref()
-                .with_map_id(record.map_id)
-                .with_player_id(record.record_player_id),
+            record.map_id,
+            record.record_player_id,
             record.time,
+            event,
+            &guard,
         )
         .await?;
 

@@ -8,11 +8,11 @@ use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
     Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
-    context::{Context, Ctx, HasMapId, HasPersistentMode, ReadOnly, Transactional},
     models::{self, Record},
+    opt_event::OptEvent,
     ranks::{get_rank, update_leaderboard},
     redis_key::alone_map_key,
-    transaction,
+    transaction::{self, ReadOnly, Transactional},
 };
 use sqlx::{FromRow, MySqlPool, mysql};
 
@@ -36,23 +36,25 @@ impl From<models::Map> for Map {
     }
 }
 
-async fn get_map_records<C>(
+async fn get_map_records<T>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
-    ctx: C,
+    map_id: u32,
+    guard: T,
+    event: OptEvent<'_>,
     rank_sort_by: Option<SortState>,
     date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<Vec<RankedRecord>>
 where
-    C: Transactional + HasMapId,
+    T: Transactional,
 {
     let mut conn = DatabaseConnection {
         mysql_conn,
         redis_conn,
     };
-    let key = alone_map_key(ctx.get_map_id());
+    let key = alone_map_key(map_id);
 
-    update_leaderboard(&mut conn, &ctx).await?;
+    update_leaderboard(&mut conn, map_id, &guard, event).await?;
 
     let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
     let record_ids: Vec<i32> = if to_reverse {
@@ -65,13 +67,13 @@ where
         return Ok(Vec::new());
     }
 
-    let builder = ctx.sql_frag_builder();
+    let builder = event.sql_frag_builder();
 
     let mut query = sqlx::QueryBuilder::new("SELECT * FROM ");
     builder
         .push_event_view_name(&mut query, "r")
         .push(" where r.map_id = ")
-        .push_bind(ctx.get_map_id())
+        .push_bind(map_id)
         .push(" ");
 
     if let Some(ref s) = date_sort_by {
@@ -111,8 +113,11 @@ where
     for record in records {
         let rank = get_rank(
             &mut conn,
-            ctx.by_ref().with_player_id(record.record_player_id),
+            map_id,
+            record.record_player_id,
             record.time,
+            event,
+            &guard,
         )
         .await?;
         ranked_records.push(models::RankedRecord { rank, record }.into());
@@ -122,23 +127,30 @@ where
 }
 
 impl Map {
-    pub(super) async fn get_records<C: HasPersistentMode>(
+    pub(super) async fn get_records(
         &self,
         gql_ctx: &async_graphql::Context<'_>,
-        ctx: C,
+        event: OptEvent<'_>,
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
-        let ctx = ctx.with_map(&self.inner);
         let db = gql_ctx.data_unchecked::<Database>();
         let conn = acquire!(db?);
 
         records_lib::assert_future_send(transaction::within(
             conn.mysql_conn,
-            ctx,
             ReadOnly,
-            async |mysql_conn, ctx| {
-                get_map_records(mysql_conn, conn.redis_conn, ctx, rank_sort_by, date_sort_by).await
+            async |mysql_conn, guard| {
+                get_map_records(
+                    mysql_conn,
+                    conn.redis_conn,
+                    self.inner.id,
+                    guard,
+                    event,
+                    rank_sort_by,
+                    date_sort_by,
+                )
+                .await
             },
         ))
         .await
@@ -253,7 +265,7 @@ impl Map {
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
-        self.get_records(ctx, Context::default(), rank_sort_by, date_sort_by)
+        self.get_records(ctx, Default::default(), rank_sort_by, date_sort_by)
             .await
     }
 }
