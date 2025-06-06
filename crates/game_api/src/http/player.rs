@@ -14,7 +14,7 @@ use records_lib::{
     must,
     opt_event::OptEvent,
     player,
-    transaction::{self, ReadWrite, Transactional},
+    transaction::{self, CanWrite, ReadWrite},
 };
 use reqwest::Client;
 #[cfg(auth)]
@@ -45,7 +45,7 @@ use crate::request_filter::{FlagFalseRequest, WebsiteFilter};
 
 use super::{
     pb,
-    player_finished::{self as pf, InsertRecordParams},
+    player_finished::{self as pf, ExpandedInsertRecordParams},
 };
 
 pub fn player_scope() -> Scope {
@@ -246,36 +246,19 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
     Ok(res_login.to_lowercase() == login.to_lowercase())
 }
 
-async fn finished_impl<T>(
+async fn finished_impl<M: CanWrite>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
-    guard: T,
+    params: ExpandedInsertRecordParams<'_, M>,
     player_login: &str,
     map: &models::Map,
-    at: chrono::NaiveDateTime,
-    body: InsertRecordParams,
-    event: OptEvent<'_>,
-    mode_version: Option<ModeVersion>,
-) -> RecordsResult<pf::FinishedOutput>
-where
-    T: Transactional<Mode = ReadWrite>,
-{
+) -> RecordsResult<pf::FinishedOutput> {
     let mut conn = DatabaseConnection {
         mysql_conn,
         redis_conn,
     };
 
-    let res = pf::finished(
-        &mut conn,
-        player_login,
-        map,
-        &guard,
-        body.clone(),
-        at,
-        event,
-        mode_version,
-    )
-    .await?;
+    let res = pf::finished(&mut conn, params, player_login, map).await?;
 
     // If the record isn't in an event context, save the record to the events that have the map
     // and allow records saving without an event context.
@@ -299,19 +282,18 @@ where
             Default::default(),
         )
         .await?;
-        let is_pb = previous_time.is_none_or(|t| t > body.time);
+        let is_pb = previous_time.is_none_or(|t| t > params.body.time);
 
         pf::insert_record(
             &mut conn,
+            ExpandedInsertRecordParams {
+                event: Default::default(),
+                ..params
+            },
             original_map_id,
             res.player_id,
-            &guard,
-            &body,
-            Default::default(),
             Some(res.record_id),
-            at,
             is_pb,
-            mode_version,
         )
         .await?;
     }
@@ -336,18 +318,15 @@ pub async fn finished_at(
 
     let res: pf::FinishedOutput =
         transaction::within(conn.mysql_conn, ReadWrite, async |mysql_conn, guard| {
-            finished_impl(
-                mysql_conn,
-                conn.redis_conn,
+            let params = ExpandedInsertRecordParams {
                 guard,
-                &login,
-                &map,
+                body: &body.rest,
                 at,
-                body.rest,
-                Default::default(),
+                event: Default::default(),
                 mode_version,
-            )
-            .await
+            };
+
+            finished_impl(mysql_conn, conn.redis_conn, params, &login, &map).await
         })
         .await
         .fit(req_id)?;

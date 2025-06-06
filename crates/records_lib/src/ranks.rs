@@ -61,7 +61,7 @@ use crate::{
     error::{RecordsError, RecordsResult},
     opt_event::OptEvent,
     redis_key::{MapKey, map_key},
-    transaction::Transactional,
+    transaction::TxnGuard,
 };
 use deadpool_redis::redis::{self, AsyncCommands};
 use futures::TryStreamExt;
@@ -157,15 +157,12 @@ pub async fn update_rank(
     Ok(())
 }
 
-async fn count_records_map<T>(
+async fn count_records_map<M>(
     conn: &mut sqlx::MySqlConnection,
     map_id: u32,
-    _guard: T,
+    _guard: TxnGuard<'_, M>,
     event: OptEvent<'_>,
-) -> RecordsResult<i64>
-where
-    T: Transactional,
-{
+) -> RecordsResult<i64> {
     let builder = event.sql_frag_builder();
 
     let mut query = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM (SELECT r.* FROM records r ");
@@ -188,16 +185,13 @@ where
 /// This is a check to avoid differences between the MariaDB and the Redis leaderboards.
 ///
 /// It returns the number of records in the map.
-pub async fn update_leaderboard<T>(
+pub async fn update_leaderboard<M>(
     conn: &mut DatabaseConnection<'_>,
     map_id: u32,
-    guard: T,
+    guard: TxnGuard<'_, M>,
     event: OptEvent<'_>,
-) -> RecordsResult<i64>
-where
-    T: Transactional,
-{
-    let mysql_count: i64 = count_records_map(conn.mysql_conn, map_id, &guard, event).await?;
+) -> RecordsResult<i64> {
+    let mysql_count: i64 = count_records_map(conn.mysql_conn, map_id, guard, event).await?;
 
     lock_within(map_id, || async move {
         let key = map_key(map_id, event);
@@ -290,17 +284,14 @@ async fn get_rank_impl(
 /// The ranking type is the standard competition ranking (1224).
 ///
 /// See the [module documentation](super) for more information.
-pub async fn get_rank<T>(
+pub async fn get_rank<M>(
     db: &mut DatabaseConnection<'_>,
     map_id: u32,
     player_id: u32,
     time: i32,
     event: OptEvent<'_>,
-    _guard: T,
-) -> RecordsResult<i32>
-where
-    T: Transactional,
-{
+    _guard: TxnGuard<'_, M>,
+) -> RecordsResult<i32> {
     lock_within(map_id, || async move {
         let key = map_key(map_id, event);
 

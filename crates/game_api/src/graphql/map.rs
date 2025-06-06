@@ -12,7 +12,7 @@ use records_lib::{
     opt_event::OptEvent,
     ranks::{get_rank, update_leaderboard},
     redis_key::alone_map_key,
-    transaction::{self, ReadOnly, Transactional},
+    transaction::{self, ReadOnly, TxnGuard},
 };
 use sqlx::{FromRow, MySqlPool, mysql};
 
@@ -36,25 +36,22 @@ impl From<models::Map> for Map {
     }
 }
 
-async fn get_map_records<T>(
+async fn get_map_records<M>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
     map_id: u32,
-    guard: T,
+    guard: TxnGuard<'_, M>,
     event: OptEvent<'_>,
     rank_sort_by: Option<SortState>,
     date_sort_by: Option<SortState>,
-) -> async_graphql::Result<Vec<RankedRecord>>
-where
-    T: Transactional,
-{
+) -> async_graphql::Result<Vec<RankedRecord>> {
     let mut conn = DatabaseConnection {
         mysql_conn,
         redis_conn,
     };
     let key = alone_map_key(map_id);
 
-    update_leaderboard(&mut conn, map_id, &guard, event).await?;
+    update_leaderboard(&mut conn, map_id, guard, event).await?;
 
     let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
     let record_ids: Vec<i32> = if to_reverse {
@@ -117,7 +114,7 @@ where
             record.record_player_id,
             record.time,
             event,
-            &guard,
+            guard,
         )
         .await?;
         ranked_records.push(models::RankedRecord { rank, record }.into());

@@ -12,10 +12,14 @@ pub trait TransactionMode: fmt::Debug + Copy + Send + Sync {
     ///
     /// For example, the [`ReadOnly`] mode would write "`read only`".
     fn sql_push_txn_mode<'a, DB: sqlx::Database>(
-        self,
+        &self,
         _: &'a mut sqlx::QueryBuilder<'a, DB>,
     ) -> &'a mut sqlx::QueryBuilder<'a, DB>;
 }
+
+pub trait CanRead: TransactionMode {}
+
+pub trait CanWrite: CanRead {}
 
 /// The read-only transaction mode.
 ///
@@ -25,12 +29,14 @@ pub struct ReadOnly;
 
 impl TransactionMode for ReadOnly {
     fn sql_push_txn_mode<'a, DB: sqlx::Database>(
-        self,
+        &self,
         query: &'a mut sqlx::QueryBuilder<'a, DB>,
     ) -> &'a mut sqlx::QueryBuilder<'a, DB> {
         query.push("read only")
     }
 }
+
+impl CanRead for ReadOnly {}
 
 /// The read-write transaction mode.
 ///
@@ -40,45 +46,26 @@ pub struct ReadWrite;
 
 impl TransactionMode for ReadWrite {
     fn sql_push_txn_mode<'a, DB: sqlx::Database>(
-        self,
+        &self,
         query: &'a mut sqlx::QueryBuilder<'a, DB>,
     ) -> &'a mut sqlx::QueryBuilder<'a, DB> {
         query.push("read write")
     }
 }
 
-pub trait SubSet<T> {}
-
-impl<T> SubSet<T> for T {}
-
-impl SubSet<ReadWrite> for ReadOnly {}
+impl CanRead for ReadWrite {}
+impl CanWrite for ReadWrite {}
 
 // Lifetime is faked to prevent any copy to outlive the original instance.
-#[derive(Clone, Copy)]
 pub struct TxnGuard<'a, M>(PhantomData<(&'a (), M)>);
 
-/// Context trait used to indicate that the context is currently in a database transaction mode.
-///
-/// For now, it only contains the transaction mode (whether it is in read only or read write mode).
-///
-/// See the [module documentation](super) for more information.
-pub trait Transactional {
-    type Mode: TransactionMode;
+impl<M> Clone for TxnGuard<'_, M> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
-impl<T> Transactional for &T
-where
-    T: Transactional,
-{
-    type Mode = <T as Transactional>::Mode;
-}
-
-impl<M> Transactional for TxnGuard<'_, M>
-where
-    M: TransactionMode,
-{
-    type Mode = M;
-}
+impl<M> Copy for TxnGuard<'_, M> {}
 
 /// Wraps the call of the provided function with an SQL transaction with the provided mode.
 ///

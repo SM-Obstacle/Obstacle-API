@@ -5,7 +5,7 @@ use records_lib::{
     Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
     models::{self, Role},
     opt_event::OptEvent,
-    transaction::{self, ReadOnly, Transactional},
+    transaction::{self, ReadOnly, TxnGuard},
 };
 use sqlx::{FromRow, MySqlPool, Row, mysql};
 
@@ -182,17 +182,14 @@ impl Player {
     }
 }
 
-async fn get_player_records<T>(
+async fn get_player_records<M>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
-    guard: T,
+    guard: TxnGuard<'_, M>,
     player_id: u32,
     event: OptEvent<'_>,
     date_sort_by: Option<SortState>,
-) -> async_graphql::Result<Vec<RankedRecord>>
-where
-    T: Transactional,
-{
+) -> async_graphql::Result<Vec<RankedRecord>> {
     let mut conn = DatabaseConnection {
         mysql_conn,
         redis_conn,
@@ -223,7 +220,7 @@ where
             record.record_player_id,
             record.time,
             event,
-            &guard,
+            guard,
         )
         .await?;
 

@@ -8,7 +8,7 @@ use crate::{
     opt_event::OptEvent,
     ranks,
     redis_key::map_key,
-    transaction::{self, ReadOnly, Transactional},
+    transaction::{self, ReadOnly, TxnGuard},
 };
 
 /// The type returned by the [`compet_rank_by_key`](CompetRankingByKeyIter::compet_rank_by_key)
@@ -135,19 +135,16 @@ pub struct Row {
 }
 
 /// Gets the leaderboard of a map and extends it to the provided vec.
-pub async fn leaderboard_txn_into<T>(
+pub async fn leaderboard_txn_into<M>(
     conn: &mut DatabaseConnection<'_>,
-    guard: T,
+    guard: TxnGuard<'_, M>,
     map_id: u32,
     start: Option<i64>,
     end: Option<i64>,
     rows: &mut Vec<Row>,
     event: OptEvent<'_>,
-) -> RecordsResult<()>
-where
-    T: Transactional,
-{
-    ranks::update_leaderboard(conn, map_id, &guard, event).await?;
+) -> RecordsResult<()> {
+    ranks::update_leaderboard(conn, map_id, guard, event).await?;
 
     let start = start.unwrap_or_default();
     let end = end.unwrap_or(-1);
@@ -194,7 +191,7 @@ where
 
     for r in result {
         rows.push(Row {
-            rank: ranks::get_rank(conn, map_id, r.player_id, r.time, event, &guard).await?,
+            rank: ranks::get_rank(conn, map_id, r.player_id, r.time, event, guard).await?,
             login: r.login,
             nickname: r.nickname,
             time: r.time,
@@ -205,17 +202,14 @@ where
 }
 
 /// Returns the leaderboard of a map.
-pub async fn leaderboard_txn<T>(
+pub async fn leaderboard_txn<M>(
     conn: &mut DatabaseConnection<'_>,
-    guard: T,
+    guard: TxnGuard<'_, M>,
     map_id: u32,
     start: Option<i64>,
     end: Option<i64>,
     event: OptEvent<'_>,
-) -> RecordsResult<Vec<Row>>
-where
-    T: Transactional,
-{
+) -> RecordsResult<Vec<Row>> {
     let mut out = Vec::new();
     leaderboard_txn_into(conn, guard, map_id, start, end, &mut out, event).await?;
     Ok(out)

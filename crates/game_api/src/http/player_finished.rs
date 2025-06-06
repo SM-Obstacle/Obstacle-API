@@ -4,7 +4,7 @@ use records_lib::{
     DatabaseConnection, MySqlConnection, NullableInteger, models,
     opt_event::OptEvent,
     ranks,
-    transaction::{ReadWrite, Transactional},
+    transaction::{CanWrite, TxnGuard},
 };
 use serde::{Deserialize, Serialize};
 
@@ -85,37 +85,53 @@ async fn send_query(
     Ok(record_id)
 }
 
-pub(super) async fn insert_record<T>(
-    db: &mut DatabaseConnection<'_>,
+pub struct ExpandedInsertRecordParams<'a, M> {
+    pub guard: TxnGuard<'a, M>,
+    pub body: &'a InsertRecordParams,
+    pub at: chrono::NaiveDateTime,
+    pub event: OptEvent<'a>,
+    pub mode_version: Option<records_lib::ModeVersion>,
+}
+
+impl<M> Clone for ExpandedInsertRecordParams<'_, M> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<M> Copy for ExpandedInsertRecordParams<'_, M> {}
+
+pub(super) async fn insert_record<M: CanWrite>(
+    conn: &mut DatabaseConnection<'_>,
+    params: ExpandedInsertRecordParams<'_, M>,
     map_id: u32,
     player_id: u32,
-    guard: T,
-    body: &InsertRecordParams,
-    event: OptEvent<'_>,
     event_record_id: Option<u32>,
-    at: chrono::NaiveDateTime,
     update_redis_lb: bool,
-    mode_version: Option<records_lib::ModeVersion>,
-) -> RecordsResult<u32>
-where
-    T: Transactional<Mode = ReadWrite>,
-{
-    ranks::update_leaderboard(db, map_id, &guard, event).await?;
+) -> RecordsResult<u32> {
+    ranks::update_leaderboard(conn, map_id, params.guard, params.event).await?;
 
     if update_redis_lb {
-        ranks::update_rank(db.redis_conn, map_id, player_id, body.time, event).await?;
+        ranks::update_rank(
+            conn.redis_conn,
+            map_id,
+            player_id,
+            params.body.time,
+            params.event,
+        )
+        .await?;
     }
 
     // FIXME: find a way to retry deadlock errors **without loops**
     let record_id = send_query(
-        db.mysql_conn,
+        conn.mysql_conn,
         player_id,
         map_id,
         SendQueryParam {
-            body,
+            body: params.body,
             event_record_id,
-            at,
-            mode_version,
+            at: params.at,
+            mode_version: params.mode_version,
         },
     )
     .await
@@ -154,68 +170,55 @@ async fn get_old_record(
         .with_api_err()
 }
 
-pub async fn finished<T>(
-    db: &mut DatabaseConnection<'_>,
+// conn, guard, params, at, mode_version, event
+
+pub async fn finished<M: CanWrite>(
+    conn: &mut DatabaseConnection<'_>,
+    params: ExpandedInsertRecordParams<'_, M>,
     player_login: &str,
     map: &models::Map,
-    guard: T,
-    params: InsertRecordParams,
-    at: chrono::NaiveDateTime,
-    event: OptEvent<'_>,
-    mode_version: Option<records_lib::ModeVersion>,
-) -> RecordsResult<FinishedOutput>
-where
-    T: Transactional<Mode = ReadWrite>,
-{
+) -> RecordsResult<FinishedOutput> {
     // First, we retrieve all what we need to save the record
-    let player = records_lib::must::have_player(db.mysql_conn, player_login)
+    let player = records_lib::must::have_player(conn.mysql_conn, player_login)
         .await
         .with_api_err()?;
     let player_id = player.id;
 
     // Return an error if the player was banned at the time.
-    if let Some(ban) = super::player::get_ban_during(db.mysql_conn, player_id, at).await? {
+    if let Some(ban) = super::player::get_ban_during(conn.mysql_conn, player_id, params.at).await? {
         return Err(RecordsErrorKind::BannedPlayer(ban));
     }
 
     // We check that the cps times are coherent to the final time
-    if matches!(map.cps_number, Some(num) if num + 1 != params.cps.len() as u32)
-        || params.cps.iter().sum::<i32>() != params.time
+    if matches!(map.cps_number, Some(num) if num + 1 != params.body.cps.len() as u32)
+        || params.body.cps.iter().sum::<i32>() != params.body.time
     {
         return Err(RecordsErrorKind::InvalidTimes);
     }
 
-    let old_record = get_old_record(db.mysql_conn, player_id, map.id, event).await?;
+    let old_record = get_old_record(conn.mysql_conn, player_id, map.id, params.event).await?;
 
-    let (old, new, has_improved, old_rank) =
-        if let Some(models::Record { time: old, .. }) = old_record {
-            (
-                old,
-                params.time,
-                params.time < old,
-                Some(ranks::get_rank(db, map.id, player_id, old, event, &guard).await?),
-            )
-        } else {
-            (params.time, params.time, true, None)
-        };
+    let (old, new, has_improved, old_rank) = if let Some(models::Record { time: old, .. }) =
+        old_record
+    {
+        (
+            old,
+            params.body.time,
+            params.body.time < old,
+            Some(ranks::get_rank(conn, map.id, player_id, old, params.event, params.guard).await?),
+        )
+    } else {
+        (params.body.time, params.body.time, true, None)
+    };
+
+    let event = params.event;
+    let guard = params.guard;
 
     // We insert the record
-    let record_id = insert_record(
-        db,
-        map.id,
-        player_id,
-        &guard,
-        &params,
-        event,
-        None,
-        at,
-        has_improved,
-        mode_version,
-    )
-    .await?;
+    let record_id = insert_record(conn, params, map.id, player_id, None, has_improved).await?;
 
     let current_rank = ranks::get_rank(
-        db,
+        conn,
         map.id,
         player_id,
         if has_improved { new } else { old },

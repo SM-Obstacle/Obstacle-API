@@ -1,5 +1,8 @@
 use core::fmt;
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Context as _;
 use deadpool_redis::redis::{self, AsyncCommands as _};
@@ -11,7 +14,7 @@ use records_lib::{
     models, must,
     redis_key::{cached_key, mappack_key},
     time::Time,
-    transaction::{self, ReadWrite, Transactional},
+    transaction::{self, CanWrite, ReadWrite, TxnGuard},
 };
 
 use crate::clear;
@@ -249,17 +252,16 @@ async fn run_populate(
                 populate_from_csv(
                     conn,
                     client,
-                    event,
-                    edition,
+                    (event, edition),
                     db,
-                    &guard,
-                    csv_file,
+                    guard,
+                    &csv_file,
                     transitive_save,
                 )
                 .await
             }
             PopulateKind::MxId { mx_id } => {
-                populate_from_mx_id(conn, client, event, edition, &guard, mx_id).await
+                populate_from_mx_id(conn, client, event, edition, guard, mx_id).await
             }
         }
     })
@@ -369,22 +371,18 @@ fn check_medal_times_consistency(
     check_inconsistent_medal_times(line, gold_span, author_span);
 }
 
-async fn populate_from_csv<T>(
+async fn populate_from_csv<M: CanWrite>(
     conn: &mut DatabaseConnection<'_>,
     client: &reqwest::Client,
-    event: &models::Event,
-    edition: &models::EventEdition,
+    (event, edition): (&models::Event, &models::EventEdition),
     db: Database,
-    _guard: T,
-    csv_file: PathBuf,
+    _guard: TxnGuard<'_, M>,
+    csv_file: &Path,
     default_transitive_save: bool,
-) -> anyhow::Result<()>
-where
-    T: Transactional<Mode = ReadWrite>,
-{
+) -> anyhow::Result<()> {
     let mut reader = csv::ReaderBuilder::new()
         .comment(Some(b'#'))
-        .from_path(&csv_file)
+        .from_path(csv_file)
         .with_context(|| format!("Couldn't read CSV file `{}`", csv_file.display()))?;
     let mut rows_iter = reader.deserialize::<Row>();
     let mut rows = Vec::with_capacity(rows_iter.size_hint().0);
@@ -513,17 +511,14 @@ where
     Ok(())
 }
 
-async fn populate_from_mx_id<T>(
+async fn populate_from_mx_id<M: CanWrite>(
     conn: &mut DatabaseConnection<'_>,
     client: &reqwest::Client,
     event: &models::Event,
     edition: &models::EventEdition,
-    _guard: T,
+    _guard: TxnGuard<'_, M>,
     mx_id: Option<i64>,
-) -> anyhow::Result<()>
-where
-    T: Transactional<Mode = ReadWrite>,
-{
+) -> anyhow::Result<()> {
     let mx_id = match (mx_id, edition.mx_id) {
         (Some(provided_id), Some(original_id)) if provided_id != original_id => {
             tracing::warn!(

@@ -8,7 +8,7 @@ use async_graphql::{Enum, ErrorExtensionValues, ID, Value, connection};
 use async_graphql_actix_web::GraphQLRequest;
 use records_lib::opt_event::OptEvent;
 use records_lib::ranks::get_rank;
-use records_lib::transaction::{ReadOnly, Transactional};
+use records_lib::transaction::{ReadOnly, TxnGuard};
 use records_lib::{Database, must};
 use records_lib::{
     DatabaseConnection, MySqlConnection, RedisConnection, acquire, models, transaction,
@@ -333,16 +333,13 @@ impl QueryRoot {
     }
 }
 
-async fn get_record<T>(
+async fn get_record<M>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
-    guard: T,
+    guard: TxnGuard<'_, M>,
     record_id: u32,
     event: OptEvent<'_>,
-) -> async_graphql::Result<RankedRecord>
-where
-    T: Transactional,
-{
+) -> async_graphql::Result<RankedRecord> {
     let mut conn = DatabaseConnection {
         mysql_conn,
         redis_conn,
@@ -374,16 +371,13 @@ where
     Ok(out)
 }
 
-async fn get_records<T>(
+async fn get_records<M>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
-    guard: T,
+    guard: TxnGuard<'_, M>,
     date_sort_by: Option<SortState>,
     event: OptEvent<'_>,
-) -> async_graphql::Result<Vec<RankedRecord>>
-where
-    T: Transactional,
-{
+) -> async_graphql::Result<Vec<RankedRecord>> {
     let mut conn = DatabaseConnection {
         mysql_conn,
         redis_conn,
@@ -409,7 +403,7 @@ where
             record.record_player_id,
             record.time,
             event,
-            &guard,
+            guard,
         )
         .await?;
 

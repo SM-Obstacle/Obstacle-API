@@ -5,7 +5,7 @@ use records_lib::leaderboard::{self, Row};
 use records_lib::models;
 use records_lib::opt_event::OptEvent;
 use records_lib::ranks::update_leaderboard;
-use records_lib::transaction::{ReadOnly, Transactional};
+use records_lib::transaction::{ReadOnly, TxnGuard};
 use records_lib::{
     DatabaseConnection, MySqlConnection, RedisConnection, player, redis_key::map_key, transaction,
 };
@@ -20,17 +20,14 @@ pub struct OverviewQuery {
 
 pub type OverviewReq = Query<OverviewQuery>;
 
-async fn extend_range<T>(
+async fn extend_range<M>(
     conn: &mut DatabaseConnection<'_>,
     records: &mut Vec<Row>,
     (start, end): (i64, i64),
     map_id: u32,
-    guard: T,
+    guard: TxnGuard<'_, M>,
     event: OptEvent<'_>,
-) -> RecordsResult<()>
-where
-    T: Transactional,
-{
+) -> RecordsResult<()> {
     leaderboard::leaderboard_txn_into(
         conn,
         guard,
@@ -51,17 +48,14 @@ pub struct ResponseBody {
     pub response: Vec<Row>,
 }
 
-async fn build_records_array<T>(
+async fn build_records_array<M>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
-    guard: T,
+    guard: TxnGuard<'_, M>,
     player_login: &str,
     map: &models::Map,
     event: OptEvent<'_>,
-) -> RecordsResult<Vec<Row>>
-where
-    T: Transactional,
-{
+) -> RecordsResult<Vec<Row>> {
     let mut conn = DatabaseConnection {
         mysql_conn,
         redis_conn,
@@ -73,7 +67,7 @@ where
 
     // Update redis if needed
     let key = map_key(map.id, event);
-    let count = update_leaderboard(&mut conn, map.id, &guard, event).await?;
+    let count = update_leaderboard(&mut conn, map.id, guard, event).await?;
 
     let mut ranked_records = vec![];
 
@@ -98,7 +92,7 @@ where
                 &mut ranked_records,
                 (0, TOTAL_ROWS),
                 map.id,
-                &guard,
+                guard,
                 event,
             )
             .await?;
@@ -106,15 +100,7 @@ where
         // The player is not in the top ROWS records, display top3 and then center around the player rank
         else {
             // push top3
-            extend_range(
-                &mut conn,
-                &mut ranked_records,
-                (0, 3),
-                map.id,
-                &guard,
-                event,
-            )
-            .await?;
+            extend_range(&mut conn, &mut ranked_records, (0, 3), map.id, guard, event).await?;
 
             // the rest is centered around the player
             let row_minus_top3 = TOTAL_ROWS - 3;
@@ -127,7 +113,7 @@ where
                     (start, end)
                 }
             };
-            extend_range(&mut conn, &mut ranked_records, range, map.id, &guard, event).await?;
+            extend_range(&mut conn, &mut ranked_records, range, map.id, guard, event).await?;
         }
     }
     // The player has no record, so ROWS = ROWS - 1 to keep one last line for the player
@@ -141,7 +127,7 @@ where
                 &mut ranked_records,
                 (0, NO_RECORD_ROWS - 3),
                 map.id,
-                &guard,
+                guard,
                 event,
             )
             .await?;
@@ -152,7 +138,7 @@ where
                 &mut ranked_records,
                 (count - 3, count),
                 map.id,
-                &guard,
+                guard,
                 event,
             )
             .await?;
@@ -164,7 +150,7 @@ where
                 &mut ranked_records,
                 (0, NO_RECORD_ROWS),
                 map.id,
-                &guard,
+                guard,
                 event,
             )
             .await?;

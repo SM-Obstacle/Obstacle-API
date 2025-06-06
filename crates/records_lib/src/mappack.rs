@@ -15,7 +15,7 @@ use crate::{
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
-    transaction::{self, ReadOnly, Transactional},
+    transaction::{self, ReadOnly, TxnGuard},
 };
 
 #[derive(Default, Clone, Debug)]
@@ -331,16 +331,13 @@ async fn save(
     feature = "tracing",
     tracing::instrument(skip(mysql_conn, redis_conn, guard), fields(mappack = %mappack.mappack_id()))
 )]
-async fn calc_scores<T>(
+async fn calc_scores<M>(
     mysql_conn: MySqlConnection<'_>,
     redis_conn: &mut RedisConnection,
     mappack: AnyMappackId<'_>,
     event: OptEvent<'_>,
-    guard: T,
-) -> RecordsResult<Option<MappackScores>>
-where
-    T: Transactional,
-{
+    guard: TxnGuard<'_, M>,
+) -> RecordsResult<Option<MappackScores>> {
     let db = &mut DatabaseConnection {
         mysql_conn,
         redis_conn,
@@ -418,7 +415,7 @@ where
                     record.record.record_player_id,
                     record.record.time,
                     event,
-                    &guard,
+                    guard,
                 )
                 .await?,
                 record,

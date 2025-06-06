@@ -7,14 +7,13 @@ use actix_web::{
 use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{
-    Database, DatabaseConnection, MySqlConnection, NullableInteger, NullableReal, NullableText,
-    RedisConnection, acquire,
+    Database, DatabaseConnection, NullableInteger, NullableReal, NullableText, acquire,
     error::RecordsError,
     event::{self, EventMap},
     models,
     opt_event::OptEvent,
     player,
-    transaction::{self, ReadWrite, Transactional},
+    transaction::{self, CanWrite, ReadWrite},
 };
 use serde::Serialize;
 use sqlx::FromRow;
@@ -30,7 +29,7 @@ use crate::{
 use super::{
     overview, pb,
     player::PlayerInfoNetBody,
-    player_finished::{self as pf, HasFinishedBody},
+    player_finished::{self as pf, ExpandedInsertRecordParams},
 };
 
 pub fn event_scope() -> Scope {
@@ -629,41 +628,17 @@ async fn edition_finished(
     .await
 }
 
-async fn edition_finished_impl<T>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
-    guard: T,
+async fn edition_finished_impl<M: CanWrite>(
+    conn: &mut DatabaseConnection<'_>,
+    params: ExpandedInsertRecordParams<'_, M>,
     player_login: &str,
     map: &models::Map,
-    event: &models::Event,
-    edition: &models::EventEdition,
+    event_id: u32,
+    edition_id: u32,
     original_map_id: Option<u32>,
-    at: chrono::NaiveDateTime,
-    body: HasFinishedBody,
-    mode_version: Option<records_lib::ModeVersion>,
-) -> RecordsResult<pf::FinishedOutput>
-where
-    T: Transactional<Mode = ReadWrite>,
-{
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-
-    let event = OptEvent::new(event, edition);
-
+) -> RecordsResult<pf::FinishedOutput> {
     // Then we insert the record for the global records
-    let res = pf::finished(
-        &mut conn,
-        player_login,
-        map,
-        &guard,
-        body.rest.clone(),
-        at,
-        event,
-        mode_version,
-    )
-    .await?;
+    let res = pf::finished(conn, params, player_login, map).await?;
 
     if let Some(original_map_id) = original_map_id {
         // Get the previous time of the player on the original map to check if it's a PB
@@ -676,26 +651,25 @@ where
         .await
         .with_api_err()?;
         let is_pb =
-            time_on_previous.is_none() || time_on_previous.is_some_and(|t| t > body.rest.time);
+            time_on_previous.is_none() || time_on_previous.is_some_and(|t| t > params.body.time);
 
         // Here, we don't provide the event instances, because we don't want to save in event mode.
         pf::insert_record(
-            &mut conn,
+            conn,
+            ExpandedInsertRecordParams {
+                event: Default::default(),
+                ..params
+            },
             original_map_id,
             res.player_id,
-            guard,
-            &body.rest,
-            Default::default(),
             Some(res.record_id),
-            at,
             is_pb,
-            mode_version,
         )
         .await?;
     }
 
     // Then we insert it for the event edition records.
-    insert_event_record(conn.mysql_conn, res.record_id, edition.event_id, edition.id).await?;
+    insert_event_record(conn.mysql_conn, res.record_id, event_id, edition_id).await?;
 
     Ok(res)
 }
@@ -739,18 +713,25 @@ pub async fn edition_finished_at(
 
     let res: pf::FinishedOutput =
         transaction::within(conn.mysql_conn, ReadWrite, async |mysql_conn, guard| {
-            edition_finished_impl(
-                mysql_conn,
-                conn.redis_conn,
+            let params = ExpandedInsertRecordParams {
                 guard,
+                body: &body.rest,
+                at,
+                event: OptEvent::new(&event, &edition),
+                mode_version,
+            };
+
+            edition_finished_impl(
+                &mut DatabaseConnection {
+                    mysql_conn,
+                    redis_conn: conn.redis_conn,
+                },
+                params,
                 &login,
                 &map,
-                &event,
-                &edition,
+                event.id,
+                edition.id,
                 original_map_id,
-                at,
-                body,
-                mode_version,
             )
             .await
         })
