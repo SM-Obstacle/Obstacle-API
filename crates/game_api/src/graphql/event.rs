@@ -7,11 +7,11 @@ use sqlx::{FromRow, MySqlPool, Row, mysql};
 
 use records_lib::{
     RedisPool,
-    context::{Context, Ctx},
     event::{self, EventMap, MedalTimes},
     mappack::AnyMappackId,
     models::{self, EventCategory},
     must,
+    opt_event::OptEvent,
     redis_key::{mappack_map_last_rank, mappack_player_ranks_key},
 };
 
@@ -279,9 +279,9 @@ impl EventEditionMapExt<'_> {
         let mut db = db.acquire().await?;
         let medal_times = event::get_medal_times_of(
             &mut db,
-            Context::default()
-                .with_edition(&self.edition_player.edition.inner)
-                .with_map_id(self.inner.inner.id),
+            self.edition_player.edition.inner.event_id,
+            self.edition_player.edition.inner.id,
+            self.inner.inner.id,
         )
         .await?;
         Ok(medal_times)
@@ -318,11 +318,7 @@ impl EventEditionPlayerRank<'_> {
     ) -> async_graphql::Result<EventEditionMapExt<'_>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
-        let map = must::have_map(
-            &mut mysql_conn,
-            Context::default().with_map_uid(&self.map_game_id),
-        )
-        .await?;
+        let map = must::have_map(&mut mysql_conn, &self.map_game_id).await?;
         Ok(EventEditionMapExt {
             inner: map.into(),
             edition_player: self.edition_player,
@@ -574,8 +570,7 @@ impl EventEditionMap<'_> {
         self.map
             .get_records(
                 ctx,
-                Context::default()
-                    .with_event_edition(&self.edition.event.inner, &self.edition.inner),
+                OptEvent::new(&self.edition.event.inner, &self.edition.inner),
                 rank_sort_by,
                 date_sort_by,
             )
@@ -590,9 +585,9 @@ impl EventEditionMap<'_> {
         let mut db = db.acquire().await?;
         let medal_times = event::get_medal_times_of(
             &mut db,
-            Context::default()
-                .with_edition(&self.edition.inner)
-                .with_map_id(self.map.inner.id),
+            self.edition.inner.event_id,
+            self.edition.inner.id,
+            self.map.inner.id,
         )
         .await?;
         Ok(medal_times)
@@ -654,11 +649,7 @@ impl EventEdition<'_> {
     ) -> async_graphql::Result<EventEditionPlayer<'_>> {
         let db = ctx.data_unchecked::<MySqlPool>();
         let mut mysql_conn = db.acquire().await?;
-        let player = must::have_player(
-            &mut mysql_conn,
-            Context::default().with_player_login(&login),
-        )
-        .await?;
+        let player = must::have_player(&mut mysql_conn, &login).await?;
         Ok(EventEditionPlayer {
             edition: self,
             player,
@@ -675,9 +666,9 @@ impl EventEdition<'_> {
 
         let EventMap { map, .. } = event::get_map_in_edition(
             &mut mysql_conn,
-            Context::default()
-                .with_map_uid(&game_id)
-                .with_edition(&self.inner),
+            &game_id,
+            self.inner.event_id,
+            self.inner.id,
         )
         .await?
         .ok_or_else(|| async_graphql::Error::new("Map not found in this edition"))?;

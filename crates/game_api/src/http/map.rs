@@ -10,7 +10,6 @@ use actix_web::{
 use futures::{StreamExt, future::try_join_all};
 use records_lib::{
     Database, acquire,
-    context::{Context, Ctx, HasMapUid},
     models::{self, Map, Player},
 };
 use serde::{Deserialize, Serialize};
@@ -46,9 +45,7 @@ async fn insert(
 ) -> RecordsResponse<impl Responder> {
     let conn = acquire!(db.with_api_err().fit(req_id)?);
 
-    let ctx = Context::default().with_map_uid(&body.map_uid);
-
-    let res = records_lib::map::get_map_from_uid(conn.mysql_conn, ctx.get_map_uid())
+    let res = records_lib::map::get_map_from_uid(conn.mysql_conn, &body.map_uid)
         .await
         .fit(req_id)?;
 
@@ -119,15 +116,11 @@ pub async fn player_rating(
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let ctx = Context::default()
-        .with_player_login(&login)
-        .with_map_uid(&body.map_uid);
-
-    let player_id = records_lib::must::have_player(&mut mysql_conn, &ctx)
+    let player_id = records_lib::must::have_player(&mut mysql_conn, &login)
         .await
         .fit(req_id)?
         .id;
-    let map_id = records_lib::must::have_map(&mut mysql_conn, &ctx)
+    let map_id = records_lib::must::have_map(&mut mysql_conn, &body.map_uid)
         .await
         .fit(req_id)?
         .id;
@@ -211,14 +204,10 @@ pub async fn ratings(
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let ctx = Context::default()
-        .with_player_login(&login)
-        .with_map_uid(&body.map_id);
-
-    let player = records_lib::must::have_player(&mut mysql_conn, &ctx)
+    let player = records_lib::must::have_player(&mut mysql_conn, &login)
         .await
         .fit(req_id)?;
-    let map = records_lib::must::have_map(&mut mysql_conn, &ctx)
+    let map = records_lib::must::have_map(&mut mysql_conn, &body.map_id)
         .await
         .fit(req_id)?;
 
@@ -371,15 +360,12 @@ pub async fn rate(
     Json(body): Json<RateBody>,
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
-    let ctx = Context::default()
-        .with_player_login(&login)
-        .with_map_uid(&body.map_id);
 
     let Player {
         id: player_id,
         login: player_login,
         ..
-    } = records_lib::must::have_player(&mut mysql_conn, &ctx)
+    } = records_lib::must::have_player(&mut mysql_conn, &login)
         .await
         .fit(req_id)?;
 
@@ -388,7 +374,7 @@ pub async fn rate(
         name: map_name,
         player_id: author_id,
         ..
-    } = records_lib::must::have_map(&mut mysql_conn, &ctx)
+    } = records_lib::must::have_map(&mut mysql_conn, &body.map_id)
         .await
         .fit(req_id)?;
 

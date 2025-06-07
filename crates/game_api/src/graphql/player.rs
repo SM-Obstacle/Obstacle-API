@@ -2,10 +2,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_graphql::{Enum, ID, connection, dataloader::Loader};
 use records_lib::{
-    Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
-    context::{Context, Ctx as _, HasPlayerId, ReadOnly, Transactional},
+    Database, DatabaseConnection, TxnDatabaseConnection, acquire,
     models::{self, Role},
-    transaction,
+    opt_event::OptEvent,
+    transaction::{self, ReadOnly},
 };
 use sqlx::{FromRow, MySqlPool, Row, mysql};
 
@@ -165,30 +165,33 @@ impl Player {
 
         records_lib::assert_future_send(transaction::within(
             conn.mysql_conn,
-            Context::default().with_player(&self.inner),
             ReadOnly,
-            async |mysql_conn, ctx| {
-                get_player_records(mysql_conn, conn.redis_conn, ctx, date_sort_by).await
+            async |mysql_conn, guard| {
+                get_player_records(
+                    &mut TxnDatabaseConnection::new(
+                        guard,
+                        DatabaseConnection {
+                            mysql_conn,
+                            redis_conn: conn.redis_conn,
+                        },
+                    ),
+                    self.inner.id,
+                    Default::default(),
+                    date_sort_by,
+                )
+                .await
             },
         ))
         .await
     }
 }
 
-async fn get_player_records<C>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
-    ctx: C,
+async fn get_player_records<M>(
+    conn: &mut TxnDatabaseConnection<'_, M>,
+    player_id: u32,
+    event: OptEvent<'_>,
     date_sort_by: Option<SortState>,
-) -> async_graphql::Result<Vec<RankedRecord>>
-where
-    C: HasPlayerId + Transactional,
-{
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-
+) -> async_graphql::Result<Vec<RankedRecord>> {
     let date_sort_by = SortState::sql_order_by(&date_sort_by);
 
     // Query the records with these ids
@@ -201,19 +204,19 @@ where
     );
 
     let records = sqlx::query_as::<_, models::Record>(&query)
-        .bind(ctx.get_player_id())
-        .fetch_all(&mut **conn.mysql_conn)
+        .bind(player_id)
+        .fetch_all(&mut **conn.conn.mysql_conn)
         .await?;
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
     for record in records {
         let rank = get_rank(
-            &mut conn,
-            ctx.by_ref()
-                .with_map_id(record.map_id)
-                .with_player_id(record.record_player_id),
+            conn,
+            record.map_id,
+            record.record_player_id,
             record.time,
+            event,
         )
         .await?;
 

@@ -7,7 +7,6 @@ use actix_web::body::BoxBody;
 use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
 use actix_web::web::{JsonConfig, Query};
 use actix_web::{HttpResponse, Scope, web};
-use records_lib::context::{Context, Ctx};
 use records_lib::{Database, acquire};
 use serde::Serialize;
 use tracing_actix_web::RequestId;
@@ -206,17 +205,12 @@ async fn overview(
 ) -> RecordsResponse<impl Responder> {
     let conn = acquire!(db.with_api_err().fit(req_id)?);
 
-    let ctx = Context::default()
-        .with_pool(db.0)
-        .with_player_login(&query.login)
-        .with_map_uid(&query.map_uid);
-
-    let map = records_lib::must::have_map(conn.mysql_conn, &ctx)
+    let map = records_lib::must::have_map(conn.mysql_conn, &query.map_uid)
         .await
         .with_api_err()
         .fit(req_id)?;
 
-    let res = overview::overview(conn, ctx.with_map(&map))
+    let res = overview::overview(conn, &query.login, &map, Default::default())
         .await
         .fit(req_id)?;
     utils::json(res)
