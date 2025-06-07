@@ -1,15 +1,29 @@
 //! Optional event management.
+//!
+//! See the [`OptEvent`] type for more information.
 
 use std::fmt;
 
 use crate::models;
 
+/// Optional event instances.
+///
+/// Operations involving events often follow the same patterns than operations without events.
+/// This is why these operations generally take a value of this type as a parameter, if needed.
+///
+/// For example, a player's record on a map might not be the same when made in an event.
+///
+/// This type is created with event instances if available, with the [`OptEvent::new`] method.
+/// Otherwise, use the [`Default`] implementation.
 #[derive(Clone, Copy, Default)]
 pub struct OptEvent<'a> {
+    /// The optional held event instances.
     pub event: Option<(&'a models::Event, &'a models::EventEdition)>,
 }
 
 impl<'a> OptEvent<'a> {
+    /// Creates a new optional event instances with the provided event instances,
+    /// in a more convenient way.
     pub fn new(event: &'a models::Event, edition: &'a models::EventEdition) -> Self {
         Self {
             event: Some((event, edition)),
@@ -29,11 +43,17 @@ impl fmt::Debug for OptEvent<'_> {
 }
 
 impl OptEvent<'_> {
+    /// Returns the SQL fragment builder based on the current held optional event instances.
+    ///
+    /// This is used to build SQL queries depending on whether an event is given or not.
     pub fn sql_frag_builder(&self) -> SqlFragmentBuilder<'_, '_> {
         SqlFragmentBuilder { event: self }
     }
 }
 
+/// The SQL fragment builder, based on the current held optional event instances.
+///
+/// This type is returned by the [`OptEvent::sql_frag_builder`] method.
 pub struct SqlFragmentBuilder<'a, 'b> {
     event: &'a OptEvent<'b>,
 }

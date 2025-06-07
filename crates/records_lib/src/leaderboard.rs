@@ -3,12 +3,12 @@
 use deadpool_redis::redis::AsyncCommands as _;
 
 use crate::{
-    DatabaseConnection,
+    DatabaseConnection, TxnDatabaseConnection,
     error::RecordsResult,
     opt_event::OptEvent,
     ranks,
     redis_key::map_key,
-    transaction::{self, ReadOnly, TxnGuard},
+    transaction::{self, ReadOnly},
 };
 
 /// The type returned by the [`compet_rank_by_key`](CompetRankingByKeyIter::compet_rank_by_key)
@@ -136,19 +136,19 @@ pub struct Row {
 
 /// Gets the leaderboard of a map and extends it to the provided vec.
 pub async fn leaderboard_txn_into<M>(
-    conn: &mut DatabaseConnection<'_>,
-    guard: TxnGuard<'_, M>,
+    conn: &mut TxnDatabaseConnection<'_, M>,
     map_id: u32,
     start: Option<i64>,
     end: Option<i64>,
     rows: &mut Vec<Row>,
     event: OptEvent<'_>,
 ) -> RecordsResult<()> {
-    ranks::update_leaderboard(conn, map_id, guard, event).await?;
+    ranks::update_leaderboard(conn, map_id, event).await?;
 
     let start = start.unwrap_or_default();
     let end = end.unwrap_or(-1);
     let player_ids: Vec<i32> = conn
+        .conn
         .redis_conn
         .zrange(map_key(map_id, event), start as isize, end as isize)
         .await?;
@@ -184,14 +184,14 @@ pub async fn leaderboard_txn_into<M>(
         .push_event_filter(&mut query, "eer")
         .push(" GROUP BY record_player_id ORDER BY time, record_date ASC")
         .build_query_as::<RecordQueryRow>()
-        .fetch_all(&mut **conn.mysql_conn)
+        .fetch_all(&mut **conn.conn.mysql_conn)
         .await?;
 
     rows.reserve(result.len());
 
     for r in result {
         rows.push(Row {
-            rank: ranks::get_rank(conn, map_id, r.player_id, r.time, event, guard).await?,
+            rank: ranks::get_rank(conn, map_id, r.player_id, r.time, event).await?,
             login: r.login,
             nickname: r.nickname,
             time: r.time,
@@ -203,15 +203,14 @@ pub async fn leaderboard_txn_into<M>(
 
 /// Returns the leaderboard of a map.
 pub async fn leaderboard_txn<M>(
-    conn: &mut DatabaseConnection<'_>,
-    guard: TxnGuard<'_, M>,
+    conn: &mut TxnDatabaseConnection<'_, M>,
     map_id: u32,
     start: Option<i64>,
     end: Option<i64>,
     event: OptEvent<'_>,
 ) -> RecordsResult<Vec<Row>> {
     let mut out = Vec::new();
-    leaderboard_txn_into(conn, guard, map_id, start, end, &mut out, event).await?;
+    leaderboard_txn_into(conn, map_id, start, end, &mut out, event).await?;
     Ok(out)
 }
 
@@ -228,11 +227,13 @@ pub async fn leaderboard(
 ) -> RecordsResult<Vec<Row>> {
     transaction::within(conn.mysql_conn, ReadOnly, async |mysql_conn, guard| {
         leaderboard_txn(
-            &mut DatabaseConnection {
-                redis_conn: conn.redis_conn,
-                mysql_conn,
-            },
-            guard,
+            &mut TxnDatabaseConnection::new(
+                guard,
+                DatabaseConnection {
+                    redis_conn: conn.redis_conn,
+                    mysql_conn,
+                },
+            ),
             map_id,
             offset,
             limit.map(|x| offset.unwrap_or_default() + x),

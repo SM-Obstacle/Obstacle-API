@@ -5,7 +5,7 @@ use std::{fmt, time::SystemTime};
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
 
 use crate::{
-    DatabaseConnection, MySqlConnection, RedisConnection,
+    DatabaseConnection, RedisConnection, TxnDatabaseConnection,
     error::RecordsResult,
     models, must,
     opt_event::OptEvent,
@@ -15,7 +15,7 @@ use crate::{
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
-    transaction::{self, ReadOnly, TxnGuard},
+    transaction::{self, ReadOnly},
 };
 
 #[derive(Default, Clone, Debug)]
@@ -151,7 +151,20 @@ pub async fn update_mappack(
     let scores = crate::assert_future_send(transaction::within(
         db.mysql_conn,
         ReadOnly,
-        async |conn, guard| calc_scores(conn, db.redis_conn, mappack, event, guard).await,
+        async |conn, guard| {
+            calc_scores(
+                &mut TxnDatabaseConnection::new(
+                    guard,
+                    DatabaseConnection {
+                        mysql_conn: conn,
+                        redis_conn: db.redis_conn,
+                    },
+                ),
+                mappack,
+                event,
+            )
+            .await
+        },
     ))
     .await?;
 
@@ -329,22 +342,15 @@ async fn save(
 /// Returns an `Option` because the mappack may have expired.
 #[cfg_attr(
     feature = "tracing",
-    tracing::instrument(skip(mysql_conn, redis_conn, guard), fields(mappack = %mappack.mappack_id()))
+    tracing::instrument(skip(conn), fields(mappack = %mappack.mappack_id()))
 )]
 async fn calc_scores<M>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
+    conn: &mut TxnDatabaseConnection<'_, M>,
     mappack: AnyMappackId<'_>,
     event: OptEvent<'_>,
-    guard: TxnGuard<'_, M>,
 ) -> RecordsResult<Option<MappackScores>> {
-    let db = &mut DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-
     let mappack_key = mappack_key(mappack);
-    let mappack_uids: Vec<String> = db.redis_conn.smembers(&mappack_key).await?;
+    let mappack_uids: Vec<String> = conn.conn.redis_conn.smembers(&mappack_key).await?;
 
     let mut maps = Vec::with_capacity(mappack_uids.len().max(5));
 
@@ -353,7 +359,8 @@ async fn calc_scores<M>(
         // or that its TTL has expired. So we remove its entry in the registered mappacks set.
         // The other keys related to this mappack were set with a TTL so they should
         // be deleted too.
-        let _: i32 = db
+        let _: i32 = conn
+            .conn
             .redis_conn
             .srem(mappacks_key(), mappack.mappack_id())
             .await?;
@@ -362,7 +369,7 @@ async fn calc_scores<M>(
         let mut out = Vec::with_capacity(mappack_uids.len());
 
         for map_uid in &mappack_uids {
-            let map = must::have_map(db.mysql_conn, map_uid).await?;
+            let map = must::have_map(conn.conn.mysql_conn, map_uid).await?;
             maps.push(MappackMap {
                 map_id: map.game_id.clone(),
                 last_rank: 0,
@@ -392,7 +399,7 @@ async fn calc_scores<M>(
             .push(" order by time asc")
             .build_query_as::<RecordRow>();
 
-        let res = query.fetch_all(&mut **db.mysql_conn).await?;
+        let res = query.fetch_all(&mut **conn.conn.mysql_conn).await?;
 
         let mut records = Vec::with_capacity(res.len());
 
@@ -410,12 +417,11 @@ async fn calc_scores<M>(
 
             let record = RankedRecordRow {
                 rank: get_rank(
-                    db,
+                    conn,
                     map.id,
                     record.record.record_player_id,
                     record.record.time,
                     event,
-                    guard,
                 )
                 .await?,
                 record,

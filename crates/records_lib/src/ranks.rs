@@ -57,11 +57,10 @@
 //! and minimize inconsistencies between Redis and MariaDB.
 
 use crate::{
-    DatabaseConnection, RedisConnection,
+    DatabaseConnection, RedisConnection, TxnDatabaseConnection,
     error::{RecordsError, RecordsResult},
     opt_event::OptEvent,
     redis_key::{MapKey, map_key},
-    transaction::TxnGuard,
 };
 use deadpool_redis::redis::{self, AsyncCommands};
 use futures::TryStreamExt;
@@ -158,9 +157,11 @@ pub async fn update_rank(
 }
 
 async fn count_records_map<M>(
-    conn: &mut sqlx::MySqlConnection,
+    TxnDatabaseConnection {
+        conn: DatabaseConnection { mysql_conn, .. },
+        ..
+    }: &mut TxnDatabaseConnection<'_, M>,
     map_id: u32,
-    _guard: TxnGuard<'_, M>,
     event: OptEvent<'_>,
 ) -> RecordsResult<i64> {
     let builder = event.sql_frag_builder();
@@ -176,7 +177,10 @@ async fn count_records_map<M>(
         .push(" group by record_player_id) r")
         .build_query_scalar();
 
-    query.fetch_one(conn).await.map_err(Into::into)
+    query
+        .fetch_one(&mut ***mysql_conn)
+        .await
+        .map_err(Into::into)
 }
 
 /// Checks if the Redis leaderboard for the map with the provided ID has a different count
@@ -186,19 +190,18 @@ async fn count_records_map<M>(
 ///
 /// It returns the number of records in the map.
 pub async fn update_leaderboard<M>(
-    conn: &mut DatabaseConnection<'_>,
+    conn: &mut TxnDatabaseConnection<'_, M>,
     map_id: u32,
-    guard: TxnGuard<'_, M>,
     event: OptEvent<'_>,
 ) -> RecordsResult<i64> {
-    let mysql_count: i64 = count_records_map(conn.mysql_conn, map_id, guard, event).await?;
+    let mysql_count: i64 = count_records_map(conn, map_id, event).await?;
 
     lock_within(map_id, || async move {
         let key = map_key(map_id, event);
 
-        let redis_count: i64 = conn.redis_conn.zcount(key, "-inf", "+inf").await?;
+        let redis_count: i64 = conn.conn.redis_conn.zcount(key, "-inf", "+inf").await?;
         if redis_count != mysql_count {
-            force_update_locked(conn, map_id, event).await?;
+            force_update_locked(&mut conn.conn, map_id, event).await?;
         }
 
         RecordsResult::Ok(())
@@ -285,35 +288,34 @@ async fn get_rank_impl(
 ///
 /// See the [module documentation](super) for more information.
 pub async fn get_rank<M>(
-    db: &mut DatabaseConnection<'_>,
+    TxnDatabaseConnection { conn, .. }: &mut TxnDatabaseConnection<'_, M>,
     map_id: u32,
     player_id: u32,
     time: i32,
     event: OptEvent<'_>,
-    _guard: TxnGuard<'_, M>,
 ) -> RecordsResult<i32> {
     lock_within(map_id, || async move {
         let key = map_key(map_id, event);
 
         // We update the Redis leaderboard if it doesn't have the requested `time`.
-        let score: Option<i32> = db.redis_conn.zscore(&key, player_id).await?;
+        let score: Option<i32> = conn.redis_conn.zscore(&key, player_id).await?;
         // We keep track of the previous Redis time if it's lower than ours.
         let newest_time = match score {
             Some(t) if t == time => None,
             other => {
-                force_update_locked(db, map_id, event).await?;
+                force_update_locked(conn, map_id, event).await?;
                 other.filter(|t| *t < time)
             }
         };
 
-        match get_rank_impl(db.redis_conn, &key, time).await? {
+        match get_rank_impl(conn.redis_conn, &key, time).await? {
             Some(r) => {
                 if let Some(time) = newest_time {
-                    let _: () = db.redis_conn.zadd(key, player_id, time).await?;
+                    let _: () = conn.redis_conn.zadd(key, player_id, time).await?;
                 }
                 Ok(r)
             }
-            None => Err(get_rank_failed(db, player_id, map_id, event, time, score).await?),
+            None => Err(get_rank_failed(conn, player_id, map_id, event, time, score).await?),
         }
     })
     .await

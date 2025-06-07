@@ -7,12 +7,12 @@ use async_graphql::{
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
-    Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
+    Database, DatabaseConnection, TxnDatabaseConnection, acquire,
     models::{self, Record},
     opt_event::OptEvent,
     ranks::{get_rank, update_leaderboard},
     redis_key::alone_map_key,
-    transaction::{self, ReadOnly, TxnGuard},
+    transaction::{self, ReadOnly},
 };
 use sqlx::{FromRow, MySqlPool, mysql};
 
@@ -37,27 +37,21 @@ impl From<models::Map> for Map {
 }
 
 async fn get_map_records<M>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
+    conn: &mut TxnDatabaseConnection<'_, M>,
     map_id: u32,
-    guard: TxnGuard<'_, M>,
     event: OptEvent<'_>,
     rank_sort_by: Option<SortState>,
     date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<Vec<RankedRecord>> {
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
     let key = alone_map_key(map_id);
 
-    update_leaderboard(&mut conn, map_id, guard, event).await?;
+    update_leaderboard(conn, map_id, event).await?;
 
     let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
     let record_ids: Vec<i32> = if to_reverse {
-        conn.redis_conn.zrevrange(&key, 0, 99)
+        conn.conn.redis_conn.zrevrange(&key, 0, 99)
     } else {
-        conn.redis_conn.zrange(&key, 0, 99)
+        conn.conn.redis_conn.zrange(&key, 0, 99)
     }
     .await?;
     if record_ids.is_empty() {
@@ -102,21 +96,13 @@ async fn get_map_records<M>(
 
     let records = query
         .build_query_as::<Record>()
-        .fetch_all(&mut **conn.mysql_conn)
+        .fetch_all(&mut **conn.conn.mysql_conn)
         .await?;
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
     for record in records {
-        let rank = get_rank(
-            &mut conn,
-            map_id,
-            record.record_player_id,
-            record.time,
-            event,
-            guard,
-        )
-        .await?;
+        let rank = get_rank(conn, map_id, record.record_player_id, record.time, event).await?;
         ranked_records.push(models::RankedRecord { rank, record }.into());
     }
 
@@ -139,10 +125,14 @@ impl Map {
             ReadOnly,
             async |mysql_conn, guard| {
                 get_map_records(
-                    mysql_conn,
-                    conn.redis_conn,
+                    &mut TxnDatabaseConnection::new(
+                        guard,
+                        DatabaseConnection {
+                            mysql_conn,
+                            redis_conn: conn.redis_conn,
+                        },
+                    ),
                     self.inner.id,
-                    guard,
                     event,
                     rank_sort_by,
                     date_sort_by,

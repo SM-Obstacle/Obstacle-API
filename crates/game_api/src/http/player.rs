@@ -8,7 +8,7 @@ use actix_web::{
 };
 use futures::TryStreamExt;
 use records_lib::{
-    Database, DatabaseConnection, ModeVersion, MySqlConnection, RedisConnection, acquire,
+    Database, DatabaseConnection, ModeVersion, TxnDatabaseConnection, acquire,
     event::{self},
     models::{self, Banishment},
     must,
@@ -247,28 +247,27 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
 }
 
 async fn finished_impl<M: CanWrite>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
-    params: ExpandedInsertRecordParams<'_, M>,
+    conn: &mut TxnDatabaseConnection<'_, M>,
+    params: ExpandedInsertRecordParams<'_>,
     player_login: &str,
     map: &models::Map,
 ) -> RecordsResult<pf::FinishedOutput> {
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-
-    let res = pf::finished(&mut conn, params, player_login, map).await?;
+    let res = pf::finished(conn, params, player_login, map).await?;
 
     // If the record isn't in an event context, save the record to the events that have the map
     // and allow records saving without an event context.
-    let editions = records_lib::event::get_editions_which_contain(conn.mysql_conn, map.id)
+    let editions = records_lib::event::get_editions_which_contain(conn.conn.mysql_conn, map.id)
         .try_collect::<Vec<_>>()
         .await
         .with_api_err()?;
     for (event_id, edition_id, original_map_id) in editions {
-        super::event::insert_event_record(conn.mysql_conn, res.record_id, event_id, edition_id)
-            .await?;
+        super::event::insert_event_record(
+            conn.conn.mysql_conn,
+            res.record_id,
+            event_id,
+            edition_id,
+        )
+        .await?;
 
         let Some(original_map_id) = original_map_id else {
             continue;
@@ -276,7 +275,7 @@ async fn finished_impl<M: CanWrite>(
 
         // Get the previous time of the player on the original map, to check if it would be a PB or not.
         let previous_time = player::get_time_on_map(
-            conn.mysql_conn,
+            conn.conn.mysql_conn,
             res.player_id,
             original_map_id,
             Default::default(),
@@ -285,7 +284,7 @@ async fn finished_impl<M: CanWrite>(
         let is_pb = previous_time.is_none_or(|t| t > params.body.time);
 
         pf::insert_record(
-            &mut conn,
+            conn,
             ExpandedInsertRecordParams {
                 event: Default::default(),
                 ..params
@@ -319,14 +318,25 @@ pub async fn finished_at(
     let res: pf::FinishedOutput =
         transaction::within(conn.mysql_conn, ReadWrite, async |mysql_conn, guard| {
             let params = ExpandedInsertRecordParams {
-                guard,
                 body: &body.rest,
                 at,
                 event: Default::default(),
                 mode_version,
             };
 
-            finished_impl(mysql_conn, conn.redis_conn, params, &login, &map).await
+            finished_impl(
+                &mut TxnDatabaseConnection::new(
+                    guard,
+                    DatabaseConnection {
+                        mysql_conn,
+                        redis_conn: conn.redis_conn,
+                    },
+                ),
+                params,
+                &login,
+                &map,
+            )
+            .await
         })
         .await
         .fit(req_id)?;

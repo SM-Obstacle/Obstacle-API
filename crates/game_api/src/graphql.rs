@@ -8,11 +8,9 @@ use async_graphql::{Enum, ErrorExtensionValues, ID, Value, connection};
 use async_graphql_actix_web::GraphQLRequest;
 use records_lib::opt_event::OptEvent;
 use records_lib::ranks::get_rank;
-use records_lib::transaction::{ReadOnly, TxnGuard};
-use records_lib::{Database, must};
-use records_lib::{
-    DatabaseConnection, MySqlConnection, RedisConnection, acquire, models, transaction,
-};
+use records_lib::transaction::ReadOnly;
+use records_lib::{Database, TxnDatabaseConnection, must};
+use records_lib::{DatabaseConnection, acquire, models, transaction};
 use reqwest::Client;
 use sqlx::{FromRow, MySqlPool, Row, mysql, query_as};
 use std::vec::Vec;
@@ -275,9 +273,13 @@ impl QueryRoot {
 
         transaction::within(conn.mysql_conn, ReadOnly, async |mysql_conn, guard| {
             get_record(
-                mysql_conn,
-                conn.redis_conn,
-                guard,
+                &mut TxnDatabaseConnection::new(
+                    guard,
+                    DatabaseConnection {
+                        mysql_conn,
+                        redis_conn: conn.redis_conn,
+                    },
+                ),
                 record_id,
                 Default::default(),
             )
@@ -321,9 +323,13 @@ impl QueryRoot {
 
         transaction::within(conn.mysql_conn, ReadOnly, async |mysql_conn, guard| {
             get_records(
-                mysql_conn,
-                conn.redis_conn,
-                guard,
+                &mut TxnDatabaseConnection::new(
+                    guard,
+                    DatabaseConnection {
+                        mysql_conn,
+                        redis_conn: conn.redis_conn,
+                    },
+                ),
                 date_sort_by,
                 Default::default(),
             )
@@ -334,21 +340,14 @@ impl QueryRoot {
 }
 
 async fn get_record<M>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
-    guard: TxnGuard<'_, M>,
+    conn: &mut TxnDatabaseConnection<'_, M>,
     record_id: u32,
     event: OptEvent<'_>,
 ) -> async_graphql::Result<RankedRecord> {
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-
     let Some(record) =
         sqlx::query_as::<_, models::Record>("select * from records where record_id = ?")
             .bind(record_id)
-            .fetch_optional(&mut **conn.mysql_conn)
+            .fetch_optional(&mut **conn.conn.mysql_conn)
             .await?
     else {
         return Err(async_graphql::Error::new("Record not found."));
@@ -356,12 +355,11 @@ async fn get_record<M>(
 
     let out = models::RankedRecord {
         rank: get_rank(
-            &mut conn,
+            conn,
             record.map_id,
             record.record_player_id,
             record.time,
             event,
-            guard,
         )
         .await?,
         record,
@@ -372,17 +370,10 @@ async fn get_record<M>(
 }
 
 async fn get_records<M>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
-    guard: TxnGuard<'_, M>,
+    conn: &mut TxnDatabaseConnection<'_, M>,
     date_sort_by: Option<SortState>,
     event: OptEvent<'_>,
 ) -> async_graphql::Result<Vec<RankedRecord>> {
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-
     let date_sort_by = SortState::sql_order_by(&date_sort_by);
 
     let query = format!(
@@ -392,18 +383,17 @@ async fn get_records<M>(
     );
 
     let records = sqlx::query_as::<_, models::Record>(&query)
-        .fetch_all(&mut **conn.mysql_conn)
+        .fetch_all(&mut **conn.conn.mysql_conn)
         .await?;
     let mut ranked_records = Vec::with_capacity(records.len());
 
     for record in records {
         let rank = get_rank(
-            &mut conn,
+            conn,
             record.map_id,
             record.record_player_id,
             record.time,
             event,
-            guard,
         )
         .await?;
 

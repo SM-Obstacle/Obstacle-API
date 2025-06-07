@@ -7,7 +7,8 @@ use actix_web::{
 use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{
-    Database, DatabaseConnection, NullableInteger, NullableReal, NullableText, acquire,
+    Database, DatabaseConnection, NullableInteger, NullableReal, NullableText,
+    TxnDatabaseConnection, acquire,
     error::RecordsError,
     event::{self, EventMap},
     models,
@@ -629,8 +630,8 @@ async fn edition_finished(
 }
 
 async fn edition_finished_impl<M: CanWrite>(
-    conn: &mut DatabaseConnection<'_>,
-    params: ExpandedInsertRecordParams<'_, M>,
+    conn: &mut TxnDatabaseConnection<'_, M>,
+    params: ExpandedInsertRecordParams<'_>,
     player_login: &str,
     map: &models::Map,
     event_id: u32,
@@ -643,7 +644,7 @@ async fn edition_finished_impl<M: CanWrite>(
     if let Some(original_map_id) = original_map_id {
         // Get the previous time of the player on the original map to check if it's a PB
         let time_on_previous = player::get_time_on_map(
-            conn.mysql_conn,
+            conn.conn.mysql_conn,
             res.player_id,
             original_map_id,
             Default::default(),
@@ -669,7 +670,7 @@ async fn edition_finished_impl<M: CanWrite>(
     }
 
     // Then we insert it for the event edition records.
-    insert_event_record(conn.mysql_conn, res.record_id, event_id, edition_id).await?;
+    insert_event_record(conn.conn.mysql_conn, res.record_id, event_id, edition_id).await?;
 
     Ok(res)
 }
@@ -714,7 +715,6 @@ pub async fn edition_finished_at(
     let res: pf::FinishedOutput =
         transaction::within(conn.mysql_conn, ReadWrite, async |mysql_conn, guard| {
             let params = ExpandedInsertRecordParams {
-                guard,
                 body: &body.rest,
                 at,
                 event: OptEvent::new(&event, &edition),
@@ -722,10 +722,13 @@ pub async fn edition_finished_at(
             };
 
             edition_finished_impl(
-                &mut DatabaseConnection {
-                    mysql_conn,
-                    redis_conn: conn.redis_conn,
-                },
+                &mut TxnDatabaseConnection::new(
+                    guard,
+                    DatabaseConnection {
+                        mysql_conn,
+                        redis_conn: conn.redis_conn,
+                    },
+                ),
                 params,
                 &login,
                 &map,

@@ -9,12 +9,12 @@ use deadpool_redis::redis::{self, AsyncCommands as _};
 use futures::{StreamExt as _, TryStreamExt, stream};
 use itertools::Itertools as _;
 use records_lib::{
-    Database, DatabaseConnection, MySqlPool, acquire, event, map,
+    Database, DatabaseConnection, MySqlPool, TxnDatabaseConnection, acquire, event, map,
     mappack::{self, AnyMappackId},
     models, must,
     redis_key::{cached_key, mappack_key},
     time::Time,
-    transaction::{self, CanWrite, ReadWrite, TxnGuard},
+    transaction::{self, CanWrite, ReadWrite},
 };
 
 use crate::clear;
@@ -236,13 +236,16 @@ async fn run_populate(
     }
 
     match transaction::within(conn.mysql_conn, ReadWrite, async |mysql_conn, guard| {
-        let conn = &mut DatabaseConnection {
-            mysql_conn,
-            redis_conn: conn.redis_conn,
-        };
+        let mut conn = TxnDatabaseConnection::new(
+            guard,
+            DatabaseConnection {
+                mysql_conn,
+                redis_conn: conn.redis_conn,
+            },
+        );
 
         tracing::info!("Clearing old content");
-        clear::clear_content(conn, event, edition).await?;
+        clear::clear_content(&mut conn.conn, event, edition).await?;
 
         match populate_kind {
             PopulateKind::CsvFile {
@@ -254,14 +257,13 @@ async fn run_populate(
                     client,
                     (event, edition),
                     db,
-                    guard,
                     &csv_file,
                     transitive_save,
                 )
                 .await
             }
             PopulateKind::MxId { mx_id } => {
-                populate_from_mx_id(conn, client, event, edition, guard, mx_id).await
+                populate_from_mx_id(&mut conn, client, event, edition, mx_id).await
             }
         }
     })
@@ -372,11 +374,10 @@ fn check_medal_times_consistency(
 }
 
 async fn populate_from_csv<M: CanWrite>(
-    conn: &mut DatabaseConnection<'_>,
+    TxnDatabaseConnection { conn, .. }: TxnDatabaseConnection<'_, M>,
     client: &reqwest::Client,
     (event, edition): (&models::Event, &models::EventEdition),
     db: Database,
-    _guard: TxnGuard<'_, M>,
     csv_file: &Path,
     default_transitive_save: bool,
 ) -> anyhow::Result<()> {
@@ -512,11 +513,10 @@ async fn populate_from_csv<M: CanWrite>(
 }
 
 async fn populate_from_mx_id<M: CanWrite>(
-    conn: &mut DatabaseConnection<'_>,
+    conn: &mut TxnDatabaseConnection<'_, M>,
     client: &reqwest::Client,
     event: &models::Event,
     edition: &models::EventEdition,
-    _guard: TxnGuard<'_, M>,
     mx_id: Option<i64>,
 ) -> anyhow::Result<()> {
     let mx_id = match (mx_id, edition.mx_id) {
@@ -535,8 +535,8 @@ async fn populate_from_mx_id<M: CanWrite>(
     tracing::info!("Found {} map(s) in MX mappack with ID {mx_id}", maps.len());
 
     for map in maps {
-        let player = must::have_player(conn.mysql_conn, &map.AuthorLogin).await?;
-        let map_id = match map::get_map_from_uid(conn.mysql_conn, &map.TrackUID).await? {
+        let player = must::have_player(conn.conn.mysql_conn, &map.AuthorLogin).await?;
+        let map_id = match map::get_map_from_uid(conn.conn.mysql_conn, &map.TrackUID).await? {
             Some(map) => map.id,
             None => {
                 sqlx::query_scalar(
@@ -545,7 +545,7 @@ async fn populate_from_mx_id<M: CanWrite>(
                 .bind(&map.TrackUID)
                 .bind(player.id)
                 .bind(&map.GbxMapName)
-                .fetch_one(&mut **conn.mysql_conn)
+                .fetch_one(&mut **conn.conn.mysql_conn)
                 .await?
             }
         };
@@ -558,7 +558,7 @@ async fn populate_from_mx_id<M: CanWrite>(
         .bind(edition.id)
         .bind(map_id)
         .bind(map.MapID)
-        .execute(&mut **conn.mysql_conn)
+        .execute(&mut **conn.conn.mysql_conn)
         .await?;
     }
 

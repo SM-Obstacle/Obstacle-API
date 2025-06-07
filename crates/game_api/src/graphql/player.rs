@@ -2,10 +2,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_graphql::{Enum, ID, connection, dataloader::Loader};
 use records_lib::{
-    Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
+    Database, DatabaseConnection, TxnDatabaseConnection, acquire,
     models::{self, Role},
     opt_event::OptEvent,
-    transaction::{self, ReadOnly, TxnGuard},
+    transaction::{self, ReadOnly},
 };
 use sqlx::{FromRow, MySqlPool, Row, mysql};
 
@@ -168,9 +168,13 @@ impl Player {
             ReadOnly,
             async |mysql_conn, guard| {
                 get_player_records(
-                    mysql_conn,
-                    conn.redis_conn,
-                    guard,
+                    &mut TxnDatabaseConnection::new(
+                        guard,
+                        DatabaseConnection {
+                            mysql_conn,
+                            redis_conn: conn.redis_conn,
+                        },
+                    ),
                     self.inner.id,
                     Default::default(),
                     date_sort_by,
@@ -183,18 +187,11 @@ impl Player {
 }
 
 async fn get_player_records<M>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
-    guard: TxnGuard<'_, M>,
+    conn: &mut TxnDatabaseConnection<'_, M>,
     player_id: u32,
     event: OptEvent<'_>,
     date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<Vec<RankedRecord>> {
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-
     let date_sort_by = SortState::sql_order_by(&date_sort_by);
 
     // Query the records with these ids
@@ -208,19 +205,18 @@ async fn get_player_records<M>(
 
     let records = sqlx::query_as::<_, models::Record>(&query)
         .bind(player_id)
-        .fetch_all(&mut **conn.mysql_conn)
+        .fetch_all(&mut **conn.conn.mysql_conn)
         .await?;
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
     for record in records {
         let rank = get_rank(
-            &mut conn,
+            conn,
             record.map_id,
             record.record_player_id,
             record.time,
             event,
-            guard,
         )
         .await?;
 
