@@ -451,7 +451,7 @@ pub struct EventEdition {
     pub ingame_params_id: Option<i32>,
     /// Whether the edition is transparent or not.
     ///
-    /// A transparent event edition means that there is no records explicitely attached to this edition.
+    /// A transparent event edition means that there is no records explicitly attached to this edition.
     /// Every record made on any map the edition contains is counted as being attached to this edition.
     pub is_transparent: bool,
 }
