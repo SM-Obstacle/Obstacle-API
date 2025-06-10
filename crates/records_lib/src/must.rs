@@ -11,19 +11,18 @@
 //! and returning the error to the client.
 
 use crate::{
-    context::{HasEditionId, HasEventHandle, HasEventId, HasMapUid, HasPlayerLogin},
     error::{RecordsError, RecordsResult},
     event, map, models, player,
 };
 
 /// Returns the event in the database bound to the provided event handle.
-pub async fn have_event_handle<C: HasEventHandle>(
+pub async fn have_event_handle(
     conn: &mut sqlx::MySqlConnection,
-    ctx: C,
+    event_handle: &str,
 ) -> RecordsResult<models::Event> {
-    event::get_event_by_handle(conn, ctx.get_event_handle())
+    event::get_event_by_handle(conn, event_handle)
         .await?
-        .ok_or_else(|| RecordsError::EventNotFound(ctx.get_event_handle().to_owned()))
+        .ok_or_else(|| RecordsError::EventNotFound(event_handle.to_owned()))
 }
 
 /// Returns the event and its edition in the database bound to the provided IDs.
@@ -49,22 +48,17 @@ pub async fn have_event_edition_from_ids(
 }
 
 /// Returns the event and its edition in the database bound to the provided handles and edition ID.
-pub async fn have_event_edition<C>(
+pub async fn have_event_edition(
     conn: &mut sqlx::MySqlConnection,
-    ctx: C,
-) -> RecordsResult<(models::Event, models::EventEdition)>
-where
-    C: HasEventHandle + HasEditionId,
-{
-    let event = have_event_handle(conn, &ctx).await?;
-    let ctx = ctx.with_event(&event);
+    event_handle: &str,
+    edition_id: u32,
+) -> RecordsResult<(models::Event, models::EventEdition)> {
+    let event = have_event_handle(conn, event_handle).await?;
 
-    let Some(event_edition) =
-        event::get_edition_by_id(conn, ctx.get_event_id(), ctx.get_edition_id()).await?
-    else {
+    let Some(event_edition) = event::get_edition_by_id(conn, event.id, edition_id).await? else {
         return Err(RecordsError::EventEditionNotFound(
-            ctx.get_event_handle().to_string(),
-            ctx.get_edition_id(),
+            event_handle.to_string(),
+            edition_id,
         ));
     };
 
@@ -72,23 +66,23 @@ where
 }
 
 /// Returns the player in the database bound to the provided login.
-pub async fn have_player<C: HasPlayerLogin>(
+pub async fn have_player(
     conn: &mut sqlx::MySqlConnection,
-    ctx: C,
+    login: &str,
 ) -> RecordsResult<models::Player> {
-    player::get_player_from_login(conn, ctx.get_player_login())
+    player::get_player_from_login(conn, login)
         .await?
-        .ok_or_else(|| RecordsError::PlayerNotFound(ctx.get_player_login().to_string()))
+        .ok_or_else(|| RecordsError::PlayerNotFound(login.to_string()))
 }
 
 /// Returns the map in the database bound to the provided map UID.
-pub async fn have_map<C: HasMapUid>(
+pub async fn have_map(
     conn: &mut sqlx::MySqlConnection,
-    ctx: C,
+    map_uid: &str,
 ) -> RecordsResult<models::Map> {
-    map::get_map_from_uid(conn, ctx.get_map_uid())
+    map::get_map_from_uid(conn, map_uid)
         .await?
-        .ok_or_else(|| RecordsError::MapNotFound(ctx.get_map_uid().to_owned()))
+        .ok_or_else(|| RecordsError::MapNotFound(map_uid.to_owned()))
 }
 
 /// Returns the event and its edition bound to their IDs and that contain a specific map.
@@ -107,22 +101,20 @@ pub async fn have_map<C: HasMapUid>(
 /// For example, for the Benchmark, if the given map UID is `X`, the returned map will be the one
 /// with the UID `X_benchmark`. If the given map UID is already `X_benchmark`, it will
 /// simply be the corresponding map.
-pub async fn have_event_edition_with_map<C>(
+pub async fn have_event_edition_with_map(
     conn: &mut sqlx::MySqlConnection,
-    ctx: C,
-) -> RecordsResult<(models::Event, models::EventEdition, event::EventMap)>
-where
-    C: HasEventHandle + HasEditionId + HasMapUid,
-{
-    let (event, event_edition) = have_event_edition(conn, &ctx).await?;
-    let ctx = ctx.with_event_edition(&event, &event_edition);
+    map_uid: &str,
+    event_handle: &str,
+    edition_id: u32,
+) -> RecordsResult<(models::Event, models::EventEdition, event::EventMap)> {
+    let (event, event_edition) = have_event_edition(conn, event_handle, edition_id).await?;
 
-    let map = event::get_map_in_edition(conn, &ctx)
+    let map = event::get_map_in_edition(conn, map_uid, event.id, event_edition.id)
         .await?
         .ok_or_else(|| {
             RecordsError::MapNotInEventEdition(
-                ctx.get_map_uid().to_string(),
-                ctx.get_event_handle().to_string(),
+                map_uid.to_string(),
+                event_handle.to_string(),
                 event_edition.id,
             )
         })?;

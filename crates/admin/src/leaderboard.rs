@@ -1,10 +1,4 @@
-use records_lib::{
-    acquire,
-    context::{Context, Ctx},
-    leaderboard, map, must,
-    time::Time,
-    Database, DatabaseConnection,
-};
+use records_lib::{Database, DatabaseConnection, acquire, leaderboard, map, must, time::Time};
 
 #[derive(clap::Subcommand)]
 pub enum LbCommand {
@@ -43,11 +37,10 @@ async fn mariadb_lb(
     offset: Option<i64>,
     limit: Option<i64>,
 ) -> anyhow::Result<()> {
-    let leaderboard =
-        leaderboard::leaderboard(db, Context::default().with_map_id(map_id), offset, limit)
-            .await?
-            .into_iter()
-            .enumerate();
+    let leaderboard = leaderboard::leaderboard(db, Default::default(), map_id, offset, limit)
+        .await?
+        .into_iter()
+        .enumerate();
 
     let mut table =
         prettytable::Table::init(vec![prettytable::row!["#", "Rank", "Player", "Time"]]);
@@ -70,9 +63,7 @@ async fn mariadb_lb(
 async fn full(db: &mut DatabaseConnection<'_>, cmd: FullCmd) -> anyhow::Result<()> {
     let map = match cmd.map {
         Map::MapId { map_id } => map::get_map_from_id(db.mysql_conn, map_id).await?,
-        Map::MapUid { map_uid } => {
-            must::have_map(db.mysql_conn, Context::default().with_map_uid(&map_uid)).await?
-        }
+        Map::MapUid { map_uid } => must::have_map(db.mysql_conn, &map_uid).await?,
     };
     mariadb_lb(db, map.id, cmd.offset, cmd.limit).await
 }
