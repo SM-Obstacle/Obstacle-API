@@ -71,10 +71,18 @@ impl SqlFragmentBuilder<'_, '_> {
         qb: &'a mut sqlx::QueryBuilder<'args, DB>,
         label: &str,
     ) -> &'a mut sqlx::QueryBuilder<'args, DB> {
-        match self.event.event {
-            Some(_) => qb.push("global_event_records "),
-            None => qb.push("global_records "),
-        }
+        qb.push(
+            if self
+                .event
+                .event
+                .filter(|(_, ed)| !ed.is_transparent)
+                .is_some()
+            {
+                "global_event_records "
+            } else {
+                "global_records "
+            },
+        )
         .push(label)
     }
 
