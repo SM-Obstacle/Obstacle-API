@@ -1,22 +1,20 @@
 use core::fmt;
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Context as _;
 use deadpool_redis::redis::{self, AsyncCommands as _};
 use futures::{StreamExt as _, TryStreamExt, stream};
 use itertools::Itertools as _;
 use records_lib::{
-    Database, DatabaseConnection, MySqlPool, acquire,
-    context::{
-        Context, Ctx, HasDbPool, HasEdition, HasEditionId, HasEvent, HasEventId, HasMapUid,
-        HasPersistentMode, ReadWrite, Transactional,
-    },
-    event, map,
+    Database, DatabaseConnection, MySqlPool, TxnDatabaseConnection, acquire, event, map,
     mappack::{self, AnyMappackId},
     models, must,
     redis_key::{cached_key, mappack_key},
     time::Time,
-    transaction,
+    transaction::{self, CanWrite, ReadWrite},
 };
 
 use crate::clear;
@@ -106,17 +104,10 @@ async fn insert_mx_maps(
 
     let mut inserted_count = 0;
 
-    let ctx = Context::default();
-
     for mx_map in mx_maps {
-        let ctx = ctx
-            .by_ref()
-            .with_player_login(&mx_map.author_login)
-            .with_map_uid(&mx_map.map_uid);
-
-        let author = must::have_player(&mut mysql_conn, &ctx).await?;
+        let author = must::have_player(&mut mysql_conn, &mx_map.author_login).await?;
         // Skip if we already know this map
-        if let Some(map) = map::get_map_from_uid(&mut mysql_conn, ctx.get_map_uid()).await? {
+        if let Some(map) = map::get_map_from_uid(&mut mysql_conn, &mx_map.map_uid).await? {
             out.push((mx_map.mx_id, map));
             continue;
         }
@@ -223,16 +214,15 @@ async fn populate_mx_maps(
     Ok(mx_ids.into_iter().flatten().collect())
 }
 
-async fn run_populate<C>(
+async fn run_populate(
     conn: &mut DatabaseConnection<'_>,
-    ctx: C,
+    db: Database,
+    event: &models::Event,
+    edition: &models::EventEdition,
     client: &reqwest::Client,
     populate_kind: PopulateKind,
-) -> anyhow::Result<()>
-where
-    C: HasEvent + HasEdition + HasPersistentMode + HasDbPool,
-{
-    let event_key = mappack_key(AnyMappackId::Event(ctx.get_event(), ctx.get_edition()));
+) -> anyhow::Result<()> {
+    let event_key = mappack_key(AnyMappackId::Event(event, edition));
     let saved_mappack_key = cached_key(records_lib::gen_random_str(10));
 
     let key_exists: bool = conn.redis_conn.exists(&event_key).await?;
@@ -245,21 +235,36 @@ where
             .await?;
     }
 
-    match transaction::within(conn.mysql_conn, &ctx, ReadWrite, async |mysql_conn, ctx| {
-        let conn = &mut DatabaseConnection {
-            mysql_conn,
-            redis_conn: conn.redis_conn,
-        };
+    match transaction::within(conn.mysql_conn, ReadWrite, async |mysql_conn, guard| {
+        let mut conn = TxnDatabaseConnection::new(
+            guard,
+            DatabaseConnection {
+                mysql_conn,
+                redis_conn: conn.redis_conn,
+            },
+        );
 
         tracing::info!("Clearing old content");
-        clear::clear_content(conn, ctx.get_event(), ctx.get_edition()).await?;
+        clear::clear_content(&mut conn.conn, event, edition).await?;
 
         match populate_kind {
             PopulateKind::CsvFile {
                 csv_file,
                 transitive_save,
-            } => populate_from_csv(conn, client, ctx, csv_file, transitive_save).await,
-            PopulateKind::MxId { mx_id } => populate_from_mx_id(conn, client, ctx, mx_id).await,
+            } => {
+                populate_from_csv(
+                    conn,
+                    client,
+                    (event, edition),
+                    db,
+                    &csv_file,
+                    transitive_save,
+                )
+                .await
+            }
+            PopulateKind::MxId { mx_id } => {
+                populate_from_mx_id(&mut conn, client, event, edition, mx_id).await
+            }
         }
     })
     .await
@@ -296,20 +301,17 @@ pub async fn populate(
     }: PopulateCommand,
 ) -> anyhow::Result<()> {
     let mut conn = acquire!(db?);
-    let ctx = Context::default()
-        .with_event_handle(&event_handle)
-        .with_edition_id(event_edition);
 
-    let (event, edition) = must::have_event_edition(conn.mysql_conn, &ctx).await?;
+    let (event, edition) =
+        must::have_event_edition(conn.mysql_conn, &event_handle, event_edition).await?;
 
-    let ctx = ctx.with_event(&event).with_edition(&edition).with_pool(db);
-
-    run_populate(&mut conn, &ctx, &client, kind).await?;
+    run_populate(&mut conn, db, &event, &edition, &client, kind).await?;
 
     tracing::info!("Filling mappack in the Redis database...");
     mappack::update_mappack(
-        Context::default().with_mappack(AnyMappackId::Event(ctx.get_event(), ctx.get_edition())),
         &mut conn,
+        AnyMappackId::Event(&event, &edition),
+        Default::default(),
     )
     .await?;
 
@@ -371,31 +373,25 @@ fn check_medal_times_consistency(
     check_inconsistent_medal_times(line, gold_span, author_span);
 }
 
-async fn populate_from_csv<C>(
-    conn: &mut DatabaseConnection<'_>,
+async fn populate_from_csv<M: CanWrite>(
+    TxnDatabaseConnection { conn, .. }: TxnDatabaseConnection<'_, M>,
     client: &reqwest::Client,
-    ctx: C,
-    csv_file: PathBuf,
+    (event, edition): (&models::Event, &models::EventEdition),
+    db: Database,
+    csv_file: &Path,
     default_transitive_save: bool,
-) -> anyhow::Result<()>
-where
-    C: HasEvent + HasEdition + HasDbPool + Transactional<Mode = ReadWrite>,
-{
+) -> anyhow::Result<()> {
     let mut reader = csv::ReaderBuilder::new()
         .comment(Some(b'#'))
-        .from_path(&csv_file)
+        .from_path(csv_file)
         .with_context(|| format!("Couldn't read CSV file `{}`", csv_file.display()))?;
     let mut rows_iter = reader.deserialize::<Row>();
     let mut rows = Vec::with_capacity(rows_iter.size_hint().0);
 
     tracing::info!("Querying event edition categories...");
 
-    let categories = event::get_categories_by_edition_id(
-        conn.mysql_conn,
-        ctx.get_event_id(),
-        ctx.get_edition_id(),
-    )
-    .await?;
+    let categories =
+        event::get_categories_by_edition_id(conn.mysql_conn, event.id, edition.id).await?;
 
     if categories.is_empty() {
         tracing::info!("No category found for this event edition");
@@ -424,14 +420,11 @@ where
 
     tracing::info!("Inserting new content...");
 
-    let mx_maps = populate_mx_maps(client, ctx.get_mysql_pool(), &rows).await?;
+    let mx_maps = populate_mx_maps(client, db.mysql_pool.clone(), &rows).await?;
 
     for (row, i) in rows {
         let (mx_id, map) = match row.get_id().with_context(|| format!("Parsing row {i}"))? {
-            Id::MapUid { map_uid } => (
-                None,
-                must::have_map(conn.mysql_conn, ctx.by_ref().with_map_uid(map_uid)).await?,
-            ),
+            Id::MapUid { map_uid } => (None, must::have_map(conn.mysql_conn, map_uid).await?),
             Id::MxId { mx_id } => (
                 Some(mx_id),
                 mx_maps
@@ -444,12 +437,9 @@ where
 
         let (original_mx_id, original_map) = match row.get_original_id() {
             Some(id) => match id {
-                Id::MapUid { map_uid } => (
-                    None,
-                    Some(
-                        must::have_map(conn.mysql_conn, ctx.by_ref().with_map_uid(map_uid)).await?,
-                    ),
-                ),
+                Id::MapUid { map_uid } => {
+                    (None, Some(must::have_map(conn.mysql_conn, map_uid).await?))
+                }
                 Id::MxId { mx_id } => (
                     Some(mx_id),
                     Some(
@@ -494,8 +484,8 @@ where
                 author_time
             ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(ctx.get_event_id())
-        .bind(ctx.get_edition_id())
+        .bind(event.id)
+        .bind(edition.id)
         .bind(map.id)
         .bind(opt_category_id)
         .bind(mx_id)
@@ -513,7 +503,7 @@ where
         let _: () = conn
             .redis_conn
             .sadd(
-                mappack_key(AnyMappackId::Event(ctx.get_event(), ctx.get_edition())),
+                mappack_key(AnyMappackId::Event(event, edition)),
                 map.game_id,
             )
             .await?;
@@ -522,16 +512,14 @@ where
     Ok(())
 }
 
-async fn populate_from_mx_id<C>(
-    conn: &mut DatabaseConnection<'_>,
+async fn populate_from_mx_id<M: CanWrite>(
+    conn: &mut TxnDatabaseConnection<'_, M>,
     client: &reqwest::Client,
-    ctx: C,
+    event: &models::Event,
+    edition: &models::EventEdition,
     mx_id: Option<i64>,
-) -> anyhow::Result<()>
-where
-    C: HasEvent + HasEdition + Transactional<Mode = ReadWrite>,
-{
-    let mx_id = match (mx_id, ctx.get_edition().mx_id) {
+) -> anyhow::Result<()> {
+    let mx_id = match (mx_id, edition.mx_id) {
         (Some(provided_id), Some(original_id)) if provided_id != original_id => {
             tracing::warn!(
                 "Provided MX id {provided_id} is different from the event edition original MX id {original_id}"
@@ -542,20 +530,13 @@ where
         (None, None) => anyhow::bail!("No MX id provided"),
     };
 
-    let maps =
-        map::fetch_mx_mappack_maps(client, mx_id as _, ctx.get_edition().mx_secret.as_deref())
-            .await?;
+    let maps = map::fetch_mx_mappack_maps(client, mx_id as _, edition.mx_secret.as_deref()).await?;
 
     tracing::info!("Found {} map(s) in MX mappack with ID {mx_id}", maps.len());
 
     for map in maps {
-        let ctx = ctx
-            .by_ref()
-            .with_player_login(&map.AuthorLogin)
-            .with_map_uid(&map.TrackUID);
-
-        let player = must::have_player(conn.mysql_conn, &ctx).await?;
-        let map_id = match map::get_map_from_uid(conn.mysql_conn, ctx.get_map_uid()).await? {
+        let player = must::have_player(conn.conn.mysql_conn, &map.AuthorLogin).await?;
+        let map_id = match map::get_map_from_uid(conn.conn.mysql_conn, &map.TrackUID).await? {
             Some(map) => map.id,
             None => {
                 sqlx::query_scalar(
@@ -564,7 +545,7 @@ where
                 .bind(&map.TrackUID)
                 .bind(player.id)
                 .bind(&map.GbxMapName)
-                .fetch_one(&mut **conn.mysql_conn)
+                .fetch_one(&mut **conn.conn.mysql_conn)
                 .await?
             }
         };
@@ -573,11 +554,11 @@ where
             "REPLACE INTO event_edition_maps (event_id, edition_id, map_id, mx_id, `order`, original_map_id) \
                     VALUES (?, ?, ?, ?, 0, NULL)"
         )
-        .bind(ctx.get_event_id())
-        .bind(ctx.get_edition_id())
+        .bind(event.id)
+        .bind(edition.id)
         .bind(map_id)
         .bind(map.MapID)
-        .execute(&mut **conn.mysql_conn)
+        .execute(&mut **conn.conn.mysql_conn)
         .await?;
     }
 

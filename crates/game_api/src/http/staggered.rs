@@ -64,7 +64,17 @@ async fn staggered_edition_finished(
     db: Res<Database>,
     path: web::Path<(String, u32)>,
     body: StaggeredBody<pf::HasFinishedBody>,
+    mode_version: crate::ModeVersion,
 ) -> RecordsResponse<impl Responder> {
     let time = body.get_time();
-    event::edition_finished_at(login, req_id, db, path, body.0.body, time).await
+    event::edition_finished_at(
+        login,
+        req_id,
+        db,
+        path,
+        body.0.body,
+        time,
+        Some(mode_version.0),
+    )
+    .await
 }

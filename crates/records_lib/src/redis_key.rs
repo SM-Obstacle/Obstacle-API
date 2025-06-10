@@ -11,7 +11,7 @@ use core::fmt;
 
 use deadpool_redis::redis::{RedisWrite, ToRedisArgs};
 
-use crate::{event::OptEvent, mappack::AnyMappackId};
+use crate::{mappack::AnyMappackId, opt_event::OptEvent};
 
 const V3_KEY_PREFIX: &str = "v3";
 
@@ -201,8 +201,8 @@ impl fmt::Display for MapKey<'_> {
 /// The constructor of the `MapKey` Redis key.
 ///
 /// This is a generic version of the [`alone_map_key`] and [`event_map_key`] functions.
-pub fn map_key<'a>(map_id: u32, event: OptEvent<'a, 'a>) -> MapKey<'a> {
-    match event {
+pub fn map_key(map_id: u32, event: OptEvent<'_>) -> MapKey<'_> {
+    match event.event {
         Some((event, edition)) => MapKey::Evented(event_map_key(map_id, &event.handle, edition.id)),
         None => MapKey::Alone(alone_map_key(map_id)),
     }
