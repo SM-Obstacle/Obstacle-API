@@ -451,23 +451,20 @@ async fn edition(
                 let mut next_opponent_query =
                     sqlx::QueryBuilder::new("select p.login, p.name, gr2.time from");
 
-                if edition.is_transparent {
-                    next_opponent_query.push(" global_records");
+                let records_table = if edition.is_transparent {
+                    " global_records"
                 } else {
-                    next_opponent_query.push(" global_event_records");
-                }
+                    " global_event_records"
+                };
 
-                next_opponent_query.push(
-                    " gr
+                next_opponent_query
+                    .push(records_table)
+                    .push(
+                        " gr
                     inner join players player_from on player_from.id = gr.record_player_id
                     inner join",
-                );
-
-                if edition.is_transparent {
-                    next_opponent_query.push(" global_records");
-                } else {
-                    next_opponent_query.push(" global_event_records");
-                }
+                    )
+                    .push(records_table);
 
                 next_opponent_query.push(" gr2 on gr2.map_id = gr.map_id and gr2.time < gr.time");
 
