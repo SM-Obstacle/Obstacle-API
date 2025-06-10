@@ -719,7 +719,7 @@ pub async fn edition_finished_at(
     at: chrono::NaiveDateTime,
     mode_version: Option<records_lib::ModeVersion>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = acquire!(db.with_api_err().fit(req_id)?);
+    let mut conn = acquire!(db.with_api_err().fit(req_id)?);
 
     let (event_handle, edition_id) = path.into_inner();
 
@@ -740,6 +740,13 @@ pub async fn edition_finished_at(
     )
     .await
     .fit(req_id)?;
+
+    // The edition is transparent, so we save the record for the map directly.
+    if edition.is_transparent {
+        let res =
+            super::player::finished_at(&mut conn, req_id, mode_version, login, body, at).await?;
+        return Ok(crate::either::Either::Left(res));
+    }
 
     if edition.has_expired()
         && !(edition.start_date <= at && edition.expire_date().filter(|date| at > *date).is_none())
@@ -776,7 +783,7 @@ pub async fn edition_finished_at(
         .await
         .fit(req_id)?;
 
-    json(res.res)
+    json(res.res).map(crate::either::Either::Right)
 }
 
 pub async fn insert_event_record(

@@ -46,11 +46,11 @@ async fn staggered_finished(
     body: StaggeredBody<pf::HasFinishedBody>,
 ) -> RecordsResponse<impl Responder> {
     let time = body.get_time();
-    player::finished_at(
+    player::finished_at_with_pool(
+        db.0,
         req_id,
         mode_version.map(|x| x.0),
         login,
-        db,
         body.0.body,
         time,
     )
