@@ -4,6 +4,7 @@ use actix_session::Session;
 use actix_web::web::Data;
 use actix_web::{
     HttpResponse, Responder, Scope,
+    body::BoxBody,
     web::{self, Json, Query},
 };
 use futures::TryStreamExt;
@@ -300,16 +301,27 @@ async fn finished_impl<M: CanWrite>(
     Ok(res)
 }
 
-pub async fn finished_at(
+pub async fn finished_at_with_pool(
+    db: Database,
     req_id: RequestId,
     mode_version: Option<ModeVersion>,
     login: String,
-    db: Res<Database>,
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
-    let conn = acquire!(db.with_api_err().fit(req_id)?);
+    let mut conn = acquire!(db.with_api_err().fit(req_id)?);
+    let res = finished_at(&mut conn, req_id, mode_version, login, body, at).await?;
+    Ok(res)
+}
 
+pub async fn finished_at(
+    conn: &mut DatabaseConnection<'_>,
+    req_id: RequestId,
+    mode_version: Option<ModeVersion>,
+    login: String,
+    body: pf::HasFinishedBody,
+    at: chrono::NaiveDateTime,
+) -> RecordsResponse<impl Responder<Body = BoxBody> + use<>> {
     let map = must::have_map(conn.mysql_conn, &body.map_uid)
         .await
         .with_api_err()
@@ -353,11 +365,11 @@ async fn finished(
     db: Res<Database>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
-    finished_at(
+    finished_at_with_pool(
+        db.0,
         req_id,
         mode_version.map(|x| x.0),
         login,
-        db,
         body.0,
         chrono::Utc::now().naive_utc(),
     )

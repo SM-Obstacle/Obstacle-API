@@ -365,17 +365,40 @@ impl EventEditionPlayerCategorizedRank<'_> {
     ) -> async_graphql::Result<Vec<EventEditionPlayerRank>> {
         let db = ctx.data_unchecked::<MySqlPool>();
 
-        if self.category.id == 0 {
-            let res = sqlx::query(
-                "select m.game_id, r.time from global_event_records r
-                inner join maps m on m.id = r.map_id
-                inner join event_edition_maps eem on eem.map_id = m.id
-                where r.event_id = ? and r.edition_id = ? and r.record_player_id = ?
-                order by eem.`order`",
-            )
-            .bind(self.player.edition.inner.event_id)
-            .bind(self.player.edition.inner.id)
-            .bind(self.player.player.id)
+        let mut query = sqlx::QueryBuilder::new("select m.game_id, r.time from");
+
+        if self.player.edition.inner.is_transparent {
+            query.push(" global_records");
+        } else {
+            query.push(" global_event_records");
+        }
+
+        query.push(
+            " r
+            inner join maps m on m.id = r.map_id
+            inner join event_edition_maps eem on eem.map_id = m.id",
+        );
+
+        if self.category.id != 0 {
+            query.push(" inner join event_category ec on eem.category_id = ec.id");
+        }
+
+        query
+            .push(" where eem.event_id = ")
+            .push_bind(self.player.edition.inner.event_id)
+            .push(" and eem.edition_id = ")
+            .push_bind(self.player.edition.inner.id)
+            .push(" and r.record_player_id = ")
+            .push_bind(self.player.player.id);
+
+        if self.category.id != 0 {
+            query.push(" and ec.id = ").push_bind(self.category.id);
+        }
+
+        query.push(" order by eem.`order`");
+
+        let res = query
+            .build()
             .map(|row: sqlx::mysql::MySqlRow| {
                 let game_id = row.get("game_id");
                 let time = row.get("time");
@@ -387,34 +410,6 @@ impl EventEditionPlayerCategorizedRank<'_> {
             })
             .fetch_all(db)
             .await?;
-
-            return Ok(res);
-        }
-
-        let res = sqlx::query(
-            "select m.game_id as game_id, r.time as time
-            from global_event_records r
-            inner join event_edition_maps eem on eem.map_id = r.map_id
-            inner join maps m on m.id = eem.map_id
-            inner join event_category ec on eem.category_id = ec.id
-            where eem.event_id = ? and eem.edition_id = ? and r.record_player_id = ? and ec.id = ?
-            order by eem.`order`",
-        )
-        .bind(self.player.edition.inner.event_id)
-        .bind(self.player.edition.inner.id)
-        .bind(self.player.player.id)
-        .bind(self.category.id)
-        .map(|row: mysql::MySqlRow| {
-            let game_id = row.get("game_id");
-            let time = row.get("time");
-            EventEditionPlayerRank {
-                map_game_id: game_id,
-                record_time: time,
-                edition_player: self.player,
-            }
-        })
-        .fetch_all(db)
-        .await?;
 
         Ok(res)
     }

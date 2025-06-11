@@ -297,9 +297,9 @@ pub async fn get_rank<M>(
     lock_within(map_id, || async move {
         let key = map_key(map_id, event);
 
-        // We update the Redis leaderboard if it doesn't have the requested `time`.
+        // We update the Redis leaderboard if it doesn't have the requested `time`, and keep
+        // track of the previous time if it's lower than ours.
         let score: Option<i32> = conn.redis_conn.zscore(&key, player_id).await?;
-        // We keep track of the previous Redis time if it's lower than ours.
         let newest_time = match score {
             Some(t) if t == time => None,
             other => {

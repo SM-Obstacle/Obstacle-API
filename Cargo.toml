@@ -16,7 +16,6 @@ chrono = { version = "0.4.40", features = ["serde"] }
 deadpool = { version = "0.12.2", features = ["managed", "rt_tokio_1"] }
 deadpool-redis = { version = "0.20.0", features = ["rt_tokio_1"] }
 serde = "1.0.219"
-serde_json = "1.0.140"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 actix-web = "4.10.2"

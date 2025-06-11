@@ -68,11 +68,10 @@ async fn get_map_records<M>(
         .push(" ");
 
     if let Some(ref s) = date_sort_by {
-        query.push("order by r.record_date ");
-        query.push(match s {
-            SortState::Reverse => "asc",
-            SortState::Sort => "desc",
-        });
+        query.push(" order by r.record_date");
+        if let SortState::Sort = s {
+            query.push(" desc");
+        }
     } else {
         let mut sep = builder
             .push_event_filter(&mut query, "r")

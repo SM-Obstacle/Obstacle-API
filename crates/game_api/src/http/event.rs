@@ -448,31 +448,63 @@ async fn edition(
                 .with_api_err()
                 .fit(req_id)?;
 
-                let next_opponent = sqlx::query_as(
-                    "select p.login, p.name, gr2.time from global_event_records gr
-                    inner join players player_from
-                    on player_from.id = gr.record_player_id
-                    inner join global_event_records gr2
-                    on gr2.map_id = gr.map_id
-                        and gr2.event_id = gr.event_id
-                        and gr2.edition_id = gr.edition_id
-                        and gr2.time < gr.time
-                    inner join players p on p.id = gr2.record_player_id
-                    where player_from.login = ?
-                        and gr.map_id = ?
-                        and gr.event_id = ?
-                        and gr.edition_id = ?
-                    order by gr2.time desc
-                    limit 1",
-                )
-                .bind(login)
-                .bind(map.id)
-                .bind(event.id)
-                .bind(edition_id)
-                .fetch_optional(&db.mysql_pool)
-                .await
-                .with_api_err()
-                .fit(req_id)?;
+                let mut next_opponent_query =
+                    sqlx::QueryBuilder::new("select p.login, p.name, gr2.time from");
+
+                let records_table = if edition.is_transparent {
+                    " global_records"
+                } else {
+                    " global_event_records"
+                };
+
+                next_opponent_query
+                    .push(records_table)
+                    .push(
+                        " gr
+                    inner join players player_from on player_from.id = gr.record_player_id
+                    inner join",
+                    )
+                    .push(records_table);
+
+                next_opponent_query.push(" gr2 on gr2.map_id = gr.map_id and gr2.time < gr.time");
+
+                if edition.is_transparent {
+                    next_opponent_query
+                        .push(" inner join event_edition_maps eem on eem.map_id = gr.map_id");
+                } else {
+                    next_opponent_query
+                        .push(" and gr2.event_id = gr.event_id and gr2.edition_id = gr.edition_id");
+                }
+
+                next_opponent_query
+                    .push(
+                        " inner join players p on p.id = gr2.record_player_id
+                        and player_from.login = ",
+                    )
+                    .push_bind(login)
+                    .push(" and gr.map_id = ")
+                    .push_bind(map.id);
+
+                if edition.is_transparent {
+                    next_opponent_query
+                        .push(" and eem.event_id = ")
+                        .push_bind(event.id)
+                        .push(" and eem.edition_id = ")
+                        .push_bind(edition.id);
+                } else {
+                    next_opponent_query
+                        .push(" and gr.event_id = ")
+                        .push_bind(event.id)
+                        .push(" and gr.edition_id = ")
+                        .push_bind(edition.id);
+                }
+
+                let next_opponent = next_opponent_query
+                    .build_query_as()
+                    .fetch_optional(&db.mysql_pool)
+                    .await
+                    .with_api_err()
+                    .fit(req_id)?;
 
                 AuthorWithPlayerTime {
                     main_author,
@@ -684,7 +716,7 @@ pub async fn edition_finished_at(
     at: chrono::NaiveDateTime,
     mode_version: Option<records_lib::ModeVersion>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = acquire!(db.with_api_err().fit(req_id)?);
+    let mut conn = acquire!(db.with_api_err().fit(req_id)?);
 
     let (event_handle, edition_id) = path.into_inner();
 
@@ -705,6 +737,13 @@ pub async fn edition_finished_at(
     )
     .await
     .fit(req_id)?;
+
+    // The edition is transparent, so we save the record for the map directly.
+    if edition.is_transparent {
+        let res =
+            super::player::finished_at(&mut conn, req_id, mode_version, login, body, at).await?;
+        return Ok(utils::Either::Left(res));
+    }
 
     if edition.has_expired()
         && !(edition.start_date <= at && edition.expire_date().filter(|date| at > *date).is_none())
@@ -741,7 +780,7 @@ pub async fn edition_finished_at(
         .await
         .fit(req_id)?;
 
-    json(res.res)
+    json(res.res).map(utils::Either::Right)
 }
 
 pub async fn insert_event_record(
