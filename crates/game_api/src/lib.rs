@@ -9,7 +9,6 @@ mod request_filter;
 
 mod auth;
 mod discord_webhook;
-mod either;
 mod env;
 mod error;
 mod graphql;

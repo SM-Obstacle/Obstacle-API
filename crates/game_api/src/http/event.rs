@@ -742,7 +742,7 @@ pub async fn edition_finished_at(
     if edition.is_transparent {
         let res =
             super::player::finished_at(&mut conn, req_id, mode_version, login, body, at).await?;
-        return Ok(crate::either::Either::Left(res));
+        return Ok(utils::Either::Left(res));
     }
 
     if edition.has_expired()
@@ -780,7 +780,7 @@ pub async fn edition_finished_at(
         .await
         .fit(req_id)?;
 
-    json(res.res).map(crate::either::Either::Right)
+    json(res.res).map(utils::Either::Right)
 }
 
 pub async fn insert_event_record(

@@ -4,7 +4,9 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use actix_web::{FromRequest, HttpRequest, HttpResponse, dev::Payload};
+use actix_web::{
+    FromRequest, HttpRequest, HttpResponse, Responder, body::MessageBody, dev::Payload,
+};
 use records_lib::{Database, models};
 use serde::Serialize;
 
@@ -99,5 +101,26 @@ impl<T: Clone + 'static> FromRequest for Res<T> {
             .unwrap_or_else(|| panic!("{} should be present", std::any::type_name::<T>()))
             .clone();
         ready(Ok(Self(client)))
+    }
+}
+
+pub enum Either<L, R> {
+    Left(L),
+    Right(R),
+}
+
+impl<L, R, B> Responder for Either<L, R>
+where
+    B: MessageBody + 'static,
+    L: Responder<Body = B>,
+    R: Responder<Body = B>,
+{
+    type Body = B;
+
+    fn respond_to(self, req: &actix_web::HttpRequest) -> actix_web::HttpResponse<Self::Body> {
+        match self {
+            Either::Left(l) => <L as Responder>::respond_to(l, req),
+            Either::Right(r) => <R as Responder>::respond_to(r, req),
+        }
     }
 }
