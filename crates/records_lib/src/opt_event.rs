@@ -26,7 +26,11 @@ impl<'a> OptEvent<'a> {
     /// in a more convenient way.
     pub fn new(event: &'a models::Event, edition: &'a models::EventEdition) -> Self {
         Self {
-            event: Some((event, edition)),
+            event: if edition.is_transparent {
+                None
+            } else {
+                Some((event, edition))
+            },
         }
     }
 }
@@ -71,18 +75,11 @@ impl SqlFragmentBuilder<'_, '_> {
         qb: &'a mut sqlx::QueryBuilder<'args, DB>,
         label: &str,
     ) -> &'a mut sqlx::QueryBuilder<'args, DB> {
-        qb.push(
-            if self
-                .event
-                .event
-                .filter(|(_, ed)| !ed.is_transparent)
-                .is_some()
-            {
-                "global_event_records "
-            } else {
-                "global_records "
-            },
-        )
+        qb.push(if self.event.event.is_some() {
+            "global_event_records "
+        } else {
+            "global_records "
+        })
         .push(label)
     }
 
