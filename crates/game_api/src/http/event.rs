@@ -432,21 +432,31 @@ async fn edition(
                     .with_api_err()
                     .fit(req_id)?;
 
-                let personal_best = sqlx::query_scalar(
+                let mut personal_best_query = sqlx::QueryBuilder::new(
                     "select min(time) from records r
-                    inner join players p on p.id = r.record_player_id
-                    inner join event_edition_records eer on eer.record_id = r.record_id
-                        and eer.event_id = ? and eer.edition_id = ?
-                    where p.login = ? and r.map_id = ?",
-                )
-                .bind(event.id)
-                .bind(edition_id)
-                .bind(login)
-                .bind(map.id)
-                .fetch_one(&db.mysql_pool)
-                .await
-                .with_api_err()
-                .fit(req_id)?;
+                    inner join players p on p.id = r.record_player_id",
+                );
+
+                if !edition.is_transparent {
+                    personal_best_query.push(
+                        " inner join event_edition_records eer on eer.record_id = r.record_id
+                        and eer.event_id = ",
+                    );
+                    personal_best_query.push_bind(event.id);
+                    personal_best_query.push(" and eer.edition_id = ");
+                    personal_best_query.push_bind(edition_id);
+                }
+
+                let personal_best = personal_best_query
+                    .push(" where p.login = ")
+                    .push_bind(login)
+                    .push(" and r.map_id = ")
+                    .push_bind(map.id)
+                    .build_query_scalar()
+                    .fetch_one(&db.mysql_pool)
+                    .await
+                    .with_api_err()
+                    .fit(req_id)?;
 
                 let mut next_opponent_query =
                     sqlx::QueryBuilder::new("select p.login, p.name, gr2.time from");
