@@ -220,7 +220,8 @@ impl Map {
                 // We want to redirect to the event map page if the edition saves any records
                 // on its maps, doesn't have any original map like campaign, or if the map
                 // isn't the original one.
-                redirect_to_event: edition.edition.save_non_event_record
+                redirect_to_event: !edition.edition.is_transparent
+                    && edition.edition.save_non_event_record
                     && (edition.edition.non_original_maps || self.inner.id == edition.map_id),
                 edition: EventEdition::from_inner(edition.edition, mysql_pool).await?,
             });
