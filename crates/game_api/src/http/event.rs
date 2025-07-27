@@ -131,7 +131,8 @@ struct Map {
 struct Category {
     handle: String,
     name: String,
-    banner_img_url: String,
+    banner_img_url: NullableText,
+    hex_color: NullableText,
     maps: Vec<Map>,
 }
 
@@ -567,7 +568,8 @@ async fn edition(
         categories.push(Category {
             handle: m.handle,
             name: m.name,
-            banner_img_url: m.banner_img_url.unwrap_or_default(),
+            banner_img_url: m.banner_img_url.into(),
+            hex_color: m.hex_color.into(),
             maps,
         });
     }
@@ -577,7 +579,8 @@ async fn edition(
         categories.push(Category {
             handle: cat.handle,
             name: cat.name,
-            banner_img_url: cat.banner_img_url.unwrap_or_default(),
+            banner_img_url: cat.banner_img_url.into(),
+            hex_color: cat.hex_color.into(),
             maps: Vec::new(),
         });
     }
