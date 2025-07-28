@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
     Database, DatabaseConnection, acquire, event,
@@ -7,9 +5,6 @@ use records_lib::{
     opt_event::OptEvent,
     redis_key::{mappack_key, mappacks_key},
 };
-
-const PROCESS_DURATION_SECS: u64 = 3600 * 24; // Every day
-pub const PROCESS_DURATION: Duration = Duration::from_secs(PROCESS_DURATION_SECS);
 
 #[tracing::instrument(skip(conn), fields(mappack = %mappack.mappack_id()))]
 async fn update_mappack(
