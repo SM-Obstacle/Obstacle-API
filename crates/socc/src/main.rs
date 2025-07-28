@@ -43,23 +43,14 @@ fn setup_tracing() -> anyhow::Result<()> {
         .map_err(|e| anyhow::format_err!("{e}"))
 }
 
-const DEFAULT_EVENT_SCORES_INTERVAL_SECONDS: u64 = 6 * 3600;
-
-mkenv::make_env! {Env includes [DbEnv as db_env, LibEnv as lib_env]:
-    event_scores_interval: {
-        id: EventScoresInterval(Duration),
-        kind: parse(from_secs),
-        var: "EVENT_SCORES_INTERVAL_SECONDS",
-        desc: "The interval of the update of the event scores, in seconds",
-        default: DEFAULT_EVENT_SCORES_INTERVAL_SECONDS,
-    }
-}
+mkenv::make_env! {Env includes [DbEnv as db_env, LibEnv as lib_env]:}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
     setup_tracing()?;
     let env = Env::try_get()?;
+    let event_scores_interval = env.lib_env.event_scores_interval;
     records_lib::init_env(env.lib_env);
 
     let mysql_pool = records_lib::get_mysql_pool(env.db_env.db_url.db_url)
@@ -75,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
 
     let res = tokio::spawn(handle(
         db.clone(),
-        env.event_scores_interval,
+        event_scores_interval,
         campaign_scores::update,
     ));
 

@@ -356,12 +356,14 @@ impl Mappack {
         let last_upd_time: Option<u64> = redis_conn
             .get(mappack_time_key(AnyMappackId::Id(&self.mappack_id)))
             .await?;
-        Ok(last_upd_time.map(|last| last + 24 * 3600).and_then(|last| {
-            SystemTime::UNIX_EPOCH
-                .elapsed()
-                .ok()
-                .and_then(|d| last.checked_sub(d.as_secs()))
-        }))
+        Ok(last_upd_time
+            .map(|last| last + records_lib::env().event_scores_interval.as_secs())
+            .and_then(|last| {
+                SystemTime::UNIX_EPOCH
+                    .elapsed()
+                    .ok()
+                    .and_then(|d| last.checked_sub(d.as_secs()))
+            }))
     }
 }
 

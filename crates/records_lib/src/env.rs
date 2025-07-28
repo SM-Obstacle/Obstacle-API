@@ -67,6 +67,8 @@ const DEFAULT_INGAME_LB_LINK_POS_Y: f64 = -29.5;
 const DEFAULT_INGAME_AUTHORS_POS_X: f64 = 181.;
 const DEFAULT_INGAME_AUTHORS_POS_Y: f64 = -29.5;
 
+const DEFAULT_EVENT_SCORES_INTERVAL_SECONDS: u64 = 6 * 3600;
+
 mkenv::make_env! {
 /// The environment used by this crate.
 pub LibEnv:
@@ -179,6 +181,15 @@ pub LibEnv:
             the Titlepack menu (double)",
         default: DEFAULT_INGAME_AUTHORS_POS_Y,
     },
+
+    /// The interval of a mappack scores update
+    event_scores_interval: {
+        id: EventScoresInterval(Duration),
+        kind: parse(from_secs),
+        var: "EVENT_SCORES_INTERVAL_SECONDS",
+        desc: "The interval of the update of the event scores, in seconds",
+        default: DEFAULT_EVENT_SCORES_INTERVAL_SECONDS,
+    }
 }
 
 static ENV: OnceCell<LibEnv> = OnceCell::new();
