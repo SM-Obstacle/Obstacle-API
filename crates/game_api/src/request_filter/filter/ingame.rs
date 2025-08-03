@@ -72,10 +72,10 @@ fn parse_agent(input: &[u8]) -> nom::IResult<&[u8], InGameAgent> {
 
 pub struct ParseError;
 
-impl super::FromBytes for InGameAgent {
+impl TryFrom<&[u8]> for InGameAgent {
     type Error = ParseError;
 
-    fn from_bytes(input: &[u8]) -> Result<Self, Self::Error> {
+    fn try_from(input: &[u8]) -> Result<Self, Self::Error> {
         parse_agent(input)
             .map_err(|_| ParseError)
             .map(|(_, out)| out)

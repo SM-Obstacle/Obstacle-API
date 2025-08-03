@@ -23,15 +23,8 @@ pub use ingame::InGameFilter;
 pub use website::WebsiteFilter;
 
 #[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
-pub trait FromBytes: Sized {
-    type Error;
-
-    fn from_bytes(b: &[u8]) -> Result<Self, Self::Error>;
-}
-
-#[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
 pub trait FilterAgent {
-    type AgentType: FromBytes + Clone;
+    type AgentType: for<'a> TryFrom<&'a [u8]> + Clone;
 
     fn is_valid(agent: &Self::AgentType) -> bool;
 }
@@ -154,7 +147,8 @@ where
                 .headers()
                 .get(header::USER_AGENT)
                 .and_then(|header| {
-                    <<F as FilterAgent>::AgentType as FromBytes>::from_bytes(header.as_bytes()).ok()
+                    <<F as FilterAgent>::AgentType as TryFrom<&[u8]>>::try_from(header.as_bytes())
+                        .ok()
                 })
                 .filter(<F as FilterAgent>::is_valid);
 
