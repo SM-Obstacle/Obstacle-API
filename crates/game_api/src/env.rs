@@ -1,7 +1,6 @@
 use mkenv::{Env as _, EnvSplitIncluded as _};
 use once_cell::sync::OnceCell;
 use records_lib::{DbEnv, LibEnv};
-use tracing::instrument::WithSubscriber;
 
 #[cfg(test)]
 const DEFAULT_SESSION_KEY: &str = "";
