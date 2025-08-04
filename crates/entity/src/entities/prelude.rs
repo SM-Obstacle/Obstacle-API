@@ -2,8 +2,6 @@
 
 pub use super::api_status::Entity as ApiStatus;
 pub use super::api_status_history::Entity as ApiStatusHistory;
-pub use super::article::Entity as Article;
-pub use super::article_authors::Entity as ArticleAuthors;
 pub use super::banishments::Entity as Banishments;
 pub use super::checkpoint_times::Entity as CheckpointTimes;
 pub use super::event::Entity as Event;
@@ -15,6 +13,7 @@ pub use super::event_edition_admins::Entity as EventEditionAdmins;
 pub use super::event_edition_categories::Entity as EventEditionCategories;
 pub use super::event_edition_maps::Entity as EventEditionMaps;
 pub use super::event_edition_records::Entity as EventEditionRecords;
+pub use super::in_game_event_edition_params::Entity as InGameEventEditionParams;
 pub use super::latestnews_image::Entity as LatestnewsImage;
 pub use super::maps::Entity as Maps;
 pub use super::player_rating::Entity as PlayerRating;
@@ -23,5 +22,4 @@ pub use super::players_ips::Entity as PlayersIps;
 pub use super::rating::Entity as Rating;
 pub use super::rating_kind::Entity as RatingKind;
 pub use super::records::Entity as Records;
-pub use super::resources_content::Entity as ResourcesContent;
 pub use super::role::Entity as Role;
