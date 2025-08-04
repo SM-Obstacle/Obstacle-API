@@ -1,6 +1,7 @@
 use mkenv::{Env as _, EnvSplitIncluded as _};
 use once_cell::sync::OnceCell;
 use records_lib::{DbEnv, LibEnv};
+use tracing::instrument::WithSubscriber;
 
 #[cfg(test)]
 const DEFAULT_SESSION_KEY: &str = "";
@@ -21,7 +22,15 @@ mkenv::make_env! {pub ApiEnvUsedOnce:
         var: "RECORDS_API_SESSION_KEY",
         desc: "The session key used by the API",
         default: DEFAULT_SESSION_KEY,
-    }
+    },
+
+    wh_invalid_req_url: {
+        id: WebhookInvalidReqUrl(String),
+        kind: normal,
+        var: "WEBHOOK_INVALID_REQ_URL",
+        desc: "The URL to the Discord webhook used to flag invalid requests",
+        default: DEFAULT_WH_INVALID_REQ_URL,
+    },
 }
 
 const DEFAULT_PORT: u16 = 3000;
@@ -110,14 +119,6 @@ mkenv::make_env! {pub ApiEnv includes [
         var: "WEBHOOK_AC_URL",
         desc: "The URL to the Discord webhook used to share in-game statistics",
         default: DEFAULT_WH_AC_URL,
-    },
-
-    wh_invalid_req_url: {
-        id: WebhookInvalidReqUrl(String),
-        kind: normal,
-        var: "WEBHOOK_INVALID_REQ_URL",
-        desc: "The URL to the Discord webhook used to flag invalid requests",
-        default: DEFAULT_WH_INVALID_REQ_URL,
     },
 
     gql_endpoint: {

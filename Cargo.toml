@@ -1,10 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/game_api",
-  "crates/records_lib",
-  "crates/socc",
-  "crates/admin",
+    "crates/game_api",
+    "crates/records_lib",
+    "crates/socc",
+    "crates/admin",
+    "crates/request_filter",
+    "crates/dsc_webhook",
 ]
 
 [workspace.dependencies]
@@ -33,5 +35,5 @@ itertools = "0.14.0"
 once_cell = "1.21.1"
 csv = "1.3.0"
 mkenv = "0.1.6"
-records-lib = { version = "1", path = "./crates/records_lib" }
 nom = "8.0.0"
+pin-project-lite = "0.2.16"

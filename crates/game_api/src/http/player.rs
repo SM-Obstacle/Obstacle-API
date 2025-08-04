@@ -37,12 +37,12 @@ use crate::{
 use crate::{
     FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
     auth::{self, ApiAvailable, AuthHeader, MPAuthGuard, privilege},
-    discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
     utils::{self, json},
 };
+use dsc_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 
 #[cfg(feature = "request_filter")]
-use crate::request_filter::{FlagFalseRequest, WebsiteFilter};
+use request_filter::{FlagFalseRequest, WebsiteFilter};
 
 use super::{
     pb,

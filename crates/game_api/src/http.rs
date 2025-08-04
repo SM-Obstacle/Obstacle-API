@@ -17,12 +17,12 @@ use self::event::event_scope;
 use self::map::map_scope;
 use self::player::player_scope;
 use self::staggered::staggered_scope;
-use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
-#[cfg(feature = "request_filter")]
-use crate::request_filter::{FlagFalseRequest, InGameFilter};
 use crate::utils::{self, ApiStatus, get_api_status, json};
 use crate::{FitRequestId as _, ModeVersion, RecordsResponse, RecordsResultExt, Res};
 use actix_web::Responder;
+use dsc_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
+#[cfg(feature = "request_filter")]
+use request_filter::{FlagFalseRequest, InGameFilter};
 
 #[cfg(auth)]
 pub mod admin;

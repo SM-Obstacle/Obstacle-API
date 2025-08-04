@@ -9,7 +9,7 @@ deadpool = { workspace = true }
 deadpool-redis = { workspace = true }
 dotenvy = { workspace = true }
 futures = { workspace = true }
-records-lib = { workspace = true, features = ["tracing"] }
+records-lib = { path = "../records_lib", features = ["tracing"] }
 sqlx = { workspace = true }
 tokio = { workspace = true, features = ["time", "macros", "rt-multi-thread"] }
 tracing = { workspace = true }

@@ -1,35 +1,27 @@
 use std::{convert::Infallible, marker::PhantomData};
 
-#[cfg(feature = "request_filter")]
 use actix_web::http::StatusCode;
-#[cfg(feature = "request_filter")]
 use actix_web::http::header;
 use actix_web::{
     FromRequest, HttpMessage,
     dev::{ConnectionInfo, RequestHead, Service, ServiceRequest, ServiceResponse, Transform},
 };
 use futures::future::{Ready, ready};
-#[cfg(feature = "request_filter")]
 use std::pin::Pin;
-#[cfg(feature = "request_filter")]
 use std::task::Poll;
 
 pub mod ingame;
 pub mod website;
 
-#[cfg_attr(not(feature = "request_filter"), allow(unused_imports))]
 pub use ingame::InGameFilter;
-#[cfg_attr(not(feature = "request_filter"), allow(unused_imports))]
 pub use website::WebsiteFilter;
 
-#[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
 pub trait FilterAgent {
     type AgentType: for<'a> TryFrom<&'a [u8]> + Clone;
 
     fn is_valid(agent: &Self::AgentType) -> bool;
 }
 
-#[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
 async fn flag_invalid_req(
     client: reqwest::Client,
     head: RequestHead,
@@ -75,7 +67,6 @@ where
     }
 }
 
-#[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
 struct RequestFlagged;
 
 pub struct FlagFalseRequestService<S, F> {
@@ -83,7 +74,6 @@ pub struct FlagFalseRequestService<S, F> {
     _marker: PhantomData<F>,
 }
 
-#[cfg(feature = "request_filter")]
 pin_project_lite::pin_project! {
     pub struct FlagFalseRequestServiceFut<Fut, B, E> {
         #[pin]
@@ -93,7 +83,6 @@ pin_project_lite::pin_project! {
     }
 }
 
-#[cfg(feature = "request_filter")]
 impl<Fut, B, E> Future for FlagFalseRequestServiceFut<Fut, B, E>
 where
     Fut: Future<Output = Result<ServiceResponse<B>, E>>,
@@ -133,51 +122,39 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
-    #[cfg(feature = "request_filter")]
     type Future = FlagFalseRequestServiceFut<S::Future, B, Self::Error>;
-    #[cfg(not(feature = "request_filter"))]
-    type Future = S::Future;
 
     actix_web::dev::forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        #[cfg(feature = "request_filter")]
-        {
-            let filtered_agent = req
-                .headers()
-                .get(header::USER_AGENT)
-                .and_then(|header| {
-                    <<F as FilterAgent>::AgentType as TryFrom<&[u8]>>::try_from(header.as_bytes())
-                        .ok()
-                })
-                .filter(<F as FilterAgent>::is_valid);
+        let filtered_agent = req
+            .headers()
+            .get(header::USER_AGENT)
+            .and_then(|header| {
+                <<F as FilterAgent>::AgentType as TryFrom<&[u8]>>::try_from(header.as_bytes()).ok()
+            })
+            .filter(<F as FilterAgent>::is_valid);
 
-            let invalid_req_inventory = if filtered_agent.is_some() {
-                None
-            } else {
-                Some((
-                    req.app_data::<reqwest::Client>().cloned().unwrap(),
-                    req.head().clone(),
-                    req.connection_info().clone(),
-                ))
-            };
+        let invalid_req_inventory = if filtered_agent.is_some() {
+            None
+        } else {
+            Some((
+                req.app_data::<reqwest::Client>().cloned().unwrap(),
+                req.head().clone(),
+                req.connection_info().clone(),
+            ))
+        };
 
-            req.extensions_mut().insert(CurrentUserAgent::<F> {
-                user_agent: filtered_agent,
-            });
+        req.extensions_mut().insert(CurrentUserAgent::<F> {
+            user_agent: filtered_agent,
+        });
 
-            let res = self.service.call(req);
+        let res = self.service.call(req);
 
-            FlagFalseRequestServiceFut {
-                fut: res,
-                invalid_req_inventory,
-                _marker: PhantomData,
-            }
-        }
-
-        #[cfg(not(feature = "request_filter"))]
-        {
-            self.service.call(req)
+        FlagFalseRequestServiceFut {
+            fut: res,
+            invalid_req_inventory,
+            _marker: PhantomData,
         }
     }
 }

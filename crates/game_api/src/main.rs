@@ -54,6 +54,9 @@ async fn not_found(req_id: RequestId) -> RecordsResponse<impl Responder> {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
     let env = game_api_lib::init_env()?;
+    #[cfg(feature = "request_filter")]
+    request_filter::init_wh_url(env.used_once.wh_invalid_req_url)
+        .unwrap_or_else(|_| panic!("Invalid request WH URL isn't supposed to be set twice"));
 
     let mysql_pool = get_mysql_pool(env.db_env.db_url.db_url)
         .await

@@ -33,13 +33,15 @@ anyhow = { workspace = true }
 dotenvy = { workspace = true }
 itertools = { workspace = true }
 once_cell = { workspace = true }
-records-lib = { workspace = true, features = ["tracing"] }
+records-lib = { path = "../records_lib", features = ["tracing"] }
 mkenv = { workspace = true }
 nom = { workspace = true }
 pin-project-lite = { version = "0.2.16", optional = true }
+request_filter = { path = "../request_filter", optional = true }
+dsc_webhook = { path = "../dsc_webhook" }
 
 [features]
 default = ["request_filter"]
 gql_schema = []
-request_filter = ["dep:pin-project-lite"]
+request_filter = ["dep:pin-project-lite", "dep:request_filter"]
 auth = []
