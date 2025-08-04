@@ -1,0 +1,14 @@
+[package]
+name = "request_filter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+reqwest = { workspace = true }
+actix-web = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+pin-project-lite = { workspace = true }
+tokio = { workspace = true }
+nom = { workspace = true }
+dsc_webhook = { path = "../dsc_webhook" }

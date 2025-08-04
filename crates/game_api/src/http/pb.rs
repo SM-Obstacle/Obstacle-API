@@ -1,7 +1,7 @@
 use crate::{RecordsResult, RecordsResultExt};
 use actix_web::web::Query;
 use futures::StreamExt;
-use records_lib::context::{HasMapUid, HasMySqlPool, HasPlayerLogin};
+use records_lib::{MySqlPool, opt_event::OptEvent};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
@@ -31,11 +31,13 @@ struct PbCpTimesResponseItem {
     time: i32,
 }
 
-pub async fn pb<C>(ctx: C) -> RecordsResult<PbResponse>
-where
-    C: HasPlayerLogin + HasMapUid + HasMySqlPool,
-{
-    let builder = ctx.sql_frag_builder();
+pub async fn pb(
+    db: MySqlPool,
+    player_login: &str,
+    map_uid: &str,
+    event: OptEvent<'_>,
+) -> RecordsResult<PbResponse> {
+    let builder = event.sql_frag_builder();
 
     let mut query = sqlx::QueryBuilder::new(
         "select r.respawn_count as rs_count, ct.cp_num as cp_num, ct.time as time
@@ -49,16 +51,15 @@ where
             inner join checkpoint_times ct on r.record_id = ct.record_id \
             where m.game_id = ",
         )
-        .push_bind(ctx.get_map_uid())
+        .push_bind(map_uid)
         .push(" and p.login = ")
-        .push_bind(ctx.get_player_login())
+        .push_bind(player_login)
         .push(" ");
     let query = builder
         .push_event_filter(&mut query, "r")
         .build_query_as::<PbResponseItem>();
 
-    let pool = ctx.get_mysql_pool();
-    let mut times = query.fetch(&pool);
+    let mut times = query.fetch(&db);
 
     let mut res = PbResponse {
         rs_count: 0,

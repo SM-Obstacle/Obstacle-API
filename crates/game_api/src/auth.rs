@@ -54,7 +54,6 @@ use chrono::{DateTime, Utc};
 #[cfg(auth)]
 use deadpool_redis::redis::AsyncCommands;
 use futures::Future;
-use records_lib::context::{Context, Ctx as _};
 use records_lib::models::ApiStatusKind;
 #[cfg(auth)]
 use records_lib::redis_key::{mp_token_key, web_token_key};
@@ -171,7 +170,7 @@ impl AuthState {
     /// # Arguments
     ///
     /// * `state`, the state string, that is the same as the one retrieved by the `/player/give_token`
-    ///    endpoint.
+    ///   endpoint.
     pub async fn connect_with_browser(
         &self,
         state: String,
@@ -300,11 +299,7 @@ pub async fn check_auth_for(
 ) -> RecordsResult<u32> {
     let conn = acquire!(db.with_api_err()?);
 
-    let player = records_lib::must::have_player(
-        conn.mysql_conn,
-        Context::default().with_player_login(login),
-    )
-    .await?;
+    let player = records_lib::must::have_player(conn.mysql_conn, login).await?;
 
     if let Some(ban) = player::check_banned(conn.mysql_conn, player.id).await? {
         return Err(RecordsErrorKind::BannedPlayer(ban));

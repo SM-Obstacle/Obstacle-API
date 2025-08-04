@@ -6,12 +6,11 @@ use async_graphql::extensions::ApolloTracing;
 use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
 use async_graphql::{Enum, ErrorExtensionValues, ID, Value, connection};
 use async_graphql_actix_web::GraphQLRequest;
-use records_lib::context::{Context, Ctx, ReadOnly, Transactional};
+use records_lib::opt_event::OptEvent;
 use records_lib::ranks::get_rank;
-use records_lib::{Database, must};
-use records_lib::{
-    DatabaseConnection, MySqlConnection, RedisConnection, acquire, models, transaction,
-};
+use records_lib::transaction::ReadOnly;
+use records_lib::{Database, TxnDatabaseConnection, must};
+use records_lib::{DatabaseConnection, acquire, models, transaction};
 use reqwest::Client;
 use sqlx::{FromRow, MySqlPool, Row, mysql, query_as};
 use std::vec::Vec;
@@ -62,97 +61,10 @@ enum Node {
     Player(Player),
 }
 
-#[repr(transparent)]
-struct Article {
-    inner: models::Article,
-}
-
-impl From<models::Article> for Article {
-    fn from(inner: models::Article) -> Self {
-        Self { inner }
-    }
-}
-
-#[async_graphql::Object]
-impl Article {
-    async fn date(&self) -> chrono::DateTime<chrono::Utc> {
-        self.inner.article_date
-    }
-
-    async fn authors(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<Player>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let players = sqlx::query_as(
-            "select p.* from players p
-            inner join article_authors aa on aa.author_id = p.id
-            where aa.article_id = ?",
-        )
-        .bind(self.inner.id)
-        .fetch_all(db)
-        .await?;
-        Ok(players)
-    }
-
-    async fn content(&self) -> async_graphql::Result<String> {
-        let content = tokio::fs::read_to_string(&self.inner.path).await?;
-        Ok(content)
-    }
-}
-
 struct QueryRoot;
 
 #[async_graphql::Object]
 impl QueryRoot {
-    async fn latest_news(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<Article>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let article = sqlx::query_as(
-            "select * from article
-            where hide is null or hide = 0
-            order by article_date desc
-            limit 1",
-        )
-        .fetch_optional(db)
-        .await?;
-        Ok(article.map(From::<models::Article>::from))
-    }
-
-    async fn article(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-        slug: String,
-    ) -> async_graphql::Result<Option<Article>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let article = sqlx::query_as(
-            "select * from article
-            where (hide is null or hide = 0) and slug = ?",
-        )
-        .bind(slug)
-        .fetch_optional(db)
-        .await?;
-        Ok(article.map(From::<models::Article>::from))
-    }
-
-    async fn resources_content(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<models::ResourcesContent> {
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let txt = sqlx::query_as(
-            "SELECT content, created_at AS last_modified
-            FROM resources_content
-            ORDER BY created_at DESC
-            LIMIT 1",
-        )
-        .fetch_one(mysql_pool)
-        .await?;
-        Ok(txt)
-    }
-
     async fn event_edition_from_mx_id(
         &self,
         ctx: &async_graphql::Context<'_>,
@@ -190,9 +102,7 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<MySqlPool>();
 
         let mut conn = db.acquire().await?;
-        let event =
-            must::have_event_handle(&mut conn, Context::default().with_event_handle(&handle))
-                .await?;
+        let event = must::have_event_handle(&mut conn, &handle).await?;
 
         Ok(event.into())
     }
@@ -361,12 +271,20 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<Database>();
         let conn = acquire!(db?);
 
-        transaction::within(
-            conn.mysql_conn,
-            Context::default(),
-            ReadOnly,
-            async |mysql_conn, ctx| get_record(mysql_conn, conn.redis_conn, ctx, record_id).await,
-        )
+        transaction::within(conn.mysql_conn, ReadOnly, async |mysql_conn, guard| {
+            get_record(
+                &mut TxnDatabaseConnection::new(
+                    guard,
+                    DatabaseConnection {
+                        mysql_conn,
+                        redis_conn: conn.redis_conn,
+                    },
+                ),
+                record_id,
+                Default::default(),
+            )
+            .await
+        })
         .await
     }
 
@@ -403,36 +321,33 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<Database>();
         let conn = acquire!(db?);
 
-        transaction::within(
-            conn.mysql_conn,
-            Context::default(),
-            ReadOnly,
-            async |mysql_conn, ctx| {
-                get_records(mysql_conn, conn.redis_conn, ctx, date_sort_by).await
-            },
-        )
+        transaction::within(conn.mysql_conn, ReadOnly, async |mysql_conn, guard| {
+            get_records(
+                &mut TxnDatabaseConnection::new(
+                    guard,
+                    DatabaseConnection {
+                        mysql_conn,
+                        redis_conn: conn.redis_conn,
+                    },
+                ),
+                date_sort_by,
+                Default::default(),
+            )
+            .await
+        })
         .await
     }
 }
 
-async fn get_record<C>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
-    ctx: C,
+async fn get_record<M>(
+    conn: &mut TxnDatabaseConnection<'_, M>,
     record_id: u32,
-) -> async_graphql::Result<RankedRecord>
-where
-    C: Transactional,
-{
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-
+    event: OptEvent<'_>,
+) -> async_graphql::Result<RankedRecord> {
     let Some(record) =
         sqlx::query_as::<_, models::Record>("select * from records where record_id = ?")
             .bind(record_id)
-            .fetch_optional(&mut **conn.mysql_conn)
+            .fetch_optional(&mut **conn.conn.mysql_conn)
             .await?
     else {
         return Err(async_graphql::Error::new("Record not found."));
@@ -440,10 +355,11 @@ where
 
     let out = models::RankedRecord {
         rank: get_rank(
-            &mut conn,
-            ctx.with_map_id(record.map_id)
-                .with_player_id(record.record_player_id),
+            conn,
+            record.map_id,
+            record.record_player_id,
             record.time,
+            event,
         )
         .await?,
         record,
@@ -453,17 +369,11 @@ where
     Ok(out)
 }
 
-async fn get_records<C: Transactional>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
-    ctx: C,
+async fn get_records<M>(
+    conn: &mut TxnDatabaseConnection<'_, M>,
     date_sort_by: Option<SortState>,
+    event: OptEvent<'_>,
 ) -> async_graphql::Result<Vec<RankedRecord>> {
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-
     let date_sort_by = SortState::sql_order_by(&date_sort_by);
 
     let query = format!(
@@ -473,17 +383,17 @@ async fn get_records<C: Transactional>(
     );
 
     let records = sqlx::query_as::<_, models::Record>(&query)
-        .fetch_all(&mut **conn.mysql_conn)
+        .fetch_all(&mut **conn.conn.mysql_conn)
         .await?;
     let mut ranked_records = Vec::with_capacity(records.len());
 
     for record in records {
         let rank = get_rank(
-            &mut conn,
-            ctx.by_ref()
-                .with_map_id(record.map_id)
-                .with_player_id(record.record_player_id),
+            conn,
+            record.map_id,
+            record.record_player_id,
             record.time,
+            event,
         )
         .await?;
 
@@ -543,6 +453,8 @@ fn create_schema(db: Database, client: Client) -> Schema {
             .unwrap()
             .write_all(schema.sdl().as_bytes())
             .unwrap();
+
+        tracing::info!("Generated GraphQL schema file to schema.graphql");
     }
 
     schema

@@ -3,10 +3,10 @@ pub struct WebsiteAgent;
 
 pub struct ParseError;
 
-impl super::FromBytes for WebsiteAgent {
+impl TryFrom<&[u8]> for WebsiteAgent {
     type Error = ParseError;
 
-    fn from_bytes(b: &[u8]) -> Result<Self, Self::Error> {
+    fn try_from(b: &[u8]) -> Result<Self, Self::Error> {
         if b == b"node" {
             Ok(Self)
         } else {

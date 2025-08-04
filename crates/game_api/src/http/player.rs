@@ -1,15 +1,21 @@
+#[cfg(auth)]
 use actix_session::Session;
+#[cfg(auth)]
+use actix_web::web::Data;
 use actix_web::{
     HttpResponse, Responder, Scope,
-    web::{self, Data, Json, Query},
+    body::BoxBody,
+    web::{self, Json, Query},
 };
 use futures::TryStreamExt;
 use records_lib::{
-    Database, DatabaseConnection, ModeVersion, MySqlConnection, RedisConnection, acquire,
-    context::{Context, Ctx, HasMap, HasMapId, HasPlayerLogin, ReadWrite, Transactional},
+    Database, DatabaseConnection, ModeVersion, TxnDatabaseConnection, acquire,
     event::{self},
-    models::Banishment,
-    must, player, transaction,
+    models::{self, Banishment},
+    must,
+    opt_event::OptEvent,
+    player,
+    transaction::{self, CanWrite, ReadWrite},
 };
 use reqwest::Client;
 #[cfg(auth)]
@@ -25,22 +31,22 @@ use tracing_actix_web::RequestId;
 #[cfg(auth)]
 use crate::{
     AccessTokenErr,
-    auth::{Message, TIMEOUT, WebToken},
+    auth::{AuthState, Message, TIMEOUT, WEB_TOKEN_SESS_KEY, WebToken},
 };
 
 use crate::{
     FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
-    auth::{self, ApiAvailable, AuthHeader, AuthState, MPAuthGuard, WEB_TOKEN_SESS_KEY, privilege},
-    discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField},
+    auth::{self, ApiAvailable, AuthHeader, MPAuthGuard, privilege},
     utils::{self, json},
 };
+use dsc_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 
 #[cfg(feature = "request_filter")]
-use crate::request_filter::{FlagFalseRequest, WebsiteFilter};
+use request_filter::{FlagFalseRequest, WebsiteFilter};
 
 use super::{
     pb,
-    player_finished::{self as pf, InsertRecordParams},
+    player_finished::{self as pf, ExpandedInsertRecordParams},
 };
 
 pub fn player_scope() -> Scope {
@@ -241,75 +247,111 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
     Ok(res_login.to_lowercase() == login.to_lowercase())
 }
 
-async fn finished_impl<C>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
-    ctx: C,
-    at: chrono::NaiveDateTime,
-    body: InsertRecordParams,
-) -> RecordsResult<pf::FinishedOutput>
-where
-    C: HasPlayerLogin + HasMap + Transactional<Mode = ReadWrite>,
-{
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-
-    let res = pf::finished(&mut conn, &ctx, body.clone(), at).await?;
-
-    let ctx = ctx.with_player_id(res.player_id);
+async fn finished_impl<M: CanWrite>(
+    conn: &mut TxnDatabaseConnection<'_, M>,
+    params: ExpandedInsertRecordParams<'_>,
+    player_login: &str,
+    map: &models::Map,
+) -> RecordsResult<pf::FinishedOutput> {
+    let res = pf::finished(conn, params, player_login, map).await?;
 
     // If the record isn't in an event context, save the record to the events that have the map
     // and allow records saving without an event context.
-    let editions =
-        records_lib::event::get_editions_which_contain(conn.mysql_conn, ctx.get_map_id())
-            .try_collect::<Vec<_>>()
-            .await
-            .with_api_err()?;
+    let editions = records_lib::event::get_editions_which_contain(conn.conn.mysql_conn, map.id)
+        .try_collect::<Vec<_>>()
+        .await
+        .with_api_err()?;
     for (event_id, edition_id, original_map_id) in editions {
-        super::event::insert_event_record(conn.mysql_conn, res.record_id, event_id, edition_id)
-            .await?;
+        super::event::insert_event_record(
+            conn.conn.mysql_conn,
+            res.record_id,
+            event_id,
+            edition_id,
+        )
+        .await?;
 
         let Some(original_map_id) = original_map_id else {
             continue;
         };
 
-        let ctx = ctx.by_ref().with_map_id(original_map_id).with_no_event();
-
         // Get the previous time of the player on the original map, to check if it would be a PB or not.
-        let previous_time = player::get_time_on_map(conn.mysql_conn, &ctx).await?;
-        let is_pb = previous_time.is_none_or(|t| t > body.time);
+        let previous_time = player::get_time_on_map(
+            conn.conn.mysql_conn,
+            res.player_id,
+            original_map_id,
+            Default::default(),
+        )
+        .await?;
+        let is_pb = previous_time.is_none_or(|t| t > params.body.time);
 
-        pf::insert_record(&mut conn, &ctx, &body, Some(res.record_id), at, is_pb).await?;
+        pf::insert_record(
+            conn,
+            ExpandedInsertRecordParams {
+                event: Default::default(),
+                ..params
+            },
+            original_map_id,
+            res.player_id,
+            Some(res.record_id),
+            is_pb,
+        )
+        .await?;
     }
 
     Ok(res)
 }
 
-pub async fn finished_at(
+pub async fn finished_at_with_pool(
+    db: Database,
     req_id: RequestId,
     mode_version: Option<ModeVersion>,
     login: String,
-    db: Res<Database>,
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
-    let conn = acquire!(db.with_api_err().fit(req_id)?);
+    let mut conn = acquire!(db.with_api_err().fit(req_id)?);
+    let res = finished_at(&mut conn, req_id, mode_version, login, body, at).await?;
+    Ok(res)
+}
 
-    let ctx = Context { mode_version }.with_player_login(&login);
-
-    let map = must::have_map(conn.mysql_conn, ctx.by_ref().with_map_uid(&body.map_uid))
+pub async fn finished_at(
+    conn: &mut DatabaseConnection<'_>,
+    req_id: RequestId,
+    mode_version: Option<ModeVersion>,
+    login: String,
+    body: pf::HasFinishedBody,
+    at: chrono::NaiveDateTime,
+) -> RecordsResponse<impl Responder<Body = BoxBody> + use<>> {
+    let map = must::have_map(conn.mysql_conn, &body.map_uid)
         .await
         .with_api_err()
         .fit(req_id)?;
-    let ctx = ctx.with_map(&map);
 
-    let res = transaction::within(conn.mysql_conn, ctx, ReadWrite, async |mysql_conn, ctx| {
-        finished_impl(mysql_conn, conn.redis_conn, ctx, at, body.rest).await
-    })
-    .await
-    .fit(req_id)?;
+    let res: pf::FinishedOutput =
+        transaction::within(conn.mysql_conn, ReadWrite, async |mysql_conn, guard| {
+            let params = ExpandedInsertRecordParams {
+                body: &body.rest,
+                at,
+                event: Default::default(),
+                mode_version,
+            };
+
+            finished_impl(
+                &mut TxnDatabaseConnection::new(
+                    guard,
+                    DatabaseConnection {
+                        mysql_conn,
+                        redis_conn: conn.redis_conn,
+                    },
+                ),
+                params,
+                &login,
+                &map,
+            )
+            .await
+        })
+        .await
+        .fit(req_id)?;
 
     json(res.res)
 }
@@ -323,11 +365,11 @@ async fn finished(
     db: Res<Database>,
     body: pf::PlayerFinishedBody,
 ) -> RecordsResponse<impl Responder> {
-    finished_at(
+    finished_at_with_pool(
+        db.0,
         req_id,
         mode_version.map(|x| x.0),
         login,
-        db,
         body.0,
         chrono::Utc::now().naive_utc(),
     )
@@ -412,13 +454,21 @@ async fn get_token(
     json(GetTokenResponse { token: mp_token })
 }
 
+#[cfg(not(auth))]
+#[inline(always)]
+async fn post_give_token() -> RecordsResponse<impl Responder> {
+    Ok(HttpResponse::Ok().finish())
+}
+
+#[cfg(auth)]
 #[derive(Deserialize)]
 pub struct GiveTokenBody {
     code: String,
     state: String,
 }
 
-pub async fn post_give_token(
+#[cfg(auth)]
+async fn post_give_token(
     req_id: RequestId,
     session: Session,
     state: Data<AuthState>,
@@ -442,17 +492,11 @@ async fn pb(
     Query(body): pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
-    let ctx = Context::default()
-        .with_map_uid(&body.map_uid)
-        .with_player_login(&login)
-        .with_pool(db.0);
 
-    let map = must::have_map(&mut mysql_conn, &ctx)
+    let map = must::have_map(&mut mysql_conn, &body.map_uid)
         .await
         .with_api_err()
         .fit(req_id)?;
-
-    let ctx = ctx.with_map(&map);
 
     let mut editions = event::get_editions_which_contain(&mut mysql_conn, map.id);
     let edition = editions.try_next().await.with_api_err().fit(req_id)?;
@@ -472,9 +516,15 @@ async fn pb(
                     .await
                     .with_api_err()
                     .fit(req_id)?;
-            pb::pb(ctx.with_event_edition(&event, &edition)).await
+            pb::pb(
+                db.0.mysql_pool,
+                &login,
+                &body.map_uid,
+                OptEvent::new(&event, &edition),
+            )
+            .await
         }
-        _ => pb::pb(ctx).await,
+        _ => pb::pb(db.0.mysql_pool, &login, &body.map_uid, Default::default()).await,
     }
     .fit(req_id)?;
 
@@ -500,12 +550,9 @@ async fn times(
 ) -> RecordsResponse<impl Responder> {
     let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
 
-    let player = records_lib::must::have_player(
-        &mut mysql_conn,
-        Context::default().with_player_login(&login),
-    )
-    .await
-    .fit(req_id)?;
+    let player = records_lib::must::have_player(&mut mysql_conn, &login)
+        .await
+        .fit(req_id)?;
 
     let mut query = sqlx::QueryBuilder::new(
         "SELECT m.game_id AS map_uid, MIN(r.time) AS time

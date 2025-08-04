@@ -1,7 +1,8 @@
 use crate::init_env;
 use anyhow::Context;
-use records_lib::{get_mysql_pool, get_redis_pool, Database};
+use records_lib::{Database, get_mysql_pool, get_redis_pool};
 
+#[allow(dead_code)]
 pub async fn init_db() -> anyhow::Result<Database> {
     match dotenvy::dotenv() {
         Err(err) if !err.not_found() => return Err(err).context("retrieving .env files"),

@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
     setup_tracing()?;
     let env = Env::try_get()?;
+    let event_scores_interval = env.lib_env.event_scores_interval;
     records_lib::init_env(env.lib_env);
 
     let mysql_pool = records_lib::get_mysql_pool(env.db_env.db_url.db_url)
@@ -65,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
 
     let res = tokio::spawn(handle(
         db.clone(),
-        campaign_scores::PROCESS_DURATION,
+        event_scores_interval,
         campaign_scores::update,
     ));
 

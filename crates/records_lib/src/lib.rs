@@ -12,7 +12,6 @@ mod env;
 mod modeversion;
 mod mptypes;
 
-pub mod context;
 pub mod error;
 pub mod event;
 pub mod leaderboard;
@@ -20,6 +19,7 @@ pub mod map;
 pub mod mappack;
 pub mod models;
 pub mod must;
+pub mod opt_event;
 pub mod player;
 pub mod ranks;
 pub mod redis_key;
@@ -42,6 +42,8 @@ pub use modeversion::*;
 pub use mptypes::*;
 use rand::Rng as _;
 
+use self::transaction::TxnGuard;
+
 /// Asserts that the type of the provided future is Send, and returns an opaque type from it.
 ///
 /// This helps the compiler to correctly type the values of some await points, and helps
@@ -56,8 +58,8 @@ where
 
 /// Returns a randomly-generated string with the `len` length. It contains alphanumeric characters.
 pub fn gen_random_str(len: usize) -> String {
-    rand::thread_rng()
-        .sample_iter(rand::distributions::Alphanumeric)
+    rand::rng()
+        .sample_iter(rand::distr::Alphanumeric)
         .map(char::from)
         .take(len)
         .collect()
@@ -69,6 +71,24 @@ pub struct DatabaseConnection<'a> {
     pub mysql_conn: MySqlConnection<'a>,
     /// The connection to the Redis database.
     pub redis_conn: &'a mut RedisConnection,
+}
+
+/// Represents a connection to the API database, in a transactional context.
+pub struct TxnDatabaseConnection<'a, M> {
+    _guard: TxnGuard<'a, M>,
+    /// The actual database connection.
+    pub conn: DatabaseConnection<'a>,
+}
+
+impl<'a, M> TxnDatabaseConnection<'a, M> {
+    /// Creates an instance of this type, from the transaction guard, and the actual
+    /// connection instance.
+    pub fn new(guard: TxnGuard<'a, M>, conn: DatabaseConnection<'a>) -> Self {
+        Self {
+            _guard: guard,
+            conn,
+        }
+    }
 }
 
 /// Represents the database of the API, meaning the MariaDB and Redis pools.

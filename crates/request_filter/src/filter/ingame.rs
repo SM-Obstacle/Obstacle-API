@@ -72,10 +72,10 @@ fn parse_agent(input: &[u8]) -> nom::IResult<&[u8], InGameAgent> {
 
 pub struct ParseError;
 
-impl super::FromBytes for InGameAgent {
+impl TryFrom<&[u8]> for InGameAgent {
     type Error = ParseError;
 
-    fn from_bytes(input: &[u8]) -> Result<Self, Self::Error> {
+    fn try_from(input: &[u8]) -> Result<Self, Self::Error> {
         parse_agent(input)
             .map_err(|_| ParseError)
             .map(|(_, out)| out)
@@ -104,7 +104,7 @@ impl super::FilterAgent for InGameFilter {
             | (2019, ..11, ..)
             | (2019, 11, ..19, ..)
             | (2019, 11, 19, ..18, _)
-            | (2019, 11, 19, 18, ..=50) => (),
+            | (2019, 11, 19, 18, ..=58) => (),
             _ => return false,
         }
 

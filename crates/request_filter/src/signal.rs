@@ -5,15 +5,13 @@ use actix_web::{
 };
 use core::fmt;
 
-use crate::discord_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
+use dsc_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 
-#[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
 struct FormattedHeaderValue<'a> {
     inner: Result<&'a str, &'a [u8]>,
 }
 
 impl<'a> FormattedHeaderValue<'a> {
-    #[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
     fn new(val: &'a [u8]) -> Self {
         Self {
             inner: std::str::from_utf8(val).map_err(|_| val),
@@ -46,7 +44,6 @@ impl fmt::Display for FormattedHeaderValue<'_> {
     }
 }
 
-#[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
 struct FormattedRequestHead<'a> {
     head: &'a RequestHead,
 }
@@ -76,14 +73,13 @@ impl fmt::Display for FormattedRequestHead<'_> {
     }
 }
 
-#[cfg_attr(not(feature = "request_filter"), allow(dead_code))]
 pub(super) async fn send_notif(
     client: reqwest::Client,
     head: RequestHead,
     connection_info: ConnectionInfo,
 ) -> Result<(), actix_web::Error> {
     client
-        .post(&crate::env().wh_invalid_req_url)
+        .post(crate::wh_url())
         .json(&WebhookBody {
             content: "Got an invalid request 🥷".to_owned(),
             embeds: vec![

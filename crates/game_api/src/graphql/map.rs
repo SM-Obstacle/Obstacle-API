@@ -1,4 +1,4 @@
-use std::{collections::HashMap, iter::repeat, sync::Arc};
+use std::{collections::HashMap, iter::repeat_n, sync::Arc};
 
 use async_graphql::{
     ID,
@@ -7,12 +7,12 @@ use async_graphql::{
 use deadpool_redis::redis::AsyncCommands;
 use futures::StreamExt;
 use records_lib::{
-    Database, DatabaseConnection, MySqlConnection, RedisConnection, acquire,
-    context::{Context, Ctx, HasMapId, HasPersistentMode, ReadOnly, Transactional},
+    Database, DatabaseConnection, TxnDatabaseConnection, acquire,
     models::{self, Record},
+    opt_event::OptEvent,
     ranks::{get_rank, update_leaderboard},
     redis_key::alone_map_key,
-    transaction,
+    transaction::{self, ReadOnly},
 };
 use sqlx::{FromRow, MySqlPool, mysql};
 
@@ -36,50 +36,42 @@ impl From<models::Map> for Map {
     }
 }
 
-async fn get_map_records<C>(
-    mysql_conn: MySqlConnection<'_>,
-    redis_conn: &mut RedisConnection,
-    ctx: C,
+async fn get_map_records<M>(
+    conn: &mut TxnDatabaseConnection<'_, M>,
+    map_id: u32,
+    event: OptEvent<'_>,
     rank_sort_by: Option<SortState>,
     date_sort_by: Option<SortState>,
-) -> async_graphql::Result<Vec<RankedRecord>>
-where
-    C: Transactional + HasMapId,
-{
-    let mut conn = DatabaseConnection {
-        mysql_conn,
-        redis_conn,
-    };
-    let key = alone_map_key(ctx.get_map_id());
+) -> async_graphql::Result<Vec<RankedRecord>> {
+    let key = alone_map_key(map_id);
 
-    update_leaderboard(&mut conn, &ctx).await?;
+    update_leaderboard(conn, map_id, event).await?;
 
     let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
     let record_ids: Vec<i32> = if to_reverse {
-        conn.redis_conn.zrevrange(&key, 0, 99)
+        conn.conn.redis_conn.zrevrange(&key, 0, 99)
     } else {
-        conn.redis_conn.zrange(&key, 0, 99)
+        conn.conn.redis_conn.zrange(&key, 0, 99)
     }
     .await?;
     if record_ids.is_empty() {
         return Ok(Vec::new());
     }
 
-    let builder = ctx.sql_frag_builder();
+    let builder = event.sql_frag_builder();
 
     let mut query = sqlx::QueryBuilder::new("SELECT * FROM ");
     builder
         .push_event_view_name(&mut query, "r")
         .push(" where r.map_id = ")
-        .push_bind(ctx.get_map_id())
+        .push_bind(map_id)
         .push(" ");
 
     if let Some(ref s) = date_sort_by {
-        query.push("order by r.record_date ");
-        query.push(match s {
-            SortState::Reverse => "asc",
-            SortState::Sort => "desc",
-        });
+        query.push(" order by r.record_date");
+        if let SortState::Sort = s {
+            query.push(" desc");
+        }
     } else {
         let mut sep = builder
             .push_event_filter(&mut query, "r")
@@ -103,18 +95,13 @@ where
 
     let records = query
         .build_query_as::<Record>()
-        .fetch_all(&mut **conn.mysql_conn)
+        .fetch_all(&mut **conn.conn.mysql_conn)
         .await?;
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
     for record in records {
-        let rank = get_rank(
-            &mut conn,
-            ctx.by_ref().with_player_id(record.record_player_id),
-            record.time,
-        )
-        .await?;
+        let rank = get_rank(conn, map_id, record.record_player_id, record.time, event).await?;
         ranked_records.push(models::RankedRecord { rank, record }.into());
     }
 
@@ -122,23 +109,34 @@ where
 }
 
 impl Map {
-    pub(super) async fn get_records<C: HasPersistentMode>(
+    pub(super) async fn get_records(
         &self,
         gql_ctx: &async_graphql::Context<'_>,
-        ctx: C,
+        event: OptEvent<'_>,
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
-        let ctx = ctx.with_map(&self.inner);
         let db = gql_ctx.data_unchecked::<Database>();
         let conn = acquire!(db?);
 
         records_lib::assert_future_send(transaction::within(
             conn.mysql_conn,
-            ctx,
             ReadOnly,
-            async |mysql_conn, ctx| {
-                get_map_records(mysql_conn, conn.redis_conn, ctx, rank_sort_by, date_sort_by).await
+            async |mysql_conn, guard| {
+                get_map_records(
+                    &mut TxnDatabaseConnection::new(
+                        guard,
+                        DatabaseConnection {
+                            mysql_conn,
+                            redis_conn: conn.redis_conn,
+                        },
+                    ),
+                    self.inner.id,
+                    event,
+                    rank_sort_by,
+                    date_sort_by,
+                )
+                .await
             },
         ))
         .await
@@ -222,7 +220,8 @@ impl Map {
                 // We want to redirect to the event map page if the edition saves any records
                 // on its maps, doesn't have any original map like campaign, or if the map
                 // isn't the original one.
-                redirect_to_event: edition.edition.save_non_event_record
+                redirect_to_event: !edition.edition.is_transparent
+                    && edition.edition.save_non_event_record
                     && (edition.edition.non_original_maps || self.inner.id == edition.map_id),
                 edition: EventEdition::from_inner(edition.edition, mysql_pool).await?,
             });
@@ -253,7 +252,7 @@ impl Map {
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
-        self.get_records(ctx, Context::default(), rank_sort_by, date_sort_by)
+        self.get_records(ctx, Default::default(), rank_sort_by, date_sort_by)
             .await
     }
 }
@@ -267,8 +266,7 @@ impl Loader<u32> for MapLoader {
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
         let query = format!(
             "SELECT * FROM maps WHERE id IN ({})",
-            repeat("?".to_string())
-                .take(keys.len())
+            repeat_n("?".to_string(), keys.len())
                 .collect::<Vec<_>>()
                 .join(",")
         );
