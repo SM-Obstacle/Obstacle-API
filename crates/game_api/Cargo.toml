@@ -39,6 +39,8 @@ nom = { workspace = true }
 pin-project-lite = { version = "0.2.16", optional = true }
 request_filter = { path = "../request_filter", optional = true }
 dsc_webhook = { path = "../dsc_webhook" }
+sea-orm = { workspace = true }
+migration = { path = "../migration" }
 
 [features]
 default = ["request_filter"]

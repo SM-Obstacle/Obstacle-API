@@ -1,4 +1,7 @@
-use std::{future::ready, pin::Pin};
+use std::{
+    future::{ready, Future},
+    pin::Pin,
+};
 
 use sea_orm::entity::prelude::*;
 

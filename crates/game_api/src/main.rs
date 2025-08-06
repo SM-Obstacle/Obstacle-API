@@ -18,6 +18,7 @@ use anyhow::Context;
 use game_api_lib::{
     AuthState, FitRequestId, RecordsErrorKind, RecordsResponse, api_route, graphql_route,
 };
+use migration::MigratorTrait;
 use records_lib::{Database, get_mysql_pool, get_redis_pool};
 use reqwest::Client;
 use tracing::level_filters::LevelFilter;
@@ -58,12 +59,16 @@ async fn main() -> anyhow::Result<()> {
     request_filter::init_wh_url(env.used_once.wh_invalid_req_url)
         .unwrap_or_else(|_| panic!("Invalid request WH URL isn't supposed to be set twice"));
 
+    let db = sea_orm::Database::connect(&env.db_env.db_url.db_url)
+        .await
+        .context("Cannot connect to MySQL server")?;
     let mysql_pool = get_mysql_pool(env.db_env.db_url.db_url)
         .await
         .context("Cannot create MySQL pool")?;
     let redis_pool =
         get_redis_pool(env.db_env.redis_url.redis_url).context("Cannot create Redis pool")?;
 
+    migration::Migrator::up(&db, None).await?;
     sqlx::migrate!("../../db/migrations")
         .run(&mysql_pool)
         .await?;

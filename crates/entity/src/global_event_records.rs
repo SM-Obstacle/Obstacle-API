@@ -3,7 +3,7 @@ use std::{future::ready, pin::Pin};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "global_records")]
+#[sea_orm(table_name = "global_event_records")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub record_id: u32,
@@ -15,6 +15,8 @@ pub struct Model {
     pub flags: u32,
     pub try_count: Option<u32>,
     pub event_record_id: Option<u32>,
+    pub event_id: u32,
+    pub edition_id: u32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -47,6 +49,14 @@ pub enum Relation {
         on_delete = "SetNull"
     )]
     SelfRef,
+    #[sea_orm(
+        belongs_to = "super::event_edition::Entity",
+        from = "(Column::EventId, Column::EditionId)",
+        to = "(super::event_edition::Column::EventId, super::event_edition::Column::Id)",
+        on_update = "Cascade",
+        on_delete = "Restrict"
+    )]
+    EventEdition,
 }
 
 impl Related<super::checkpoint_times::Entity> for Entity {
@@ -82,6 +92,12 @@ impl Related<super::maps::Entity> for Entity {
 impl Related<super::players::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Players.def()
+    }
+}
+
+impl Related<super::event_edition::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::EventEdition.def()
     }
 }
 
