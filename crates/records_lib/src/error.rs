@@ -1,6 +1,7 @@
 //! A module containing the [`RecordsError`] struct, which contains various basic error types.
 
 use deadpool_redis::PoolError;
+use sea_orm::TransactionError;
 
 /// Represents any type of error that could happen when using this crate.
 ///
@@ -40,6 +41,9 @@ pub enum RecordsError {
     /// An unknown internal error.
     #[error("unknown internal error")]
     Internal = 109,
+    /// An error from the database.
+    #[error(transparent)]
+    DbError(#[from] sea_orm::DbErr),
 
     // --------
     // --- Logical errors
@@ -81,6 +85,18 @@ pub enum RecordsError {
         /// The event edition ID.
         u32,
     ) = 312,
+}
+
+impl<E> From<TransactionError<E>> for RecordsError
+where
+    RecordsError: From<E>,
+{
+    fn from(value: TransactionError<E>) -> Self {
+        match value {
+            TransactionError::Connection(db_err) => From::from(db_err),
+            TransactionError::Transaction(e) => From::from(e),
+        }
+    }
 }
 
 impl RecordsError {

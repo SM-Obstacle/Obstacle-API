@@ -5,13 +5,11 @@
 //! the types correspond to the raw tables in the database. This means that relations between models
 //! are only represented by a foreign key like an ID.
 
-use std::{fmt, str::FromStr};
+use std::str::FromStr;
 
 use async_graphql::{Enum, SimpleObject};
 use serde::Serialize;
 use sqlx::{FromRow, Row, mysql::MySqlRow};
-
-use crate::error::RecordsResult;
 
 /// A player in the database.
 #[derive(Serialize, FromRow, Clone, Debug)]
@@ -133,35 +131,6 @@ pub struct Banishment {
     pub banished_by: Option<u32>,
     /// Equals true if the player was already banned before.
     pub was_reprieved: bool,
-}
-
-impl fmt::Display for Banishment {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        struct FmtDuration(Option<i64>);
-
-        impl fmt::Display for FmtDuration {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                if let Some(s) = self.0 {
-                    write!(f, "{s} seconds")?;
-                } else {
-                    write!(f, "forever")?;
-                }
-                Ok(())
-            }
-        }
-
-        write!(
-            f,
-            "at: {:?}, duration: {}, reason: `{}`",
-            self.date_ban,
-            FmtDuration(self.duration),
-            if self.reason.is_empty() {
-                "none"
-            } else {
-                &self.reason
-            }
-        )
-    }
 }
 
 /// Represents the time on a checkpoint on a map associated to a record.
@@ -454,46 +423,6 @@ pub struct EventEdition {
     /// A transparent event edition means that there is no records explicitly attached to this edition.
     /// Every record made on any map the edition contains is counted as being attached to this edition.
     pub is_transparent: bool,
-}
-
-impl EventEdition {
-    /// Returns the UTC expire date of the edition.
-    pub fn expire_date(&self) -> Option<chrono::NaiveDateTime> {
-        self.ttl.and_then(|ttl| {
-            self.start_date
-                .checked_add_signed(chrono::Duration::seconds(ttl as _))
-        })
-    }
-
-    /// Returns the number of seconds until the edition expires from now.
-    ///
-    /// If the edition doesn't expire (it hasn't a TTL), it returns `None`.
-    pub fn expires_in(&self) -> Option<i64> {
-        self.expire_date()
-            .map(|d| (d - chrono::Utc::now().naive_utc()).num_seconds())
-    }
-
-    /// Returns whether the edition has expired or not.
-    pub fn has_expired(&self) -> bool {
-        self.expires_in().filter(|n| *n < 0).is_some()
-    }
-
-    /// Returns the additional in-game parameters of this event edition.
-    pub async fn get_ingame_params(
-        &self,
-        mysql_conn: &mut sqlx::MySqlConnection,
-    ) -> RecordsResult<Option<InGameEventEditionParams>> {
-        let Some(id) = self.ingame_params_id else {
-            return Ok(None);
-        };
-
-        let params = sqlx::query_as("select * from in_game_event_edition_params where id = ?")
-            .bind(id)
-            .fetch_optional(mysql_conn)
-            .await?;
-
-        Ok(params)
-    }
 }
 
 /// The association between event editions and their categories.

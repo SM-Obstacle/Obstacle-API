@@ -1,14 +1,14 @@
 //! This module contains various utility items to retrieve leaderboards information.
 
 use deadpool_redis::redis::AsyncCommands as _;
+use entity::{event_edition_records, players, records};
+use sea_orm::{
+    ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, Order, QueryFilter as _,
+    QueryOrder, QuerySelect, StreamTrait, prelude::Expr,
+};
 
 use crate::{
-    DatabaseConnection, TxnDatabaseConnection,
-    error::RecordsResult,
-    opt_event::OptEvent,
-    ranks,
-    redis_key::map_key,
-    transaction::{self, ReadOnly},
+    RedisConnection, error::RecordsResult, opt_event::OptEvent, ranks, redis_key::map_key,
 };
 
 /// The type returned by the [`compet_rank_by_key`](CompetRankingByKeyIter::compet_rank_by_key)
@@ -113,7 +113,7 @@ pub trait CompetRankingByKeyIter: Iterator {
 
 impl<I: Iterator> CompetRankingByKeyIter for I {}
 
-#[derive(sqlx::FromRow, Debug, Clone)]
+#[derive(Debug, Clone, FromQueryResult)]
 struct RecordQueryRow {
     player_id: u32,
     login: String,
@@ -135,21 +135,20 @@ pub struct Row {
 }
 
 /// Gets the leaderboard of a map and extends it to the provided vec.
-pub async fn leaderboard_txn_into<M>(
-    conn: &mut TxnDatabaseConnection<'_, M>,
+pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     map_id: u32,
     start: Option<i64>,
     end: Option<i64>,
     rows: &mut Vec<Row>,
     event: OptEvent<'_>,
 ) -> RecordsResult<()> {
-    ranks::update_leaderboard(conn, map_id, event).await?;
+    ranks::update_leaderboard(conn, redis_conn, map_id, event).await?;
 
     let start = start.unwrap_or_default();
     let end = end.unwrap_or(-1);
-    let player_ids: Vec<i32> = conn
-        .conn
-        .redis_conn
+    let player_ids: Vec<i32> = redis_conn
         .zrange(map_key(map_id, event), start as isize, end as isize)
         .await?;
 
@@ -157,41 +156,37 @@ pub async fn leaderboard_txn_into<M>(
         return Ok(());
     }
 
-    let builder = event.sql_frag_builder();
-
-    let mut query = sqlx::QueryBuilder::new(
-        "SELECT p.id AS player_id,
-            p.login AS login,
-            p.name AS nickname,
-            min(time) as time,
-            map_id
-        FROM records r ",
-    );
-    builder
-        .push_event_join(&mut query, "eer", "r")
-        .push(
-            " INNER JOIN players p ON r.record_player_id = p.id
-            WHERE map_id = ",
+    let query = records::Entity::find()
+        .inner_join(players::Entity)
+        .filter(
+            records::Column::MapId
+                .eq(map_id)
+                .and(records::Column::RecordPlayerId.is_in(player_ids)),
         )
-        .push_bind(map_id)
-        .push(" AND record_player_id IN (");
-    let mut sep = query.separated(", ");
-    for id in player_ids {
-        sep.push_bind(id);
-    }
-    query.push(") ");
-    let result = builder
-        .push_event_filter(&mut query, "eer")
-        .push(" GROUP BY record_player_id ORDER BY time, record_date ASC")
-        .build_query_as::<RecordQueryRow>()
-        .fetch_all(&mut **conn.conn.mysql_conn)
-        .await?;
+        .group_by(records::Column::RecordPlayerId)
+        .order_by(records::Column::Time, Order::Asc)
+        .order_by(records::Column::RecordDate, Order::Asc)
+        .column_as(records::Column::RecordPlayerId, "player_id")
+        .column_as(players::Column::Login, "login")
+        .column_as(players::Column::Name, "nickname")
+        .column_as(Expr::col(records::Column::Time).min(), "time")
+        .column_as(records::Column::MapId, "map_id");
 
+    let query = match event.event {
+        Some((ev, ed)) => query.reverse_join(event_edition_records::Entity).filter(
+            event_edition_records::Column::EventId
+                .eq(ev.id)
+                .and(event_edition_records::Column::EditionId.eq(ed.id)),
+        ),
+        None => query,
+    };
+
+    let result = query.into_model::<RecordQueryRow>().all(conn).await?;
     rows.reserve(result.len());
 
     for r in result {
         rows.push(Row {
-            rank: ranks::get_rank(conn, map_id, r.player_id, r.time, event).await?,
+            rank: ranks::get_rank(conn, redis_conn, map_id, r.player_id, r.time, event).await?,
             login: r.login,
             nickname: r.nickname,
             time: r.time,
@@ -202,44 +197,15 @@ pub async fn leaderboard_txn_into<M>(
 }
 
 /// Returns the leaderboard of a map.
-pub async fn leaderboard_txn<M>(
-    conn: &mut TxnDatabaseConnection<'_, M>,
+pub async fn leaderboard<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     map_id: u32,
     start: Option<i64>,
     end: Option<i64>,
     event: OptEvent<'_>,
 ) -> RecordsResult<Vec<Row>> {
     let mut out = Vec::new();
-    leaderboard_txn_into(conn, map_id, start, end, &mut out, event).await?;
+    leaderboard_into(conn, redis_conn, map_id, start, end, &mut out, event).await?;
     Ok(out)
-}
-
-/// Returns the leaderboard of a map.
-///
-/// This function simply makes a transaction and returns the result of
-/// the [`leaderboard_txn`]. function.
-pub async fn leaderboard(
-    conn: &mut DatabaseConnection<'_>,
-    event: OptEvent<'_>,
-    map_id: u32,
-    offset: Option<i64>,
-    limit: Option<i64>,
-) -> RecordsResult<Vec<Row>> {
-    transaction::within(conn.mysql_conn, ReadOnly, async |mysql_conn, guard| {
-        leaderboard_txn(
-            &mut TxnDatabaseConnection::new(
-                guard,
-                DatabaseConnection {
-                    redis_conn: conn.redis_conn,
-                    mysql_conn,
-                },
-            ),
-            map_id,
-            offset,
-            limit.map(|x| offset.unwrap_or_default() + x),
-            event,
-        )
-        .await
-    })
-    .await
 }

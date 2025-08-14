@@ -1,8 +1,10 @@
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
-use records_lib::{
-    MySqlConnection, NullableInteger, TxnDatabaseConnection, models, opt_event::OptEvent, ranks,
-    transaction::CanWrite,
+use entity::{checkpoint_times, event_edition_records, maps, records};
+use records_lib::{NullableInteger, RedisConnection, opt_event::OptEvent, ranks};
+use sea_orm::{
+    ActiveValue::Set, ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter as _, QueryOrder,
+    QuerySelect, QueryTrait, StreamTrait,
 };
 use serde::{Deserialize, Serialize};
 
@@ -41,8 +43,8 @@ struct SendQueryParam<'a> {
     mode_version: Option<records_lib::ModeVersion>,
 }
 
-async fn send_query(
-    db: MySqlConnection<'_>,
+async fn send_query<C: ConnectionTrait>(
+    conn: &C,
     player_id: u32,
     map_id: u32,
     SendQueryParam {
@@ -51,36 +53,35 @@ async fn send_query(
         at,
         mode_version,
     }: SendQueryParam<'_>,
-) -> sqlx::Result<u32> {
-    let record_id: u32 = sqlx::query_scalar(
-        "INSERT INTO records (record_player_id, map_id, time, respawn_count, record_date, flags, event_record_id, modeversion)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING record_id",
-    )
-    .bind(player_id)
-    .bind(map_id)
-    .bind(body.time)
-    .bind(body.respawn_count)
-    .bind(at)
-    .bind(body.flags)
-    .bind(event_record_id)
-    .bind(mode_version)
-    .fetch_one(&mut **db)
-    .await?;
+) -> Result<u32, sea_orm::DbErr> {
+    let new_record = records::ActiveModel {
+        record_player_id: Set(player_id),
+        map_id: Set(map_id),
+        time: Set(body.time),
+        respawn_count: Set(body.respawn_count),
+        record_date: Set(at),
+        flags: body.flags.map(Set).unwrap_or_default(),
+        event_record_id: Set(event_record_id),
+        modeversion: Set(mode_version.as_ref().map(ToString::to_string)),
+        ..Default::default()
+    };
 
-    let mut query =
-        sqlx::QueryBuilder::new("INSERT INTO checkpoint_times (cp_num, map_id, record_id, time) ");
-    query
-        .push_values(body.cps.iter().enumerate(), |mut b, (i, cptime)| {
-            b.push_bind(i as u32)
-                .push_bind(map_id)
-                .push_bind(record_id)
-                .push_bind(cptime);
-        })
-        .build()
-        .execute(&mut **db)
+    let record = records::Entity::insert(new_record)
+        .exec_with_returning(conn)
         .await?;
 
-    Ok(record_id)
+    checkpoint_times::Entity::insert_many(body.cps.iter().enumerate().map(|(idx, time)| {
+        checkpoint_times::ActiveModel {
+            cp_num: Set(idx as _),
+            map_id: Set(map_id),
+            record_id: Set(record.record_id),
+            time: Set(*time),
+        }
+    }))
+    .exec(conn)
+    .await?;
+
+    Ok(record.record_id)
 }
 
 #[derive(Clone, Copy)]
@@ -91,19 +92,20 @@ pub struct ExpandedInsertRecordParams<'a> {
     pub mode_version: Option<records_lib::ModeVersion>,
 }
 
-pub(super) async fn insert_record<M: CanWrite>(
-    conn: &mut TxnDatabaseConnection<'_, M>,
+pub(super) async fn insert_record<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     params: ExpandedInsertRecordParams<'_>,
     map_id: u32,
     player_id: u32,
     event_record_id: Option<u32>,
     update_redis_lb: bool,
 ) -> RecordsResult<u32> {
-    ranks::update_leaderboard(conn, map_id, params.event).await?;
+    ranks::update_leaderboard(conn, redis_conn, map_id, params.event).await?;
 
     if update_redis_lb {
         ranks::update_rank(
-            conn.conn.redis_conn,
+            redis_conn,
             map_id,
             player_id,
             params.body.time,
@@ -114,7 +116,7 @@ pub(super) async fn insert_record<M: CanWrite>(
 
     // FIXME: find a way to retry deadlock errors **without loops**
     let record_id = send_query(
-        conn.conn.mysql_conn,
+        conn,
         player_id,
         map_id,
         SendQueryParam {
@@ -136,48 +138,49 @@ pub struct FinishedOutput {
     pub res: HasFinishedResponse,
 }
 
-async fn get_old_record(
-    db: &mut sqlx::MySqlConnection,
+async fn get_old_record<C: ConnectionTrait>(
+    conn: &C,
     player_id: u32,
     map_id: u32,
     event: OptEvent<'_>,
-) -> RecordsResult<Option<models::Record>> {
-    let builder = event.sql_frag_builder();
-    let mut query = sqlx::QueryBuilder::new("SELECT r.* FROM records r ");
-    builder
-        .push_event_join(&mut query, "eer", "r")
-        .push(" where map_id = ")
-        .push_bind(map_id)
-        .push(" and record_player_id = ")
-        .push_bind(player_id)
-        .push(" ");
-    builder
-        .push_event_filter(&mut query, "eer")
-        .push(" order by time limit 1")
-        .build_query_as::<models::Record>()
-        .fetch_optional(db)
+) -> RecordsResult<Option<records::Model>> {
+    records::Entity::find()
+        .filter(
+            records::Column::MapId
+                .eq(map_id)
+                .and(records::Column::RecordPlayerId.eq(player_id)),
+        )
+        .order_by_asc(records::Column::Time)
+        .limit(1)
+        .apply_if(event.event, |q, (ev, ed)| {
+            q.reverse_join(event_edition_records::Entity).filter(
+                event_edition_records::Column::EventId
+                    .eq(ev.id)
+                    .and(event_edition_records::Column::EditionId.eq(ed.id)),
+            )
+        })
+        .one(conn)
         .await
         .with_api_err()
 }
 
 // conn, guard, params, at, mode_version, event
 
-pub async fn finished<M: CanWrite>(
-    conn: &mut TxnDatabaseConnection<'_, M>,
+pub async fn finished<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     params: ExpandedInsertRecordParams<'_>,
     player_login: &str,
-    map: &models::Map,
+    map: &maps::Model,
 ) -> RecordsResult<FinishedOutput> {
     // First, we retrieve all what we need to save the record
-    let player = records_lib::must::have_player(conn.conn.mysql_conn, player_login)
+    let player = records_lib::must::have_player(conn, player_login)
         .await
         .with_api_err()?;
     let player_id = player.id;
 
     // Return an error if the player was banned at the time.
-    if let Some(ban) =
-        super::player::get_ban_during(conn.conn.mysql_conn, player_id, params.at).await?
-    {
+    if let Some(ban) = super::player::get_ban_during(conn, player_id, params.at).await? {
         return Err(RecordsErrorKind::BannedPlayer(ban));
     }
 
@@ -188,27 +191,38 @@ pub async fn finished<M: CanWrite>(
         return Err(RecordsErrorKind::InvalidTimes);
     }
 
-    let old_record = get_old_record(conn.conn.mysql_conn, player_id, map.id, params.event).await?;
+    let old_record = get_old_record(conn, player_id, map.id, params.event).await?;
 
-    let (old, new, has_improved, old_rank) =
-        if let Some(models::Record { time: old, .. }) = old_record {
-            (
-                old,
-                params.body.time,
-                params.body.time < old,
-                Some(ranks::get_rank(conn, map.id, player_id, old, params.event).await?),
-            )
-        } else {
-            (params.body.time, params.body.time, true, None)
-        };
+    let (old, new, has_improved, old_rank) = if let Some(records::Model { time: old, .. }) =
+        old_record
+    {
+        (
+            old,
+            params.body.time,
+            params.body.time < old,
+            Some(ranks::get_rank(conn, redis_conn, map.id, player_id, old, params.event).await?),
+        )
+    } else {
+        (params.body.time, params.body.time, true, None)
+    };
 
     let event = params.event;
 
     // We insert the record
-    let record_id = insert_record(conn, params, map.id, player_id, None, has_improved).await?;
+    let record_id = insert_record(
+        conn,
+        redis_conn,
+        params,
+        map.id,
+        player_id,
+        None,
+        has_improved,
+    )
+    .await?;
 
     let current_rank = ranks::get_rank(
         conn,
+        redis_conn,
         map.id,
         player_id,
         if has_improved { new } else { old },

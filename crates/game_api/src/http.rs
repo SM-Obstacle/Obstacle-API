@@ -7,7 +7,8 @@ use actix_web::body::BoxBody;
 use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
 use actix_web::web::{JsonConfig, Query};
 use actix_web::{HttpResponse, Scope, web};
-use records_lib::{Database, acquire};
+use records_lib::Database;
+use sea_orm::DatabaseConnection;
 use serde::Serialize;
 use tracing_actix_web::RequestId;
 
@@ -203,15 +204,23 @@ async fn overview(
     db: Res<Database>,
     Query(query): overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    let conn = acquire!(db.with_api_err().fit(req_id)?);
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
-    let map = records_lib::must::have_map(conn.mysql_conn, &query.map_uid)
+    let map = records_lib::must::have_map(&conn, &query.map_uid)
         .await
         .with_api_err()
         .fit(req_id)?;
 
-    let res = overview::overview(conn, &query.login, &map, Default::default())
-        .await
-        .fit(req_id)?;
+    let mut redis_conn = db.0.redis_pool.get().await.with_api_err().fit(req_id)?;
+
+    let res = overview::overview(
+        &conn,
+        &mut redis_conn,
+        &query.login,
+        &map,
+        Default::default(),
+    )
+    .await
+    .fit(req_id)?;
     utils::json(res)
 }

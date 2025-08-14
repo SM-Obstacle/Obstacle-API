@@ -1,16 +1,20 @@
 use crate::{RecordsResult, RecordsResultExt};
-use actix_web::web::Query;
+use actix_web::web;
+use entity::{checkpoint_times, global_event_records, global_records, maps, players};
 use futures::StreamExt;
-use records_lib::{MySqlPool, opt_event::OptEvent};
+use records_lib::opt_event::OptEvent;
+use sea_orm::{
+    ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect,
+    StreamTrait,
+};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 
 #[derive(Deserialize)]
 pub struct PbBody {
     pub map_uid: String,
 }
 
-pub type PbReq = Query<PbBody>;
+pub type PbReq = web::Query<PbBody>;
 
 #[derive(Serialize, Default)]
 pub struct PbResponse {
@@ -18,48 +22,63 @@ pub struct PbResponse {
     cps_times: Vec<PbCpTimesResponseItem>,
 }
 
-#[derive(FromRow)]
+#[derive(FromQueryResult)]
 struct PbResponseItem {
     rs_count: i32,
     cp_num: u32,
     time: i32,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize)]
 struct PbCpTimesResponseItem {
     cp_num: u32,
     time: i32,
 }
 
-pub async fn pb(
-    db: MySqlPool,
+pub async fn pb<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
     player_login: &str,
     map_uid: &str,
     event: OptEvent<'_>,
 ) -> RecordsResult<PbResponse> {
-    let builder = event.sql_frag_builder();
-
-    let mut query = sqlx::QueryBuilder::new(
-        "select r.respawn_count as rs_count, ct.cp_num as cp_num, ct.time as time
-        from ",
-    );
-    builder
-        .push_event_view_name(&mut query, "r")
-        .push(
-            " inner join maps m on m.id = r.map_id \
-            inner join players p on r.record_player_id = p.id \
-            inner join checkpoint_times ct on r.record_id = ct.record_id \
-            where m.game_id = ",
-        )
-        .push_bind(map_uid)
-        .push(" and p.login = ")
-        .push_bind(player_login)
-        .push(" ");
-    let query = builder
-        .push_event_filter(&mut query, "r")
-        .build_query_as::<PbResponseItem>();
-
-    let mut times = query.fetch(&db);
+    let mut times = match event.event {
+        Some((ev, ed)) => global_event_records::Entity::find()
+            .inner_join(maps::Entity)
+            .inner_join(players::Entity)
+            .reverse_join(checkpoint_times::Entity)
+            .filter(
+                maps::Column::GameId
+                    .eq(map_uid)
+                    .and(players::Column::Login.eq(player_login))
+                    .and(global_event_records::Column::EventId.eq(ev.id))
+                    .and(global_event_records::Column::EditionId.eq(ed.id)),
+            )
+            .select_only()
+            .column_as(global_event_records::Column::RespawnCount, "rs_count")
+            .column_as(checkpoint_times::Column::CpNum, "cp_num")
+            .column_as(checkpoint_times::Column::Time, "time")
+            .into_model::<PbResponseItem>()
+            .stream(conn)
+            .await
+            .with_api_err()?,
+        None => global_records::Entity::find()
+            .inner_join(maps::Entity)
+            .inner_join(players::Entity)
+            .reverse_join(checkpoint_times::Entity)
+            .filter(
+                maps::Column::GameId
+                    .eq(map_uid)
+                    .and(players::Column::Login.eq(player_login)),
+            )
+            .select_only()
+            .column_as(global_records::Column::RespawnCount, "rs_count")
+            .column_as(checkpoint_times::Column::CpNum, "cp_num")
+            .column_as(checkpoint_times::Column::Time, "time")
+            .into_model::<PbResponseItem>()
+            .stream(conn)
+            .await
+            .with_api_err()?,
+    };
 
     let mut res = PbResponse {
         rs_count: 0,

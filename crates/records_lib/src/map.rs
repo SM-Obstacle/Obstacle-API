@@ -2,27 +2,35 @@
 
 use core::fmt;
 
-use crate::{error::RecordsResult, models::Map};
+use entity::maps;
+use sea_orm::{ColumnTrait as _, ConnectionTrait, EntityTrait as _, QueryFilter as _};
+
+use crate::error::RecordsResult;
 
 /// Returns the map bound to the provided ID.
-pub async fn get_map_from_id(conn: &mut sqlx::MySqlConnection, map_id: u32) -> RecordsResult<Map> {
-    let r = sqlx::query_as("select * from maps where id = ?")
-        .bind(map_id)
-        .fetch_one(conn)
-        .await?;
-    Ok(r)
+// TODO: remove useless wrapper
+pub async fn get_map_from_id<C: ConnectionTrait>(
+    conn: &C,
+    map_id: u32,
+) -> RecordsResult<maps::Model> {
+    let map = maps::Entity::find_by_id(map_id)
+        .one(conn)
+        .await?
+        .unwrap_or_else(|| panic!("Map {map_id} is supposed to be in database"));
+    Ok(map)
 }
 
 /// Returns the optional map from its UID.
-pub async fn get_map_from_uid(
-    conn: &mut sqlx::MySqlConnection,
+// TODO: remove useless wrapper
+pub async fn get_map_from_uid<C: ConnectionTrait>(
+    conn: &C,
     map_uid: &str,
-) -> RecordsResult<Option<Map>> {
-    let r = sqlx::query_as("SELECT * FROM maps WHERE game_id = ?")
-        .bind(map_uid)
-        .fetch_optional(conn)
+) -> RecordsResult<Option<maps::Model>> {
+    let map = maps::Entity::find()
+        .filter(maps::Column::GameId.eq(map_uid))
+        .one(conn)
         .await?;
-    Ok(r)
+    Ok(map)
 }
 
 /// Represents an item returned by a request to the MX API related to maps.

@@ -1,22 +1,19 @@
-use async_graphql::{dataloader::DataLoader, Context};
-use records_lib::{
-    models::{self, CheckpointTime},
-    Database, MySqlPool,
-};
+use async_graphql::{Context, dataloader::DataLoader};
+use entity::records;
+use records_lib::{Database, MySqlPool, models::CheckpointTime};
 
 use super::{
     map::{Map, MapLoader},
     player::{Player, PlayerLoader},
 };
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct RankedRecord {
-    #[sqlx(flatten)]
-    inner: models::RankedRecord,
+    inner: records::RankedRecord,
 }
 
-impl From<models::RankedRecord> for RankedRecord {
-    fn from(inner: models::RankedRecord) -> Self {
+impl From<records::RankedRecord> for RankedRecord {
+    fn from(inner: records::RankedRecord) -> Self {
         Self { inner }
     }
 }

@@ -2,6 +2,8 @@ use std::{future::ready, pin::Pin};
 
 use sea_orm::entity::prelude::*;
 
+use crate::banishments;
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[sea_orm(table_name = "current_bans")]
 pub struct Model {
@@ -61,5 +63,19 @@ impl ActiveModelBehavior for ActiveModel {
         Self: Send + 'b,
     {
         Box::pin(ready(Err(DbErr::RecordNotUpdated)))
+    }
+}
+
+impl From<Model> for banishments::Model {
+    fn from(value: Model) -> Self {
+        Self {
+            id: value.id,
+            date_ban: value.date_ban,
+            duration: value.duration,
+            was_reprieved: value.was_reprieved,
+            reason: value.reason,
+            player_id: value.player_id,
+            banished_by: value.banished_by,
+        }
     }
 }

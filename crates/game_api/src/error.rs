@@ -1,7 +1,8 @@
 use std::fmt;
 
 use actix_web::HttpResponse;
-use records_lib::{models, NullableInteger};
+use entity::banishments;
+use sea_orm::DbErr;
 use tokio::sync::mpsc::error::SendError;
 use tracing_actix_web::RequestId;
 
@@ -50,8 +51,8 @@ pub enum RecordsErrorKind {
     MissingGetTokenReq = 203,
     #[error("the state has already been received by the server")]
     StateAlreadyReceived(chrono::DateTime<chrono::Utc>) = 204,
-    #[error("banned player {0}")]
-    BannedPlayer(models::Banishment) = 205,
+    #[error("banned player")]
+    BannedPlayer(banishments::Model) = 205,
     #[error("error on sending request to MP services: {0:?}")]
     AccessTokenErr(AccessTokenErr) = 206,
     #[error("invalid ManiaPlanet code on /player/give_token request")]
@@ -102,6 +103,12 @@ impl RecordsErrorKind {
             // SAFETY: Self is repr(i32).
             other => unsafe { *(other as *const Self as *const _) },
         }
+    }
+}
+
+impl From<DbErr> for RecordsErrorKind {
+    fn from(value: DbErr) -> Self {
+        Self::Lib(value.into())
     }
 }
 
@@ -174,27 +181,7 @@ impl actix_web::ResponseError for RecordsError {
             R::Forbidden => HttpResponse::Forbidden().json(self.to_err_res()),
             R::MissingGetTokenReq => HttpResponse::BadRequest().json(self.to_err_res()),
             R::StateAlreadyReceived(_) => HttpResponse::BadRequest().json(self.to_err_res()),
-            R::BannedPlayer(ban) => {
-                #[derive(serde::Serialize)]
-                struct Ban<'a> {
-                    #[serde(flatten)]
-                    ban: &'a models::Banishment,
-                    duration: NullableInteger,
-                }
-
-                #[derive(serde::Serialize)]
-                struct BannedPlayerResponse<'a> {
-                    message: String,
-                    ban: Ban<'a>,
-                }
-                HttpResponse::Forbidden().json(BannedPlayerResponse {
-                    message: ban.to_string(),
-                    ban: Ban {
-                        ban,
-                        duration: NullableInteger(ban.duration.map(|x| x as _)),
-                    },
-                })
-            }
+            R::BannedPlayer(_) => HttpResponse::Forbidden().json(self.to_err_res()),
             R::AccessTokenErr(_) => HttpResponse::BadRequest().json(self.to_err_res()),
             R::InvalidMPCode => HttpResponse::BadRequest().json(self.to_err_res()),
             R::Timeout(_) => HttpResponse::RequestTimeout().json(self.to_err_res()),
@@ -222,6 +209,7 @@ impl actix_web::ResponseError for RecordsError {
                     HttpResponse::InternalServerError().json(self.to_err_res())
                 }
                 LR::PoolError(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
+                LR::DbError(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
                 LR::Internal => HttpResponse::InternalServerError().json(self.to_err_res()),
 
                 // --- Logical errors

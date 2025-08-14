@@ -1,54 +1,74 @@
 //! This module contains anything related to in-game players in this library.
 
+use entity::{global_event_records, global_records, players};
+use sea_orm::{ColumnTrait as _, ConnectionTrait, EntityTrait as _, QueryFilter as _, QuerySelect};
+
+use crate::error::RecordsResult;
 use crate::opt_event::OptEvent;
-use crate::{error::RecordsResult, models::Player};
 
 /// Returns the time of a player on a map.
-pub async fn get_time_on_map(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn get_time_on_map<C: ConnectionTrait>(
+    conn: &C,
     player_id: u32,
     map_id: u32,
     event: OptEvent<'_>,
 ) -> RecordsResult<Option<i32>> {
-    let builder = event.sql_frag_builder();
-
-    let mut q = sqlx::QueryBuilder::new("select time from ");
-    builder
-        .push_event_view_name(&mut q, "r")
-        .push(" where map_id = ")
-        .push_bind(map_id)
-        .push(" and record_player_id = ")
-        .push_bind(player_id);
-    let query = builder.push_event_filter(&mut q, "r").build_query_scalar();
-
-    let time = query.fetch_optional(conn).await?;
+    let time = match event.event {
+        Some((ev, ed)) => {
+            global_event_records::Entity::find()
+                .filter(
+                    global_event_records::Column::MapId
+                        .eq(map_id)
+                        .and(global_event_records::Column::RecordPlayerId.eq(player_id))
+                        .and(global_event_records::Column::EventId.eq(ev.id))
+                        .and(global_event_records::Column::EditionId.eq(ed.id)),
+                )
+                .column(global_event_records::Column::Time)
+                .into_tuple()
+                .one(conn)
+                .await?
+        }
+        None => {
+            global_records::Entity::find()
+                .filter(
+                    global_records::Column::MapId
+                        .eq(map_id)
+                        .and(global_records::Column::RecordPlayerId.eq(player_id)),
+                )
+                .column(global_records::Column::Time)
+                .into_tuple()
+                .one(conn)
+                .await?
+        }
+    };
 
     Ok(time)
 }
 
 /// Returns the optional player from the provided login.
-pub async fn get_player_from_login(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn get_player_from_login<C: ConnectionTrait>(
+    conn: &C,
     login: &str,
-) -> RecordsResult<Option<Player>> {
-    let r = sqlx::query_as("SELECT * FROM players WHERE login = ?")
-        .bind(login)
-        .fetch_optional(conn)
+) -> RecordsResult<Option<players::Model>> {
+    let player = players::Entity::find()
+        .filter(players::Column::Login.eq(login))
+        .one(conn)
         .await?;
-    Ok(r)
+    Ok(player)
 }
 
 /// Returns the player from the provided ID.
 ///
 /// The return of this function isn't optional as if an ID is provided, the player most likely
 /// already exists.
-pub async fn get_player_from_id(
-    conn: &mut sqlx::MySqlConnection,
+// TODO: remove this useless wrapper
+pub async fn get_player_from_id<C: ConnectionTrait>(
+    conn: &C,
     player_id: u32,
-) -> RecordsResult<Player> {
-    let r = sqlx::query_as("SELECT * FROM players WHERE id = ?")
-        .bind(player_id)
-        .fetch_one(conn)
-        .await?;
-    Ok(r)
+) -> RecordsResult<players::Model> {
+    let player = players::Entity::find_by_id(player_id)
+        .one(conn)
+        .await?
+        .unwrap_or_else(|| panic!("Player with ID {player_id} is supposed to be in database"));
+    Ok(player)
 }

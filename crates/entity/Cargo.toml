@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 serde = { workspace = true }
 sea-orm = { workspace = true }
+thiserror = { workspace = true }

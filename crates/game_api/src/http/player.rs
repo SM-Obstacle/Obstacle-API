@@ -5,21 +5,23 @@ use actix_web::web::Data;
 use actix_web::{
     HttpResponse, Responder, Scope,
     body::BoxBody,
-    web::{self, Json, Query},
+    web::{self, Json},
 };
+use entity::{banishments, current_bans, maps, players, records};
 use futures::TryStreamExt;
 use records_lib::{
-    Database, DatabaseConnection, ModeVersion, TxnDatabaseConnection, acquire,
-    event::{self},
-    models::{self, Banishment},
-    must,
-    opt_event::OptEvent,
-    player,
-    transaction::{self, CanWrite, ReadWrite},
+    Database, ModeVersion, RedisConnection, event, must, opt_event::OptEvent, player, transaction,
 };
 use reqwest::Client;
 #[cfg(auth)]
 use reqwest::StatusCode;
+use sea_orm::{
+    ActiveValue::Set,
+    ColumnTrait as _, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult,
+    QueryFilter, QuerySelect, StatementBuilder, StreamTrait, TransactionTrait,
+    prelude::Expr,
+    sea_query::{ExprTrait as _, Query},
+};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 #[cfg(auth)]
@@ -72,40 +74,47 @@ pub fn player_scope() -> Scope {
     scope
 }
 
-#[derive(Serialize, Deserialize, Clone, FromRow, Debug)]
+#[derive(Serialize, Deserialize, Clone, FromQueryResult, Debug)]
 pub struct PlayerInfoNetBody {
     pub login: String,
     pub name: String,
     pub zone_path: Option<String>,
 }
 
-async fn insert_player(db: &Database, body: &PlayerInfoNetBody) -> RecordsResult<u32> {
-    let id = sqlx::query_scalar(
-        "INSERT INTO players
-        (login, name, join_date, zone_path, admins_note, role)
-        VALUES (?, ?, SYSDATE(), ?, NULL, 0) RETURNING id",
-    )
-    .bind(&body.login)
-    .bind(&body.name)
-    .bind(&body.zone_path)
-    .fetch_one(&db.mysql_pool)
-    .await
-    .with_api_err()?;
+async fn insert_player<C: ConnectionTrait>(
+    conn: &C,
+    body: &PlayerInfoNetBody,
+) -> RecordsResult<players::Model> {
+    let new_player = players::ActiveModel {
+        login: Set(body.login.clone()),
+        name: Set(body.name.clone()),
+        zone_path: Set(body.zone_path.clone()),
+        join_date: Set(Some(chrono::Utc::now().naive_utc())),
+        admins_note: Set(None),
+        role: Set(0),
+        ..Default::default()
+    };
 
-    Ok(id)
+    players::Entity::insert(new_player)
+        .exec_with_returning(conn)
+        .await
+        .with_api_err()
 }
 
-pub async fn get_or_insert(db: &Database, body: &PlayerInfoNetBody) -> RecordsResult<u32> {
-    if let Some(id) = sqlx::query_scalar("SELECT id FROM players WHERE login = ?")
-        .bind(&body.login)
-        .fetch_optional(&db.mysql_pool)
+pub async fn get_or_insert<C: ConnectionTrait>(
+    conn: &C,
+    body: &PlayerInfoNetBody,
+) -> RecordsResult<players::Model> {
+    if let Some(player) = players::Entity::find()
+        .filter(players::Column::Login.eq(&body.login))
+        .one(conn)
         .await
         .with_api_err()?
     {
-        return Ok(id);
+        return Ok(player);
     }
 
-    insert_player(db, body).await
+    insert_player(conn, body).await
 }
 
 pub async fn update(
@@ -115,13 +124,16 @@ pub async fn update(
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<PlayerInfoNetBody>,
 ) -> RecordsResponse<impl Responder> {
-    match auth::check_auth_for(&db, &login, &token, privilege::PLAYER).await {
-        Ok(id) => update_player(&db, id, body).await.fit(req_id)?,
+    let auth_check = auth::check_auth_for(&db, &login, &token, privilege::PLAYER).await;
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
+
+    match auth_check {
+        Ok(id) => update_player(&conn, id, body).await.fit(req_id)?,
         // At this point, if Redis has registered a token with the login, it means that
         // the player is not yet added to the Obstacle database but effectively
         // has a ManiaPlanet account
         Err(RecordsErrorKind::Lib(records_lib::error::RecordsError::PlayerNotFound(_))) => {
-            let _ = insert_player(&db, &body).await.fit(req_id)?;
+            let _ = insert_player(&conn, &body).await.fit(req_id)?;
         }
         Err(e) => return Err(e).fit(req_id),
     }
@@ -129,48 +141,57 @@ pub async fn update(
     Ok(HttpResponse::Ok().finish())
 }
 
-pub async fn update_player(
-    db: &Database,
+pub async fn update_player<C: ConnectionTrait>(
+    conn: &C,
     player_id: u32,
     body: PlayerInfoNetBody,
 ) -> RecordsResult<()> {
-    sqlx::query("UPDATE players SET name = ?, zone_path = ? WHERE id = ?")
-        .bind(body.name)
-        .bind(body.zone_path)
-        .bind(player_id)
-        .execute(&db.mysql_pool)
-        .await
-        .with_api_err()?;
+    let mut update = Query::update();
+    let update = update
+        .table(players::Entity)
+        .and_where(players::Column::Id.eq(player_id))
+        .value(players::Column::Name, body.name)
+        .value(players::Column::ZonePath, body.zone_path);
+    let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
+    conn.execute(stmt).await.with_api_err()?;
 
     Ok(())
 }
 
-pub async fn get_ban_during(
-    db: &mut sqlx::MySqlConnection,
+pub async fn get_ban_during<C: ConnectionTrait>(
+    conn: &C,
     player_id: u32,
     at: chrono::NaiveDateTime,
-) -> RecordsResult<Option<Banishment>> {
-    sqlx::query_as(
-        "select * from banishments where player_id = ? and date_ban < ?
-            and (duration is null or date_ban + duration > ?)",
-    )
-    .bind(player_id)
-    .bind(at)
-    .bind(at)
-    .fetch_optional(db)
-    .await
-    .map_err(From::from)
+) -> RecordsResult<Option<banishments::Model>> {
+    banishments::Entity::find()
+        .filter(
+            banishments::Column::PlayerId
+                .eq(player_id)
+                .and(banishments::Column::DateBan.lt(at))
+                .and(
+                    banishments::Column::Duration.is_null().or(Expr::col(
+                        banishments::Column::DateBan,
+                    )
+                    .add(Expr::col(banishments::Column::Duration))
+                    .gt(at)),
+                ),
+        )
+        .one(conn)
+        .await
+        .map_err(From::from)
 }
 
-pub async fn check_banned(
-    db: &mut sqlx::MySqlConnection,
+pub async fn check_banned<C: ConnectionTrait>(
+    conn: &C,
     player_id: u32,
-) -> Result<Option<Banishment>, RecordsErrorKind> {
-    let r = sqlx::query_as("SELECT * FROM current_bans WHERE player_id = ?")
-        .bind(player_id)
-        .fetch_optional(db)
+) -> Result<Option<banishments::Model>, RecordsErrorKind> {
+    let r = current_bans::Entity::find()
+        .filter(current_bans::Column::PlayerId.eq(player_id))
+        .one(conn)
         .await
-        .with_api_err()?;
+        .with_api_err()?
+        .map(From::from);
+
     Ok(r)
 }
 
@@ -247,45 +268,39 @@ async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsR
     Ok(res_login.to_lowercase() == login.to_lowercase())
 }
 
-async fn finished_impl<M: CanWrite>(
-    conn: &mut TxnDatabaseConnection<'_, M>,
+async fn finished_impl<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     params: ExpandedInsertRecordParams<'_>,
     player_login: &str,
-    map: &models::Map,
+    map: &maps::Model,
 ) -> RecordsResult<pf::FinishedOutput> {
-    let res = pf::finished(conn, params, player_login, map).await?;
+    let res = pf::finished(conn, redis_conn, params, player_login, map).await?;
 
     // If the record isn't in an event context, save the record to the events that have the map
     // and allow records saving without an event context.
-    let editions = records_lib::event::get_editions_which_contain(conn.conn.mysql_conn, map.id)
+    let editions = records_lib::event::get_editions_which_contain(conn, map.id)
+        .await
+        .with_api_err()?
         .try_collect::<Vec<_>>()
         .await
         .with_api_err()?;
     for (event_id, edition_id, original_map_id) in editions {
-        super::event::insert_event_record(
-            conn.conn.mysql_conn,
-            res.record_id,
-            event_id,
-            edition_id,
-        )
-        .await?;
+        super::event::insert_event_record(conn, res.record_id, event_id, edition_id).await?;
 
         let Some(original_map_id) = original_map_id else {
             continue;
         };
 
         // Get the previous time of the player on the original map, to check if it would be a PB or not.
-        let previous_time = player::get_time_on_map(
-            conn.conn.mysql_conn,
-            res.player_id,
-            original_map_id,
-            Default::default(),
-        )
-        .await?;
+        let previous_time =
+            player::get_time_on_map(conn, res.player_id, original_map_id, Default::default())
+                .await?;
         let is_pb = previous_time.is_none_or(|t| t > params.body.time);
 
         pf::insert_record(
             conn,
+            redis_conn,
             ExpandedInsertRecordParams {
                 event: Default::default(),
                 ..params
@@ -309,49 +324,47 @@ pub async fn finished_at_with_pool(
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
-    let mut conn = acquire!(db.with_api_err().fit(req_id)?);
-    let res = finished_at(&mut conn, req_id, mode_version, login, body, at).await?;
+    let conn = DatabaseConnection::from(db.mysql_pool);
+    let mut redis_conn = db.redis_pool.get().await.with_api_err().fit(req_id)?;
+    let res = finished_at(
+        &conn,
+        &mut redis_conn,
+        req_id,
+        mode_version,
+        login,
+        body,
+        at,
+    )
+    .await?;
     Ok(res)
 }
 
-pub async fn finished_at(
-    conn: &mut DatabaseConnection<'_>,
+pub async fn finished_at<C: TransactionTrait + ConnectionTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     req_id: RequestId,
     mode_version: Option<ModeVersion>,
     login: String,
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
-) -> RecordsResponse<impl Responder<Body = BoxBody> + use<>> {
-    let map = must::have_map(conn.mysql_conn, &body.map_uid)
+) -> RecordsResponse<impl Responder<Body = BoxBody> + use<C>> {
+    let map = must::have_map(conn, &body.map_uid)
         .await
         .with_api_err()
         .fit(req_id)?;
 
-    let res: pf::FinishedOutput =
-        transaction::within(conn.mysql_conn, ReadWrite, async |mysql_conn, guard| {
-            let params = ExpandedInsertRecordParams {
-                body: &body.rest,
-                at,
-                event: Default::default(),
-                mode_version,
-            };
+    let res: pf::FinishedOutput = transaction::within(conn, async |txn| {
+        let params = ExpandedInsertRecordParams {
+            body: &body.rest,
+            at,
+            event: Default::default(),
+            mode_version,
+        };
 
-            finished_impl(
-                &mut TxnDatabaseConnection::new(
-                    guard,
-                    DatabaseConnection {
-                        mysql_conn,
-                        redis_conn: conn.redis_conn,
-                    },
-                ),
-                params,
-                &login,
-                &map,
-            )
-            .await
-        })
-        .await
-        .fit(req_id)?;
+        finished_impl(txn, redis_conn, params, &login, &map).await
+    })
+    .await
+    .fit(req_id)?;
 
     json(res.res)
 }
@@ -489,16 +502,19 @@ async fn pb(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
-    Query(body): pb::PbReq,
+    web::Query(body): pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
-    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
-    let map = must::have_map(&mut mysql_conn, &body.map_uid)
+    let map = must::have_map(&conn, &body.map_uid)
         .await
         .with_api_err()
         .fit(req_id)?;
 
-    let mut editions = event::get_editions_which_contain(&mut mysql_conn, map.id);
+    let mut editions = event::get_editions_which_contain(&conn, map.id)
+        .await
+        .with_api_err()
+        .fit(req_id)?;
     let edition = editions.try_next().await.with_api_err().fit(req_id)?;
     let single_edition = editions
         .try_next()
@@ -511,20 +527,19 @@ async fn pb(
 
     let res = match edition {
         Some((event_id, edition_id, _)) if single_edition => {
-            let (event, edition) =
-                must::have_event_edition_from_ids(&mut mysql_conn, event_id, edition_id)
-                    .await
-                    .with_api_err()
-                    .fit(req_id)?;
+            let (event, edition) = must::have_event_edition_from_ids(&conn, event_id, edition_id)
+                .await
+                .with_api_err()
+                .fit(req_id)?;
             pb::pb(
-                db.0.mysql_pool,
+                &conn,
                 &login,
                 &body.map_uid,
                 OptEvent::new(&event, &edition),
             )
             .await
         }
-        _ => pb::pb(db.0.mysql_pool, &login, &body.map_uid, Default::default()).await,
+        _ => pb::pb(&conn, &login, &body.map_uid, Default::default()).await,
     }
     .fit(req_id)?;
 
@@ -536,7 +551,7 @@ struct TimesBody {
     maps_uids: Vec<String>,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize, FromQueryResult)]
 struct TimesResponseItem {
     map_uid: String,
     time: i32,
@@ -548,29 +563,25 @@ async fn times(
     db: Res<Database>,
     Json(body): Json<TimesBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
-    let player = records_lib::must::have_player(&mut mysql_conn, &login)
+    let player = records_lib::must::have_player(&conn, &login)
         .await
         .fit(req_id)?;
 
-    let mut query = sqlx::QueryBuilder::new(
-        "SELECT m.game_id AS map_uid, MIN(r.time) AS time
-        FROM maps m
-        INNER JOIN records r ON r.map_id = m.id
-        WHERE r.record_player_id = ",
-    );
-    let mut sep = query
-        .push_bind(player.id)
-        .push(" AND m.game_id IN (")
-        .separated(", ");
-    for uid in body.maps_uids {
-        sep.push_bind(uid);
-    }
-    let result = query
-        .push(") GROUP BY m.id")
-        .build_query_as::<TimesResponseItem>()
-        .fetch_all(&mut *mysql_conn)
+    let result = maps::Entity::find()
+        .reverse_join(records::Entity)
+        .filter(
+            records::Column::RecordPlayerId
+                .eq(player.id)
+                .and(maps::Column::GameId.is_in(body.maps_uids)),
+        )
+        .group_by(maps::Column::Id)
+        .select_only()
+        .column_as(maps::Column::GameId, "map_uid")
+        .column_as(records::Column::Time.min(), "time")
+        .into_model::<TimesResponseItem>()
+        .all(&conn)
         .await
         .with_api_err()
         .fit(req_id)?;
@@ -596,7 +607,7 @@ struct InfoResponse {
 pub async fn info(
     req_id: RequestId,
     db: Res<Database>,
-    Query(body): Query<InfoBody>,
+    web::Query(body): web::Query<InfoBody>,
 ) -> RecordsResponse<impl Responder> {
     let Some(info) = sqlx::query_as::<_, InfoResponse>(
         "SELECT *, (SELECT role_name FROM role WHERE id = role) as role_name

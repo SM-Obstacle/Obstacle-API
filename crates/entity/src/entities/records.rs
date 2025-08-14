@@ -75,3 +75,9 @@ impl Related<super::players::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+#[derive(Debug, Clone)]
+pub struct RankedRecord {
+    pub rank: i32,
+    pub record: Model,
+}

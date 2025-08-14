@@ -2,7 +2,9 @@ mod m20250806_183646_initial;
 mod m20250806_191853_first;
 mod m20250806_202048_populate;
 
-pub use sea_orm_migration::prelude::*;
+use sea_orm_migration::prelude::*;
+
+pub use sea_orm_migration::MigratorTrait;
 
 pub struct Migrator;
 

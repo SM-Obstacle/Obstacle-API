@@ -48,16 +48,23 @@
 //! See <https://github.com/maniaplanet/documentation/blob/master/13.web-services/01.oauth2/docs.md#auth-code-flow-or-explicit-flow-or-server-side-flow>
 //! for more information.
 
+// TODO: remove this shitty conditional compilation thing which blows up imports
+
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
 #[cfg(auth)]
 use deadpool_redis::redis::AsyncCommands;
+#[cfg(auth)]
+use entity::{players, role};
 use futures::Future;
+use records_lib::Database;
 use records_lib::models::ApiStatusKind;
 #[cfg(auth)]
 use records_lib::redis_key::{mp_token_key, web_token_key};
-use records_lib::{Database, acquire};
+use sea_orm::DatabaseConnection;
+#[cfg(auth)]
+use sea_orm::{ColumnTrait as _, EntityTrait, QueryFilter as _, QuerySelect};
 use serde::{Deserialize, Serialize};
 #[cfg(auth)]
 use sha256::digest;
@@ -70,10 +77,10 @@ use tokio::time::timeout;
 use tracing::Level;
 use tracing_actix_web::RequestId;
 
+#[cfg(auth)]
+use crate::RecordsResultExt as _;
 use crate::utils::{ApiStatus, get_api_status};
-use crate::{
-    AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, RecordsResultExt, Res, must,
-};
+use crate::{AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, Res, must};
 use crate::{RecordsErrorKind, RecordsResult, http::player};
 #[cfg(auth)]
 use records_lib::gen_random_str;
@@ -255,6 +262,8 @@ impl AuthState {
 /// The tokens are stored in the Redis database.
 #[cfg(auth)]
 pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String, String)> {
+    use crate::RecordsResultExt as _;
+
     let mp_token = gen_random_str(256);
     let web_token = gen_random_str(32);
 
@@ -291,17 +300,18 @@ pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String,
 /// * If it is valid, but the player doesn't exist in the database, it returns a `PlayerNotFound` error
 /// * If the player hasn't the required role, or is banned, it returns a `Forbidden` error
 /// * Otherwise, it returns Ok(())
+// TODO: don't ask for a database but for mysql and redis connections directly
 pub async fn check_auth_for(
     db: &Database,
     login: &str,
     #[cfg_attr(not(auth), allow(unused_variables))] token: &str,
     #[cfg_attr(not(auth), allow(unused_variables))] required: privilege::Flags,
 ) -> RecordsResult<u32> {
-    let conn = acquire!(db.with_api_err()?);
+    let conn = DatabaseConnection::from(db.mysql_pool.clone());
 
-    let player = records_lib::must::have_player(conn.mysql_conn, login).await?;
+    let player = records_lib::must::have_player(&conn, login).await?;
 
-    if let Some(ban) = player::check_banned(conn.mysql_conn, player.id).await? {
+    if let Some(ban) = player::check_banned(&conn, player.id).await? {
         return Err(RecordsErrorKind::BannedPlayer(ban));
     };
 
@@ -312,26 +322,24 @@ pub async fn check_auth_for(
 
     #[cfg(auth)]
     {
-        let stored_token: Option<String> = conn
-            .redis_conn
-            .get(mp_token_key(login))
-            .await
-            .with_api_err()?;
+        let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
+        let stored_token: Option<String> =
+            redis_conn.get(mp_token_key(login)).await.with_api_err()?;
 
         if !matches!(stored_token, Some(t) if t == digest(token)) {
             return Err(RecordsErrorKind::Unauthorized);
         }
 
-        let role: privilege::Flags = sqlx::query_scalar(
-            "SELECT r.privileges
-        FROM players p
-        INNER JOIN role r ON r.id = p.role
-        WHERE p.id = ?",
-        )
-        .bind(player.id)
-        .fetch_one(&db.mysql_pool)
-        .await
-        .with_api_err()?;
+        let role: privilege::Flags = players::Entity::find()
+            .filter(players::Column::Id.eq(player.id))
+            .inner_join(role::Entity)
+            .select_only()
+            .column(role::Column::Privileges)
+            .into_tuple()
+            .one(&conn)
+            .await
+            .with_api_err()?
+            .unwrap_or_else(|| panic!("Player {} should have a role", player.id));
 
         if role & required != required {
             return Err(RecordsErrorKind::Forbidden);

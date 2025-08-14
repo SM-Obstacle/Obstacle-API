@@ -5,15 +5,19 @@ use crate::{
 };
 use actix_web::{
     HttpResponse, Responder, Scope,
-    web::{self, Json, Query},
+    web::{self, Json},
 };
+use entity::{maps, player_rating, players, rating, rating_kind};
 use futures::{StreamExt, future::try_join_all};
-use records_lib::{
-    Database, acquire,
-    models::{self, Map, Player},
+use records_lib::Database;
+use sea_orm::{
+    ActiveValue::Set,
+    ColumnTrait as _, ConnectionTrait, DatabaseConnection, EntityTrait as _, FromQueryResult,
+    PaginatorTrait, QueryFilter, QuerySelect, StatementBuilder,
+    prelude::Expr,
+    sea_query::{Func, Query},
 };
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use tracing_actix_web::RequestId;
 
 use super::player::{self, PlayerInfoNetBody};
@@ -43,42 +47,41 @@ async fn insert(
     db: Res<Database>,
     Json(body): Json<UpdateMapBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = acquire!(db.with_api_err().fit(req_id)?);
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
-    let res = records_lib::map::get_map_from_uid(conn.mysql_conn, &body.map_uid)
+    let res = records_lib::map::get_map_from_uid(&conn, &body.map_uid)
         .await
         .fit(req_id)?;
 
-    if let Some(Map { id, cps_number, .. }) = res {
+    if let Some(maps::Model { id, cps_number, .. }) = res {
         if cps_number.is_none() {
-            sqlx::query("UPDATE maps SET cps_number = ? WHERE id = ?")
-                .bind(body.cps_number)
-                .bind(id)
-                .execute(&db.mysql_pool)
-                .await
-                .with_api_err()
-                .fit(req_id)?;
+            let mut update = Query::update();
+            let update = update
+                .table(maps::Entity)
+                .value(maps::Column::CpsNumber, body.cps_number)
+                .and_where(maps::Column::Id.eq(id));
+            let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
+            conn.execute(stmt).await.with_api_err().fit(req_id)?;
         }
+    } else {
+        let player = player::get_or_insert(&conn, &body.author)
+            .await
+            .fit(req_id)?;
 
-        return Ok(HttpResponse::Ok().finish());
+        let new_map = maps::ActiveModel {
+            game_id: Set(body.map_uid),
+            player_id: Set(player.id),
+            name: Set(body.name),
+            cps_number: Set(Some(body.cps_number)),
+            ..Default::default()
+        };
+
+        maps::Entity::insert(new_map)
+            .exec(&conn)
+            .await
+            .with_api_err()
+            .fit(req_id)?;
     }
-
-    // FIXME: don't pass `db` but a mut ref to `conn` instead
-    let player_id = player::get_or_insert(&db, &body.author).await.fit(req_id)?;
-
-    sqlx::query(
-        "INSERT INTO maps
-        (game_id, player_id, name, cps_number)
-        VALUES (?, ?, ?, ?) RETURNING id",
-    )
-    .bind(&body.map_uid)
-    .bind(player_id)
-    .bind(&body.name)
-    .bind(body.cps_number)
-    .execute(&mut **conn.mysql_conn)
-    .await
-    .with_api_err()
-    .fit(req_id)?;
 
     Ok(HttpResponse::Ok().finish())
 }
@@ -88,7 +91,7 @@ pub struct PlayerRatingBody {
     map_uid: String,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize, FromQueryResult)]
 struct Rating {
     kind: String,
     rating: f32,
@@ -114,40 +117,46 @@ pub async fn player_rating(
     db: Res<Database>,
     Json(body): Json<PlayerRatingBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
-    let player_id = records_lib::must::have_player(&mut mysql_conn, &login)
+    let player_id = records_lib::must::have_player(&conn, &login)
         .await
         .fit(req_id)?
         .id;
-    let map_id = records_lib::must::have_map(&mut mysql_conn, &body.map_uid)
+    let map_id = records_lib::must::have_map(&conn, &body.map_uid)
         .await
         .fit(req_id)?
         .id;
 
-    let rating = match sqlx::query_scalar(
-        "SELECT rating_date FROM rating WHERE player_id = ? AND map_id = ?",
-    )
-    .bind(player_id)
-    .bind(map_id)
-    .fetch_optional(&mut *mysql_conn)
-    .await
-    .with_api_err()
-    .fit(req_id)?
+    let rating = match rating::Entity::find()
+        .filter(
+            rating::Column::PlayerId
+                .eq(player_id)
+                .and(rating::Column::MapId.eq(map_id)),
+        )
+        .select_only()
+        .column(rating::Column::RatingDate)
+        .into_tuple()
+        .one(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?
     {
         Some(rating_date) => {
-            let ratings = sqlx::query_as(
-                "SELECT k.kind, rating
-            FROM player_rating r
-            INNER JOIN rating_kind k ON k.id = r.kind
-            WHERE player_id = ? AND map_id = ?",
-            )
-            .bind(player_id)
-            .bind(map_id)
-            .fetch_all(&mut *mysql_conn)
-            .await
-            .with_api_err()
-            .fit(req_id)?;
+            let ratings = player_rating::Entity::find()
+                .filter(
+                    player_rating::Column::PlayerId
+                        .eq(player_id)
+                        .and(player_rating::Column::MapId.eq(map_id)),
+                )
+                .select_only()
+                .column(rating_kind::Column::Kind)
+                .column(player_rating::Column::Rating)
+                .into_model()
+                .all(&conn)
+                .await
+                .with_api_err()
+                .fit(req_id)?;
 
             Some(PlayerRating {
                 rating_date,
@@ -157,17 +166,17 @@ pub async fn player_rating(
         None => None,
     };
 
-    let (map_name, author_login) = sqlx::query_as(
-        "SELECT m.name, p.login
-        FROM maps m
-        INNER JOIN players p ON p.id = m.player_id
-        WHERE m.id = ?",
-    )
-    .bind(map_id)
-    .fetch_one(&mut *mysql_conn)
-    .await
-    .with_api_err()
-    .fit(req_id)?;
+    let (map_name, author_login) = maps::Entity::find_by_id(map_id)
+        .inner_join(players::Entity)
+        .select_only()
+        .column(maps::Column::Name)
+        .column(players::Column::Login)
+        .into_tuple()
+        .one(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?
+        .unwrap_or_else(|| panic!("Map {map_id} should exist in database"));
 
     json(PlayerRatingResponse {
         player_login: login,
@@ -202,24 +211,27 @@ pub async fn ratings(
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<RatingsBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let conn = DatabaseConnection::from(db.0.mysql_pool.clone());
 
-    let player = records_lib::must::have_player(&mut mysql_conn, &login)
+    let player = records_lib::must::have_player(&conn, &login)
         .await
         .fit(req_id)?;
-    let map = records_lib::must::have_map(&mut mysql_conn, &body.map_id)
+    let map = records_lib::must::have_map(&conn, &body.map_id)
         .await
         .fit(req_id)?;
 
     let (role, author_login) = if map.player_id == player.id {
         (privilege::PLAYER, login.clone())
     } else {
-        let login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
-            .bind(map.player_id)
-            .fetch_one(&mut *mysql_conn)
+        let login = players::Entity::find_by_id(map.player_id)
+            .select_only()
+            .column(players::Column::Login)
+            .into_tuple()
+            .one(&conn)
             .await
             .with_api_err()
-            .fit(req_id)?;
+            .fit(req_id)?
+            .unwrap_or_else(|| panic!("Player {} should be in database", map.player_id));
         (privilege::ADMIN, login)
     };
 
@@ -227,39 +239,47 @@ pub async fn ratings(
         .await
         .fit(req_id)?;
 
-    let players_ratings =
-        sqlx::query_as::<_, models::Rating>("SELECT * FROM rating WHERE map_id = ?")
-            .bind(map.id)
-            .fetch(&db.mysql_pool)
-            .map(|rating| async {
-                let rating = rating.with_api_err()?;
+    let players_ratings = rating::Entity::find()
+        .filter(rating::Column::MapId.eq(map.id))
+        .stream(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?
+        .map(|rating| async {
+            let rating = rating.with_api_err()?;
 
-                let player_login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
-                    .bind(rating.player_id)
-                    .fetch_one(&db.mysql_pool)
-                    .await
-                    .with_api_err()?;
+            let player_login = players::Entity::find_by_id(rating.player_id)
+                .select_only()
+                .column(players::Column::Login)
+                .into_tuple()
+                .one(&conn)
+                .await
+                .with_api_err()?
+                .unwrap_or_else(|| panic!("Player {} should exist in database", rating.player_id));
 
-                let ratings = sqlx::query_as::<_, Rating>(
-                    "SELECT k.kind, rating
-            FROM player_rating r
-            INNER JOIN rating_kind k ON k.id = r.kind
-            WHERE player_id = ? AND map_id = ?",
+            let ratings = player_rating::Entity::find()
+                .inner_join(rating_kind::Entity)
+                .filter(
+                    player_rating::Column::PlayerId
+                        .eq(rating.player_id)
+                        .and(player_rating::Column::MapId.eq(rating.map_id)),
                 )
-                .bind(rating.player_id)
-                .bind(rating.map_id)
-                .fetch_all(&db.mysql_pool)
+                .select_only()
+                .column(rating_kind::Column::Kind)
+                .column(player_rating::Column::Rating)
+                .into_model::<Rating>()
+                .all(&conn)
                 .await
                 .with_api_err()?;
 
-                RecordsResult::Ok(PlayerGroupedRatings {
-                    player_login,
-                    rating_date: rating.rating_date,
-                    ratings,
-                })
+            RecordsResult::Ok(PlayerGroupedRatings {
+                player_login,
+                rating_date: rating.rating_date,
+                ratings,
             })
-            .collect::<Vec<_>>()
-            .await;
+        })
+        .collect::<Vec<_>>()
+        .await;
 
     let players_ratings = try_join_all(players_ratings).await.fit(req_id)?;
 
@@ -285,38 +305,44 @@ struct RatingResponse {
 pub async fn rating(
     req_id: RequestId,
     db: Res<Database>,
-    Query(body): Query<RatingBody>,
+    web::Query(body): web::Query<RatingBody>,
 ) -> RecordsResponse<impl Responder> {
-    let Some((map_name, author_login)) = sqlx::query_as(
-        "SELECT m.name, login FROM maps m
-        INNER JOIN players p ON p.id = player_id
-        WHERE game_id = ?",
-    )
-    .bind(&body.map_uid)
-    .fetch_optional(&db.mysql_pool)
-    .await
-    .with_api_err()
-    .fit(req_id)?
-    else {
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
+
+    let info = maps::Entity::find()
+        .inner_join(players::Entity)
+        .filter(maps::Column::GameId.eq(&body.map_uid))
+        .select_only()
+        .column(maps::Column::Name)
+        .column(players::Column::Login)
+        .into_tuple()
+        .one(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?;
+
+    let Some((map_name, author_login)) = info else {
         return Err(RecordsErrorKind::from(
             records_lib::error::RecordsError::MapNotFound(body.map_uid),
         ))
         .fit(req_id);
     };
 
-    let ratings = sqlx::query_as(
-        "SELECT k.kind, AVG(rating) as rating
-        FROM player_rating r
-        INNER JOIN rating_kind k ON k.id = r.kind
-        INNER JOIN maps m ON m.id = r.map_id
-        WHERE game_id = ?
-        GROUP BY k.id ORDER BY k.id",
-    )
-    .bind(&body.map_uid)
-    .fetch_all(&db.mysql_pool)
-    .await
-    .with_api_err()
-    .fit(req_id)?;
+    let ratings = player_rating::Entity::find()
+        .inner_join(rating_kind::Entity)
+        .inner_join(maps::Entity)
+        .filter(maps::Column::GameId.eq(&body.map_uid))
+        .select_only()
+        .column(rating_kind::Column::Kind)
+        .column_as(
+            Expr::expr(Func::avg(Expr::col(player_rating::Column::Rating))),
+            "rating",
+        )
+        .into_model()
+        .all(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?;
 
     json(RatingResponse {
         map_name,
@@ -352,182 +378,205 @@ struct RateResponse {
     ratings: Vec<Rating>,
 }
 
-// TODO: use a SQL transaction
 pub async fn rate(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     Json(body): Json<RateBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mut mysql_conn = db.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
-    let Player {
+    let players::Model {
         id: player_id,
         login: player_login,
         ..
-    } = records_lib::must::have_player(&mut mysql_conn, &login)
+    } = records_lib::must::have_player(&conn, &login)
         .await
         .fit(req_id)?;
 
-    let Map {
+    let maps::Model {
         id: map_id,
         name: map_name,
         player_id: author_id,
         ..
-    } = records_lib::must::have_map(&mut mysql_conn, &body.map_id)
+    } = records_lib::must::have_map(&conn, &body.map_id)
         .await
         .fit(req_id)?;
 
-    let author_login = sqlx::query_scalar("SELECT login FROM players WHERE id = ?")
-        .bind(author_id)
-        .fetch_one(&mut *mysql_conn)
+    let author_login = players::Entity::find_by_id(author_id)
+        .select_only()
+        .column(players::Column::Login)
+        .into_tuple()
+        .one(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?
+        .unwrap_or_else(|| panic!("Player {author_id} should be in database"));
+
+    let rate_count = rating_kind::Entity::find()
+        .count(&conn)
         .await
         .with_api_err()
         .fit(req_id)?;
 
-    let rate_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rating_kind")
-        .fetch_one(&mut *mysql_conn)
-        .await
-        .with_api_err()
-        .fit(req_id)?;
-    if body.ratings.len()
-        > <i64 as TryInto<usize>>::try_into(rate_count).expect("couldn't convert from i64 to usize")
-        || any_repeated(&body.ratings)
-    {
+    if body.ratings.len() as u64 > rate_count || any_repeated(&body.ratings) {
         return Err(RecordsErrorKind::InvalidRates).fit(req_id);
     }
 
     if body.ratings.is_empty() {
-        let Some(rating_date) =
-            sqlx::query_scalar("SELECT rating_date FROM rating WHERE player_id = ? AND map_id = ?")
-                .bind(player_id)
-                .bind(map_id)
-                .fetch_optional(&mut *mysql_conn)
-                .await
-                .with_api_err()
-                .fit(req_id)?
-        else {
+        let rating_date = rating::Entity::find()
+            .filter(
+                rating::Column::PlayerId
+                    .eq(player_id)
+                    .and(rating::Column::MapId.eq(map_id)),
+            )
+            .select_only()
+            .column(rating::Column::RatingDate)
+            .into_tuple()
+            .one(&conn)
+            .await
+            .with_api_err()
+            .fit(req_id)?;
+
+        let Some(rating_date) = rating_date else {
             return Err(RecordsErrorKind::NoRatingFound(login, body.map_id)).fit(req_id);
         };
 
-        return json(RateResponse {
+        json(RateResponse {
             player_login,
             map_name,
             author_login,
             rating_date,
             ratings: Vec::new(),
-        });
-    }
+        })
+    } else {
+        // TODO: we can use the REPLACE INTO syntax instead of checking the count everytime
 
-    let rating_date = {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM rating WHERE map_id = ? AND player_id = ?")
-                .bind(map_id)
-                .bind(player_id)
-                .fetch_one(&mut *mysql_conn)
+        let rating_date = {
+            let count = rating::Entity::find()
+                .filter(
+                    rating::Column::MapId
+                        .eq(map_id)
+                        .and(rating::Column::PlayerId.eq(player_id)),
+                )
+                .count(&conn)
                 .await
                 .with_api_err()
                 .fit(req_id)?;
 
-        if count != 0 {
-            sqlx::query(
-                "UPDATE rating SET rating_date = SYSDATE() WHERE map_id = ? AND player_id = ?",
-            )
-            .bind(map_id)
-            .bind(player_id)
-            .execute(&mut *mysql_conn)
-            .await
-            .with_api_err()
-            .fit(req_id)?;
+            if count > 0 {
+                let mut update = Query::update();
+                let update = update
+                    .table(rating::Entity)
+                    .value(rating::Column::RatingDate, Func::cust("SYSDATE"))
+                    .and_where(
+                        rating::Column::MapId
+                            .eq(map_id)
+                            .and(rating::Column::PlayerId.eq(player_id)),
+                    );
+                let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
+                conn.execute(stmt).await.with_api_err().fit(req_id)?;
 
-            sqlx::query_scalar("SELECT rating_date FROM rating WHERE map_id = ? AND player_id = ?")
-                .bind(map_id)
-                .bind(player_id)
-                .fetch_one(&mut *mysql_conn)
+                rating::Entity::find()
+                    .filter(
+                        rating::Column::PlayerId
+                            .eq(player_id)
+                            .and(rating::Column::MapId.eq(map_id)),
+                    )
+                    .select_only()
+                    .column(rating::Column::RatingDate)
+                    .into_tuple()
+                    .one(&conn)
+                    .await
+                    .with_api_err()
+                    .fit(req_id)?
+                    .unwrap_or_else(|| {
+                        panic!("Rating of player {player_id} on {map_id} should exist in database")
+                    })
+            } else {
+                let new_rating = rating::ActiveModel {
+                    player_id: Set(player_id),
+                    map_id: Set(map_id),
+                    rating_date: Set(chrono::Utc::now().naive_utc()),
+                };
+
+                let rating = rating::Entity::insert(new_rating)
+                    .exec_with_returning(&conn)
+                    .await
+                    .with_api_err()
+                    .fit(req_id)?;
+
+                rating.rating_date
+            }
+        };
+
+        let mut ratings = Vec::with_capacity(body.ratings.len());
+
+        for rate in body.ratings {
+            let count = player_rating::Entity::find()
+                .filter(
+                    player_rating::Column::MapId
+                        .eq(map_id)
+                        .and(player_rating::Column::PlayerId.eq(player_id))
+                        .and(player_rating::Column::Kind.eq(rate.kind)),
+                )
+                .count(&conn)
+                .await
+                .with_api_err()
+                .fit(req_id)?;
+
+            if count > 0 {
+                let mut update = Query::update();
+                let update = update
+                    .table(player_rating::Entity)
+                    .value(player_rating::Column::Rating, rate.rating)
+                    .and_where(
+                        player_rating::Column::MapId
+                            .eq(map_id)
+                            .and(player_rating::Column::PlayerId.eq(player_id))
+                            .and(player_rating::Column::Kind.eq(rate.kind)),
+                    );
+                let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
+                conn.execute(stmt).await.with_api_err().fit(req_id)?;
+            } else {
+                let new_player_rating = player_rating::ActiveModel {
+                    player_id: Set(player_id),
+                    map_id: Set(map_id),
+                    kind: Set(rate.kind),
+                    rating: Set(rate.rating),
+                };
+
+                player_rating::Entity::insert(new_player_rating)
+                    .exec(&conn)
+                    .await
+                    .with_api_err()
+                    .fit(req_id)?;
+            }
+
+            let rating = player_rating::Entity::find()
+                .inner_join(rating_kind::Entity)
+                .filter(player_rating::Column::MapId.eq(map_id).and(player_rating::Column::PlayerId.eq(player_id)).and(player_rating::Column::Kind.eq(rate.kind)))
+                .select_only()
+                .column(rating_kind::Column::Kind)
+                .column(player_rating::Column::Rating)
+                .into_model()
+                .one(&conn)
                 .await
                 .with_api_err()
                 .fit(req_id)?
-        } else {
-            sqlx::query_scalar(
-                "INSERT INTO rating (player_id, map_id, rating_date)
-                VALUES (?, ?, SYSDATE()) RETURNING rating_date",
-            )
-            .bind(player_id)
-            .bind(map_id)
-            .fetch_one(&mut *mysql_conn)
-            .await
-            .with_api_err()
-            .fit(req_id)?
-        }
-    };
+                .unwrap_or_else(|| panic!("Player rating of {player_id} on {map_id} and rating kind {} should exist in database", rate.kind));
 
-    let mut ratings = Vec::with_capacity(body.ratings.len());
-
-    for rate in body.ratings {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM player_rating
-                    WHERE map_id = ? AND player_id = ? AND kind = ?",
-        )
-        .bind(map_id)
-        .bind(player_id)
-        .bind(rate.kind)
-        .fetch_one(&mut *mysql_conn)
-        .await
-        .with_api_err()
-        .fit(req_id)?;
-
-        if count != 0 {
-            sqlx::query(
-                "UPDATE player_rating SET rating = ?
-                        WHERE map_id = ? AND player_id = ? AND kind = ?",
-            )
-            .bind(rate.rating)
-            .bind(map_id)
-            .bind(player_id)
-            .bind(rate.kind)
-            .execute(&mut *mysql_conn)
-            .await
-            .with_api_err()
-            .fit(req_id)?;
-        } else {
-            sqlx::query(
-                "INSERT INTO player_rating (player_id, map_id, kind, rating)
-                        VALUES (?, ?, ?, ?)",
-            )
-            .bind(player_id)
-            .bind(map_id)
-            .bind(rate.kind)
-            .bind(rate.rating)
-            .execute(&mut *mysql_conn)
-            .await
-            .with_api_err()
-            .fit(req_id)?;
+            ratings.push(rating);
         }
 
-        let rating = sqlx::query_as(
-            "SELECT k.kind, rating
-                    FROM player_rating r
-                    INNER JOIN rating_kind k ON k.id = r.kind
-                    WHERE map_id = ? AND player_id = ? AND r.kind = ?",
-        )
-        .bind(map_id)
-        .bind(player_id)
-        .bind(rate.kind)
-        .fetch_one(&mut *mysql_conn)
-        .await
-        .with_api_err()
-        .fit(req_id)?;
-
-        ratings.push(rating);
+        json(RateResponse {
+            player_login,
+            map_name,
+            author_login,
+            rating_date,
+            ratings,
+        })
     }
-
-    json(RateResponse {
-        player_login,
-        map_name,
-        author_login,
-        rating_date,
-        ratings,
-    })
 }
 
 #[derive(Deserialize)]

@@ -1,9 +1,10 @@
 use std::time::Duration;
 
 use deadpool_redis::Runtime;
+use entity::types::InGameAlignment;
 use once_cell::sync::OnceCell;
 
-use crate::{MySqlPool, RedisPool, models};
+use crate::{MySqlPool, RedisPool};
 
 mkenv::make_env! {
 /// The environment used to set up a connection to the MySQL/MariaDB database.
@@ -54,9 +55,9 @@ const DEFAULT_MAPPACK_TTL: i64 = 604_800;
 
 const DEFAULT_INGAME_SUBTITLE_ON_NEWLINE: bool = false;
 
-const DEFAULT_INGAME_TITLES_ALIGN: models::InGameAlignment = models::InGameAlignment::Left;
-const DEFAULT_INGAME_LB_LINK_ALIGN: models::InGameAlignment = models::InGameAlignment::Left;
-const DEFAULT_INGAME_AUTHORS_ALIGN: models::InGameAlignment = models::InGameAlignment::Right;
+const DEFAULT_INGAME_TITLES_ALIGN: InGameAlignment = InGameAlignment::Left;
+const DEFAULT_INGAME_LB_LINK_ALIGN: InGameAlignment = InGameAlignment::Left;
+const DEFAULT_INGAME_AUTHORS_ALIGN: InGameAlignment = InGameAlignment::Right;
 
 const DEFAULT_INGAME_TITLES_POS_X: f64 = 181.;
 const DEFAULT_INGAME_TITLES_POS_Y: f64 = -29.5;
@@ -83,7 +84,7 @@ pub LibEnv:
 
     /// The default alignment of the titles of an event edition in the Titlepack menu.
     ingame_default_titles_align: {
-        id: InGameDefaultTitlesAlign(models::InGameAlignment),
+        id: InGameDefaultTitlesAlign(InGameAlignment),
         kind: parse,
         var: "RECORDS_API_INGAME_DEFAULT_TITLES_ALIGN",
         desc: "The default alignment (either L for left or R for right) of the titles of \
@@ -93,7 +94,7 @@ pub LibEnv:
 
     /// The default alignment of an event edition title in the Titlepack menu.
     ingame_default_lb_link_align: {
-        id: InGameDefaultLbLinkAlign(models::InGameAlignment),
+        id: InGameDefaultLbLinkAlign(InGameAlignment),
         kind: parse,
         var: "RECORDS_API_INGAME_DEFAULT_LB_LINK_ALIGN",
         desc: "The default alignment (either L for left or R for right) of the leaderboards link of \
@@ -103,7 +104,7 @@ pub LibEnv:
 
     /// The default alignment of an event edition title in the Titlepack menu.
     ingame_default_authors_align: {
-        id: InGameDefaultAuthorsAlign(models::InGameAlignment),
+        id: InGameDefaultAuthorsAlign(InGameAlignment),
         kind: parse,
         var: "RECORDS_API_INGAME_DEFAULT_AUTHORS_ALIGN",
         desc: "The default alignment (either L for left or R for right) of the author list of \

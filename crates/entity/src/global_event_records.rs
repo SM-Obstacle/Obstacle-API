@@ -2,6 +2,8 @@ use std::{future::ready, pin::Pin};
 
 use sea_orm::entity::prelude::*;
 
+use crate::records;
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "global_event_records")]
 pub struct Model {
@@ -127,5 +129,23 @@ impl ActiveModelBehavior for ActiveModel {
         Self: Send + 'async_trait,
     {
         Box::pin(ready(Err(DbErr::RecordNotUpdated)))
+    }
+}
+
+impl From<Model> for records::Model {
+    fn from(value: Model) -> Self {
+        Self {
+            record_id: value.record_id,
+            record_player_id: value.record_player_id,
+            map_id: value.map_id,
+            time: value.time,
+            respawn_count: value.respawn_count,
+            record_date: value.record_date,
+            flags: value.flags,
+            try_count: value.try_count,
+            event_record_id: value.event_record_id,
+            // TODO: add mode version in global_event_records view
+            modeversion: None,
+        }
     }
 }

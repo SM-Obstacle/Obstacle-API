@@ -1,10 +1,18 @@
 use actix_web::{
     HttpResponse, Responder, Scope,
-    web::{self, Json, Query},
+    web::{self, Json},
 };
+use entity::{banishments, current_bans, players};
+use futures::TryStreamExt;
 use records_lib::Database;
+use sea_orm::{
+    ActiveValue::Set,
+    ColumnTrait as _, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult,
+    QueryFilter as _, QuerySelect, RelationTrait as _, StatementBuilder,
+    prelude::Expr,
+    sea_query::{ExprTrait, Func, Query},
+};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Row, mysql::MySqlRow};
 use tracing_actix_web::RequestId;
 
 use crate::{
@@ -88,13 +96,15 @@ pub struct BanishmentsBody {
     player_login: String,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize, FromQueryResult)]
 struct BanishmentInner {
     id: u32,
     date_ban: chrono::NaiveDateTime,
     duration: Option<u32>,
     reason: Option<String>,
     banished_by: String,
+    was_reprieved: i8,
+    is_current: i8,
 }
 
 #[derive(Serialize)]
@@ -103,22 +113,6 @@ pub struct Banishment {
     inner: BanishmentInner,
     was_reprieved: bool,
     is_current: bool,
-}
-
-impl<'r> FromRow<'r, MySqlRow> for Banishment {
-    fn from_row(row: &'r MySqlRow) -> Result<Self, sqlx::Error> {
-        let is_current = match row.try_get::<i8, _>("is_current") {
-            Ok(s) => s,
-            Err(sqlx::Error::ColumnNotFound(_)) => 1,
-            Err(e) => return Err(e),
-        } != 0;
-
-        Ok(Self {
-            inner: BanishmentInner::from_row(row)?,
-            was_reprieved: row.try_get::<i8, _>("was_reprieved")? != 0,
-            is_current,
-        })
-    }
 }
 
 #[derive(Serialize)]
@@ -131,30 +125,65 @@ pub async fn banishments(
     _: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
     db: Res<Database>,
-    Query(body): Query<BanishmentsBody>,
+    web::Query(body): web::Query<BanishmentsBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
-    let player_id = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
+    let player_id = records_lib::must::have_player(&conn, &body.player_login)
         .await
         .fit(req_id)?
         .id;
 
-    let banishments = sqlx::query_as(
-        "SELECT
-            id, date_ban, duration, was_reprieved, reason,
-            (SELECT login FROM players WHERE id = banished_by) AS banished_by,
-            id IN (SELECT id FROM banishments WHERE player_id = ?
-                AND (date_ban + INTERVAL duration SECOND > NOW() OR duration IS NULL)) AS is_current
-        FROM banishments
-        WHERE player_id = ?",
-    )
-    .bind(player_id)
-    .bind(player_id)
-    .fetch_all(&mut *mysql_conn)
-    .await
-    .with_api_err()
-    .fit(req_id)?;
+    let banishments = banishments::Entity::find()
+        .filter(banishments::Column::PlayerId.eq(player_id))
+        .join_as(
+            sea_orm::JoinType::InnerJoin,
+            banishments::Relation::Players1.def(),
+            "ban_author_player",
+        )
+        .select_only()
+        .column(banishments::Column::Id)
+        .column(banishments::Column::DateBan)
+        .column(banishments::Column::Duration)
+        .column(banishments::Column::WasReprieved)
+        .column(banishments::Column::Reason)
+        .column_as(
+            Expr::col(("ban_author_player", players::Column::Login)),
+            "banished_by",
+        )
+        .column_as(
+            banishments::Column::Id.in_subquery(
+                Query::select()
+                    .from(banishments::Entity)
+                    .column(banishments::Column::Id)
+                    .and_where(
+                        banishments::Column::PlayerId.eq(player_id).and(
+                            Func::cust("TIMESTAMPADD")
+                                .arg(Expr::custom_keyword("SECOND"))
+                                .arg(Expr::col(banishments::Column::Duration))
+                                .arg(Expr::col(banishments::Column::DateBan))
+                                .gt(Func::cust("NOW"))
+                                .or(banishments::Column::Duration.is_null()),
+                        ),
+                    )
+                    .take(),
+            ),
+            "is_current",
+        )
+        .into_model::<BanishmentInner>()
+        .stream(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?
+        .map_ok(|ban| Banishment {
+            was_reprieved: ban.was_reprieved != 0,
+            is_current: ban.is_current != 0,
+            inner: ban,
+        })
+        .try_collect()
+        .await
+        .with_api_err()
+        .fit(req_id)?;
 
     json(BanishmentsResponse {
         player_login: body.player_login,
@@ -165,7 +194,7 @@ pub async fn banishments(
 #[derive(Deserialize)]
 pub struct BanBody {
     player_login: String,
-    duration: Option<u32>,
+    duration: Option<i64>,
     reason: Option<String>,
 }
 
@@ -181,69 +210,114 @@ pub async fn ban(
     db: Res<Database>,
     Json(body): Json<BanBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
-    let player = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
+    let player = records_lib::must::have_player(&conn, &body.player_login)
         .await
         .fit(req_id)?;
 
-    let admin_id = records_lib::must::have_player(&mut mysql_conn, &login)
+    let admin_id = records_lib::must::have_player(&conn, &login)
         .await
         .fit(req_id)?
         .id;
 
-    let was_reprieved =
-        sqlx::query_as::<_, Banishment>("SELECT * FROM banishments WHERE player_id = ?")
-            .bind(&body.player_login)
-            .fetch_optional(&mut *mysql_conn)
-            .await
-            .with_api_err()
-            .fit(req_id)?
-            .is_some();
+    let was_reprieved = banishments::Entity::find()
+        .filter(banishments::Column::PlayerId.eq(player.id))
+        .one(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?
+        .is_some();
 
-    let ban_id: u32 = sqlx::query_scalar(
-        "INSERT INTO banishments
-                (date_ban,  duration,   was_reprieved,  reason, player_id,  banished_by)
-        VALUES  (SYSDATE(), ?,          ?,              ?,      ?,          ?)
-        RETURNING id",
-    )
-    .bind(body.duration)
-    .bind(was_reprieved)
-    .bind(body.reason)
-    .bind(player.id)
-    .bind(admin_id)
-    .fetch_one(&mut *mysql_conn)
-    .await
-    .with_api_err()
-    .fit(req_id)?;
+    let new_ban = banishments::ActiveModel {
+        date_ban: Set(chrono::Utc::now().naive_utc()),
+        duration: Set(body.duration),
+        was_reprieved: Set(if was_reprieved { 1 } else { 0 }),
+        reason: body.reason.map(Set).unwrap_or_default(),
+        player_id: Set(Some(player.id)),
+        banished_by: Set(Some(admin_id)),
+        ..Default::default()
+    };
 
-    let ban = sqlx::query_as(
-        r#"SELECT id, date_ban, duration, reason, (SELECT login FROM players WHERE id = banished_by) as "banished_by", was_reprieved
-        FROM banishments WHERE id = ?"#,
-    )
-    .bind(ban_id)
-    .fetch_one(&mut *mysql_conn)
-    .await.with_api_err().fit(req_id)?;
+    let ban_id = banishments::Entity::insert(new_ban)
+        .exec_with_returning_keys(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?[0];
+
+    let ban = banishments::Entity::find_by_id(ban_id)
+        .join_as(
+            sea_orm::JoinType::InnerJoin,
+            banishments::Relation::Players2.def(),
+            "ban_author_player",
+        )
+        .select_only()
+        .column(banishments::Column::Id)
+        .column(banishments::Column::DateBan)
+        .column(banishments::Column::Duration)
+        .column(banishments::Column::Reason)
+        .column_as(
+            Expr::col(("ban_author_player", players::Column::Login)),
+            "banished_by",
+        )
+        .column(banishments::Column::WasReprieved)
+        .into_model::<BanishmentInner>()
+        .one(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?
+        .expect("Ban is supposed to be in database");
 
     json(BanResponse {
         player_login: body.player_login,
-        ban,
+        ban: Banishment {
+            is_current: ban.is_current != 0,
+            was_reprieved: ban.was_reprieved != 0,
+            inner: ban,
+        },
     })
 }
 
-pub async fn is_banned(db: &Database, player_id: u32) -> RecordsResult<Option<Banishment>> {
-    let ban = sqlx::query_as(
-        "SELECT id, date_ban, duration, was_reprieved, reason,
-        (SELECT login FROM players WHERE id = banished_by) as banished_by
-        FROM banishments
-        WHERE player_id = ? AND (date_ban + INTERVAL duration SECOND > NOW() OR duration IS NULL)",
-    )
-    .bind(player_id)
-    .fetch_optional(&db.mysql_pool)
-    .await
-    .with_api_err()?;
+pub async fn get_ban_of<C: ConnectionTrait>(
+    conn: &C,
+    player_id: u32,
+) -> RecordsResult<Option<Banishment>> {
+    let ban = current_bans::Entity::find()
+        .filter(
+            current_bans::Column::PlayerId.eq(player_id).and(
+                Func::cust("TIMESTAMPADD")
+                    .arg(Expr::custom_keyword("SECOND"))
+                    .arg(Expr::col(current_bans::Column::Duration))
+                    .arg(Expr::col(current_bans::Column::DateBan))
+                    .gt(Func::cust("NOW"))
+                    .or(current_bans::Column::Duration.is_null()),
+            ),
+        )
+        .join_as(
+            sea_orm::JoinType::InnerJoin,
+            current_bans::Relation::Players2.def(),
+            "ban_author_player",
+        )
+        .select_only()
+        .column(current_bans::Column::Id)
+        .column(current_bans::Column::DateBan)
+        .column(current_bans::Column::Duration)
+        .column(current_bans::Column::WasReprieved)
+        .column(current_bans::Column::Reason)
+        .column_as(
+            Expr::col(("ban_author_player", players::Column::Login)),
+            "banished_by",
+        )
+        .into_model::<BanishmentInner>()
+        .one(conn)
+        .await
+        .with_api_err()?;
 
-    Ok(ban)
+    Ok(ban.map(|ban| Banishment {
+        was_reprieved: ban.was_reprieved != 0,
+        is_current: ban.is_current != 0,
+        inner: ban,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -263,34 +337,29 @@ pub async fn unban(
     db: Res<Database>,
     Json(body): Json<UnbanBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
-    let player_id = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
+    let player_id = records_lib::must::have_player(&conn, &body.player_login)
         .await
         .fit(req_id)?
         .id;
 
-    let Some(ban) = is_banned(&db, player_id).await.fit(req_id)? else {
+    let Some(ban) = get_ban_of(&conn, player_id).await.fit(req_id)? else {
         return Err(RecordsErrorKind::PlayerNotBanned(body.player_login)).fit(req_id);
     };
 
-    if let Some(duration) =
-        sqlx::query_scalar::<_, i64>("SELECT SYSDATE() - date_ban FROM banishments WHERE id = ?")
-            .bind(ban.inner.id)
-            .fetch_optional(&mut *mysql_conn)
-            .await
-            .with_api_err()
-            .fit(req_id)?
-    {
-        println!("duration: {duration}s");
-    }
+    let mut query = Query::update();
+    let query = query
+        .table(banishments::Entity)
+        .value(
+            banishments::Column::Duration,
+            Func::cust("SYSDATE").sub(Expr::col(banishments::Column::DateBan)),
+        )
+        .and_where(banishments::Column::Id.eq(ban.inner.id));
 
-    sqlx::query("UPDATE banishments SET duration = SYSDATE() - date_ban WHERE id = ?")
-        .bind(ban.inner.id)
-        .execute(&mut *mysql_conn)
-        .await
-        .with_api_err()
-        .fit(req_id)?;
+    let query = StatementBuilder::build(&*query, &conn.get_database_backend());
+
+    conn.execute(query).await.with_api_err().fit(req_id)?;
 
     json(UnbanResponse {
         player_login: body.player_login,
@@ -315,9 +384,9 @@ pub async fn player_note(
     db: Res<Database>,
     Json(body): Json<PlayerNoteBody>,
 ) -> RecordsResponse<impl Responder> {
-    let mut mysql_conn = db.0.mysql_pool.acquire().await.with_api_err().fit(req_id)?;
+    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
-    let admins_note = records_lib::must::have_player(&mut mysql_conn, &body.player_login)
+    let admins_note = records_lib::must::have_player(&conn, &body.player_login)
         .await
         .fit(req_id)?
         .admins_note;

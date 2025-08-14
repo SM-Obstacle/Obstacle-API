@@ -41,6 +41,7 @@ request_filter = { path = "../request_filter", optional = true }
 dsc_webhook = { path = "../dsc_webhook" }
 sea-orm = { workspace = true }
 migration = { path = "../migration" }
+entity = { path = "../entity" }
 
 [features]
 default = ["request_filter"]

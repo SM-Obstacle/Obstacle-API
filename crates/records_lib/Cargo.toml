@@ -20,6 +20,8 @@ tokio = { workspace = true }
 itertools = { workspace = true }
 nom = { workspace = true }
 rand = { workspace = true }
+sea-orm = { workspace = true }
+entity = { path = "../entity" }
 
 [features]
 default = []

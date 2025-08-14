@@ -2,15 +2,17 @@
 
 use sea_orm::entity::prelude::*;
 
+use crate::types::InGameAlignment;
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "in_game_event_edition_params")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub put_subtitle_on_newline: Option<i8>,
-    pub titles_align: Option<String>,
-    pub lb_link_align: Option<String>,
-    pub authors_align: Option<String>,
+    pub titles_align: Option<InGameAlignment>,
+    pub lb_link_align: Option<InGameAlignment>,
+    pub authors_align: Option<InGameAlignment>,
     #[sea_orm(column_type = "Double", nullable)]
     pub titles_pos_x: Option<f64>,
     #[sea_orm(column_type = "Double", nullable)]
