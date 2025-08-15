@@ -1,25 +1,24 @@
-use std::{borrow::Cow, collections::HashMap, iter::repeat_n, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use async_graphql::dataloader::{DataLoader, Loader};
 use deadpool_redis::redis::AsyncCommands;
 use entity::{
-    event, event_admins, event_category, event_edition, event_edition_maps, global_event_records,
-    global_records, maps, players, records,
+    event, event_admins, event_categories, event_category, event_edition, event_edition_categories,
+    event_edition_maps, global_event_records, global_records, maps, players, records,
 };
 use futures::{Stream as _, StreamExt as _, TryStreamExt};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, FromQueryResult,
+    ColumnTrait as _, ConnectionTrait, DbConn, DbErr, EntityTrait, FromQueryResult, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, RelationTrait as _, StatementBuilder,
     prelude::Expr,
     sea_query::{ExprTrait as _, Func, Query},
 };
-use sqlx::{FromRow, MySqlPool, mysql};
+use sqlx::MySqlPool;
 
 use records_lib::{
     RedisPool,
     event::{self as event_utils, EventMap, MedalTimes},
     mappack::AnyMappackId,
-    models::EventCategory,
     must,
     opt_event::OptEvent,
     redis_key::{mappack_map_last_rank, mappack_player_ranks_key},
@@ -58,8 +57,7 @@ impl Event {
     }
 
     async fn admins(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<Player>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
         let q = players::Entity::find()
             .filter(
@@ -72,7 +70,7 @@ impl Event {
                 ),
             )
             .into_model()
-            .all(&conn)
+            .all(conn)
             .await?;
 
         Ok(q)
@@ -81,18 +79,20 @@ impl Event {
     async fn categories(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventCategory>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let q = sqlx::query_as(
-            "SELECT * FROM event_category
-            WHERE id IN (
-                SELECT category_id FROM event_categories
-                WHERE event_id = ?
-            )",
-        )
-        .bind(self.inner.id)
-        .fetch_all(db)
-        .await?;
+    ) -> async_graphql::Result<Vec<event_category::Model>> {
+        let conn = ctx.data_unchecked::<DbConn>();
+        let q = event_category::Entity::find()
+            .filter(
+                event_category::Column::Id.in_subquery(
+                    Query::select()
+                        .from(event_categories::Entity)
+                        .and_where(event_categories::Column::EventId.eq(self.inner.id))
+                        .column(event_categories::Column::CategoryId)
+                        .take(),
+                ),
+            )
+            .all(conn)
+            .await?;
         Ok(q)
     }
 
@@ -100,10 +100,9 @@ impl Event {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<EventEdition>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
-        let q = event_utils::event_editions_list(&conn, &self.inner.handle).await?;
+        let q = event_utils::event_editions_list(conn, &self.inner.handle).await?;
 
         Ok(q.into_iter()
             .map(|inner| EventEdition {
@@ -117,8 +116,7 @@ impl Event {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Option<EventEdition>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
         let edition = event_edition::Entity::find()
             .reverse_join(event_edition_maps::Entity)
@@ -138,7 +136,7 @@ impl Event {
             )
             .order_by_desc(event_edition::Column::Id)
             .limit(1)
-            .one(&conn)
+            .one(conn)
             .await
             .with_api_err()?;
 
@@ -153,10 +151,9 @@ impl Event {
         ctx: &async_graphql::Context<'_>,
         edition_id: u32,
     ) -> async_graphql::Result<Option<EventEdition>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
-        let edition = event_utils::get_edition_by_id(&conn, self.inner.id, edition_id).await?;
+        let edition = event_utils::get_edition_by_id(conn, self.inner.id, edition_id).await?;
 
         Ok(edition.map(|inner| EventEdition {
             event: Cow::Borrowed(self),
@@ -174,7 +171,7 @@ impl Loader<u32> for EventLoader {
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
         let hashmap = event::Entity::find()
             .filter(event::Column::Id.is_in(keys.iter().copied()))
-            .all(&DatabaseConnection::from(self.0.clone()))
+            .all(&DbConn::from(self.0.clone()))
             .await?
             .into_iter()
             .map(|row| (row.id, row.into()))
@@ -186,31 +183,19 @@ impl Loader<u32> for EventLoader {
 pub struct EventCategoryLoader(pub MySqlPool);
 
 impl Loader<u32> for EventCategoryLoader {
-    type Value = EventCategory;
-    type Error = Arc<sqlx::Error>;
+    type Value = event_category::Model;
+    type Error = Arc<DbErr>;
 
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
-        let q = format!(
-            "SELECT * FROM event_category WHERE id IN ({})",
-            repeat_n("?".to_string(), keys.len())
-                .collect::<Vec<_>>()
-                .join(",")
-        );
+        let hashmap = event_category::Entity::find()
+            .filter(event_category::Column::Id.is_in(keys.iter().copied()))
+            .all(&DbConn::from(self.0.clone()))
+            .await?
+            .into_iter()
+            .map(|category| (category.id, category))
+            .collect();
 
-        let mut q = sqlx::query(&q);
-
-        for key in keys {
-            q = q.bind(key);
-        }
-
-        Ok(q.map(|row: mysql::MySqlRow| {
-            let category = EventCategory::from_row(&row).unwrap();
-            (category.id, category)
-        })
-        .fetch_all(&self.0)
-        .await?
-        .into_iter()
-        .collect())
+        Ok(hashmap)
     }
 }
 
@@ -291,10 +276,9 @@ impl EventEditionMapExt<'_> {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Option<MedalTimes>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
         let medal_times = event_utils::get_medal_times_of(
-            &conn,
+            conn,
             self.edition_player.edition.inner.event_id,
             self.edition_player.edition.inner.id,
             self.inner.inner.id,
@@ -332,9 +316,8 @@ impl EventEditionPlayerRank<'_> {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<EventEditionMapExt<'_>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
-        let map = must::have_map(&conn, &self.map_game_id).await?;
+        let conn = ctx.data_unchecked::<DbConn>();
+        let map = must::have_map(conn, &self.map_game_id).await?;
         Ok(EventEditionMapExt {
             inner: map.into(),
             edition_player: self.edition_player,
@@ -356,21 +339,27 @@ impl EventEditionPlayerCategorizedRank<'_> {
         self.category.hex_color.as_deref()
     }
 
-    async fn nb_maps(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i64> {
-        let db = ctx.data_unchecked::<MySqlPool>();
+    async fn nb_maps(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<u64> {
+        let conn = ctx.data_unchecked::<DbConn>();
         let edition = &self.player.edition.inner;
 
-        let n = sqlx::query_scalar(
-            "select count(*) from event_edition_maps eem
-            inner join event_edition ee on eem.edition_id = ee.id and eem.event_id = ee.event_id
-            inner join event_category ec on eem.category_id = ec.id
-            where eem.event_id = ? and eem.edition_id = ? and ec.id = ?",
-        )
-        .bind(edition.event_id)
-        .bind(edition.id)
-        .bind(self.category.id)
-        .fetch_one(db)
-        .await?;
+        let n = event_edition_maps::Entity::find()
+            .inner_join(event_edition::Entity)
+            .join(
+                sea_orm::JoinType::InnerJoin,
+                event_edition_maps::Entity::belongs_to(event_category::Entity)
+                    .from(event_edition_maps::Column::CategoryId)
+                    .to(event_category::Column::Id)
+                    .into(),
+            )
+            .filter(
+                event_edition_maps::Column::EventId
+                    .eq(edition.event_id)
+                    .and(event_edition_maps::Column::EditionId.eq(edition.id))
+                    .and(event_category::Column::Id.eq(self.category.id)),
+            )
+            .count(conn)
+            .await?;
 
         Ok(n)
     }
@@ -379,8 +368,7 @@ impl EventEditionPlayerCategorizedRank<'_> {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<EventEditionPlayerRank>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
         let mut select = Query::select();
         let select = select
@@ -489,10 +477,9 @@ impl EventEditionPlayer<'_> {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<EventEditionPlayerCategorizedRank>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
         let categories = event_utils::get_categories_by_edition_id(
-            &conn,
+            conn,
             self.edition.inner.event_id,
             self.edition.inner.id,
         )
@@ -520,8 +507,7 @@ impl EventEditionPlayer<'_> {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<EventEditionMapExt<'_>>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
         let mut unfinished_maps = maps::Entity::find()
             .join(
@@ -539,7 +525,7 @@ impl EventEditionPlayer<'_> {
                     .and(event_edition_maps::Column::EditionId.eq(self.edition.inner.id))
                     .and(records::Column::RecordPlayerId.eq(self.player.id)),
             )
-            .stream(&conn)
+            .stream(conn)
             .await?;
 
         let mut out = Vec::with_capacity(unfinished_maps.size_hint().0);
@@ -566,19 +552,25 @@ impl EventEditionMap<'_> {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Option<Map>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
+        let conn = ctx.data_unchecked::<DbConn>();
         let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
-        let mut conn = db.acquire().await?;
 
-        let original_map_id: Option<_> = sqlx::query_scalar(
-            "select original_map_id from event_edition_maps
-            where event_id = ? and edition_id = ? and map_id = ?",
-        )
-        .bind(self.edition.inner.event_id)
-        .bind(self.edition.inner.id)
-        .bind(self.map.inner.id)
-        .fetch_one(&mut *conn)
-        .await?;
+        let original_map_id = event_edition_maps::Entity::find_by_id((
+            self.edition.inner.event_id,
+            self.edition.inner.id,
+            self.map.inner.id,
+        ))
+        .select_only()
+        .column(event_edition_maps::Column::OriginalMapId)
+        .into_tuple::<Option<_>>()
+        .one(conn)
+        .await?
+        .unwrap_or_else(|| {
+            panic!(
+                "event_edition_maps({}, {}, {}) must exist in database",
+                self.edition.inner.event_id, self.edition.inner.id, self.map.inner.id
+            )
+        });
 
         let map = match original_map_id {
             Some(id) => Some(
@@ -613,10 +605,9 @@ impl EventEditionMap<'_> {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Option<MedalTimes>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
         let medal_times = event_utils::get_medal_times_of(
-            &conn,
+            conn,
             self.edition.inner.event_id,
             self.edition.inner.id,
             self.map.inner.id,
@@ -642,8 +633,8 @@ impl EventEdition<'_> {
     }
 
     async fn admins(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<Player>> {
-        let conn = DatabaseConnection::from(ctx.data_unchecked::<MySqlPool>().clone());
-        let a = event_utils::get_admins_of(&conn, self.inner.event_id, self.inner.id)
+        let conn = ctx.data_unchecked::<DbConn>();
+        let a = event_utils::get_admins_of(conn, self.inner.event_id, self.inner.id)
             .await?
             .map_ok(From::from)
             .try_collect()
@@ -680,9 +671,8 @@ impl EventEdition<'_> {
         ctx: &async_graphql::Context<'_>,
         login: String,
     ) -> async_graphql::Result<EventEditionPlayer<'_>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
-        let player = must::have_player(&conn, &login).await?;
+        let conn = ctx.data_unchecked::<DbConn>();
+        let player = must::have_player(conn, &login).await?;
         Ok(EventEditionPlayer {
             edition: self,
             player,
@@ -694,11 +684,10 @@ impl EventEdition<'_> {
         ctx: &async_graphql::Context<'_>,
         game_id: String,
     ) -> async_graphql::Result<EventEditionMap<'_>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
         let EventMap { map, .. } =
-            event_utils::get_map_in_edition(&conn, &game_id, self.inner.event_id, self.inner.id)
+            event_utils::get_map_in_edition(conn, &game_id, self.inner.event_id, self.inner.id)
                 .await?
                 .ok_or_else(|| async_graphql::Error::new("Map not found in this edition"))?;
 
@@ -711,19 +700,24 @@ impl EventEdition<'_> {
     async fn categories(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventCategory>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let q = sqlx::query_as(
-            "SELECT * FROM event_category
-            WHERE id IN (
-                SELECT category_id FROM event_edition_categories
-                WHERE event_id = ? AND edition_id = ?
-            )",
-        )
-        .bind(self.inner.event_id)
-        .bind(self.inner.id)
-        .fetch_all(db)
-        .await?;
+    ) -> async_graphql::Result<Vec<event_category::Model>> {
+        let conn = ctx.data_unchecked::<DbConn>();
+        let q = event_category::Entity::find()
+            .filter(
+                event_category::Column::Id.in_subquery(
+                    Query::select()
+                        .from(event_edition_categories::Entity)
+                        .and_where(
+                            event_edition_categories::Column::EventId
+                                .eq(self.inner.event_id)
+                                .and(event_edition_categories::Column::EditionId.eq(self.inner.id)),
+                        )
+                        .column(event_edition_categories::Column::CategoryId)
+                        .take(),
+                ),
+            )
+            .all(conn)
+            .await?;
         Ok(q)
     }
 }

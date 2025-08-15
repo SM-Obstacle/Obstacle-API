@@ -69,13 +69,10 @@ async fn main() -> anyhow::Result<()> {
         get_redis_pool(env.db_env.redis_url.redis_url).context("Cannot create Redis pool")?;
 
     migration::Migrator::up(&db, None).await?;
-    sqlx::migrate!("../../db/migrations")
-        .run(&mysql_pool)
-        .await?;
 
     let db = Database {
-        mysql_pool,
-        redis_pool,
+        mysql_pool: mysql_pool.clone(),
+        redis_pool: redis_pool.clone(),
     };
 
     let client = Client::new();
@@ -124,6 +121,8 @@ async fn main() -> anyhow::Result<()> {
             )
             .app_data(auth_state.clone())
             .app_data(client.clone())
+            .app_data(mysql_pool.clone())
+            .app_data(redis_pool.clone())
             .app_data(db.clone())
             .service(graphql_route(db.clone(), client.clone()))
             .service(api_route())

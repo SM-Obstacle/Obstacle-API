@@ -6,7 +6,8 @@ use async_graphql::{
 };
 use deadpool_redis::redis::AsyncCommands;
 use entity::{
-    event_edition, event_edition_maps, global_event_records, global_records, maps, records,
+    event_edition, event_edition_maps, global_event_records, global_records, maps, player_rating,
+    records,
 };
 use futures::StreamExt;
 use records_lib::{
@@ -17,10 +18,10 @@ use records_lib::{
     transaction,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, FromQueryResult,
-    QueryFilter, QueryOrder, QuerySelect, StatementBuilder, StreamTrait,
+    ColumnTrait as _, ConnectionTrait, DatabaseConnection, DbConn, DbErr, EntityTrait,
+    FromQueryResult, QueryFilter, QueryOrder, QuerySelect, StatementBuilder, StreamTrait,
     prelude::Expr,
-    sea_query::{Asterisk, Query},
+    sea_query::{Asterisk, ExprTrait, Func, Query},
 };
 use sqlx::MySqlPool;
 
@@ -145,7 +146,7 @@ impl Map {
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
-        let conn = DatabaseConnection::from(db.mysql_pool.clone());
+        let conn = DbConn::from(db.mysql_pool.clone());
         let mut redis_conn = db.redis_pool.get().await?;
 
         records_lib::assert_future_send(transaction::within(&conn, async |txn| {
@@ -215,10 +216,8 @@ impl Map {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<RelatedEdition>> {
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
+        let conn = ctx.data_unchecked::<DbConn>();
         let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
-
-        let conn = DatabaseConnection::from(mysql_pool.clone());
 
         let mut raw_editions = event_edition::Entity::find()
             .reverse_join(event_edition_maps::Entity)
@@ -229,7 +228,7 @@ impl Map {
             .order_by_desc(event_edition::Column::StartDate)
             .column(event_edition_maps::Column::MapId)
             .into_model::<RawRelatedEdition>()
-            .stream(&conn)
+            .stream(conn)
             .await?;
 
         let mut out = Vec::with_capacity(raw_editions.size_hint().0);
@@ -248,7 +247,7 @@ impl Map {
                 redirect_to_event: edition.edition.is_transparent == 0
                     && edition.edition.save_non_event_record != 0
                     && (edition.edition.non_original_maps != 0 || self.inner.id == edition.map_id),
-                edition: EventEdition::from_inner(&conn, edition.edition).await?,
+                edition: EventEdition::from_inner(conn, edition.edition).await?,
             });
         }
 
@@ -259,16 +258,20 @@ impl Map {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<PlayerRating>> {
-        let db = ctx.data_unchecked();
-        let fetch_all = sqlx::query_as(
-            r#"SELECT CAST(0 AS UNSIGNED) AS "player_id", map_id, kind,
-            AVG(rating) AS "rating" FROM player_rating
-            WHERE map_id = ? GROUP BY kind ORDER BY kind"#,
-        )
-        .bind(self.inner.id)
-        .fetch_all(db)
-        .await?;
-        Ok(fetch_all)
+        let conn = ctx.data_unchecked::<DatabaseConnection>();
+        let all = player_rating::Entity::find()
+            .filter(player_rating::Column::MapId.eq(self.inner.id))
+            .select_only()
+            .expr_as(1.cast_as("UNSIGNED"), "player_id")
+            .columns([player_rating::Column::MapId, player_rating::Column::Kind])
+            .expr_as(
+                Func::avg(Expr::col(player_rating::Column::Rating)),
+                "rating",
+            )
+            .into_model()
+            .all(conn)
+            .await?;
+        Ok(all)
     }
 
     async fn records(
@@ -291,7 +294,7 @@ impl Loader<u32> for MapLoader {
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
         let hashmap = maps::Entity::find()
             .filter(maps::Column::Id.is_in(keys.iter().copied()))
-            .all(&DatabaseConnection::from(self.0.clone()))
+            .all(&DbConn::from(self.0.clone()))
             .await?
             .into_iter()
             .map(|map| (map.id, map.into()))

@@ -7,3 +7,4 @@ edition = "2024"
 serde = { workspace = true }
 sea-orm = { workspace = true }
 thiserror = { workspace = true }
+async-graphql = { workspace = true }

@@ -15,10 +15,9 @@ use reqwest::Client;
 use sea_orm::prelude::Expr;
 use sea_orm::sea_query::{ExprTrait, Func};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, StreamTrait,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    StreamTrait,
 };
-use sqlx::MySqlPool;
 use std::vec::Vec;
 use tracing_actix_web::RequestId;
 
@@ -62,16 +61,15 @@ impl QueryRoot {
         ctx: &async_graphql::Context<'_>,
         mx_id: i64,
     ) -> async_graphql::Result<Option<EventEdition>> {
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(mysql_pool.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
         let edition = event_edition::Entity::find()
             .filter(event_edition::Column::MxId.eq(mx_id))
-            .one(&conn)
+            .one(conn)
             .await?;
 
         Ok(match edition {
-            Some(edition) => Some(EventEdition::from_inner(&conn, edition).await?),
+            Some(edition) => Some(EventEdition::from_inner(conn, edition).await?),
             None => None,
         })
     }
@@ -90,17 +88,14 @@ impl QueryRoot {
         ctx: &async_graphql::Context<'_>,
         handle: String,
     ) -> async_graphql::Result<Event> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-
-        let conn = DatabaseConnection::from(db.clone());
-        let event = must::have_event_handle(&conn, &handle).await?;
+        let conn = ctx.data_unchecked::<DbConn>();
+        let event = must::have_event_handle(conn, &handle).await?;
 
         Ok(event.into())
     }
 
     async fn events(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<Event>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
         let r = event_entity::Entity::find()
             .reverse_join(event_edition::Entity)
@@ -118,7 +113,7 @@ impl QueryRoot {
             )
             .group_by(event_entity::Column::Id)
             .into_model()
-            .all(&conn)
+            .all(conn)
             .await?;
 
         Ok(r)
@@ -130,10 +125,10 @@ impl QueryRoot {
         record_id: u32,
     ) -> async_graphql::Result<RankedRecord> {
         let db = ctx.data_unchecked::<Database>();
-        let conn = DatabaseConnection::from(db.mysql_pool.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        transaction::within(&conn, async |txn| {
+        transaction::within(conn, async |txn| {
             get_record(txn, &mut redis_conn, record_id, Default::default()).await
         })
         .await
@@ -144,10 +139,9 @@ impl QueryRoot {
         ctx: &async_graphql::Context<'_>,
         game_id: String,
     ) -> async_graphql::Result<Map> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(db.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
-        records_lib::map::get_map_from_uid(&conn, &game_id)
+        records_lib::map::get_map_from_uid(conn, &game_id)
             .await?
             .ok_or_else(|| async_graphql::Error::new("Map not found."))
             .map(Into::into)
@@ -158,12 +152,11 @@ impl QueryRoot {
         ctx: &async_graphql::Context<'_>,
         login: String,
     ) -> async_graphql::Result<Player> {
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(mysql_pool.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
         let player = players::Entity::find()
             .filter(players::Column::Login.eq(login))
-            .one(&conn)
+            .one(conn)
             .await?
             .ok_or_else(|| async_graphql::Error::new("Player not found."))?;
 
@@ -176,10 +169,10 @@ impl QueryRoot {
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
-        let conn = DatabaseConnection::from(db.mysql_pool.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        transaction::within(&conn, async |txn| {
+        transaction::within(conn, async |txn| {
             get_records(txn, &mut redis_conn, date_sort_by, Default::default()).await
         })
         .await
@@ -290,6 +283,7 @@ fn create_schema(db: Database, client: Client) -> Schema {
     ))
     .data(db.mysql_pool.clone())
     .data(db.redis_pool.clone())
+    .data(DbConn::from(db.mysql_pool.clone()))
     .data(db)
     .data(client)
     .limit_depth(16)

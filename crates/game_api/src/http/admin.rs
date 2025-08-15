@@ -2,13 +2,12 @@ use actix_web::{
     HttpResponse, Responder, Scope,
     web::{self, Json},
 };
-use entity::{banishments, current_bans, players};
+use entity::{banishments, current_bans, players, role};
 use futures::TryStreamExt;
-use records_lib::Database;
 use sea_orm::{
     ActiveValue::Set,
-    ColumnTrait as _, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult,
-    QueryFilter as _, QuerySelect, RelationTrait as _, StatementBuilder,
+    ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter as _, QuerySelect,
+    RelationTrait as _, StatementBuilder,
     prelude::Expr,
     sea_query::{ExprTrait, Func, Query},
 };
@@ -16,9 +15,9 @@ use serde::{Deserialize, Serialize};
 use tracing_actix_web::RequestId;
 
 use crate::{
-    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
+    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt,
     auth::{MPAuthGuard, privilege},
-    utils::json,
+    utils::{ExtractDbConn, json},
 };
 
 pub fn admin_scope() -> Scope {
@@ -39,15 +38,16 @@ pub struct DelNoteBody {
 pub async fn del_note(
     _: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<DelNoteBody>,
 ) -> RecordsResponse<impl Responder> {
-    sqlx::query("UPDATE players SET admins_note = NULL WHERE login = ?")
-        .bind(&body.player_login)
-        .execute(&db.mysql_pool)
-        .await
-        .with_api_err()
-        .fit(req_id)?;
+    let mut update = Query::update();
+    let update = update
+        .table(players::Entity)
+        .value(players::Column::AdminsNote, None::<String>)
+        .and_where(players::Column::Login.eq(body.player_login));
+    let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
+    conn.execute(stmt).await.with_api_err().fit(req_id)?;
 
     Ok(HttpResponse::Ok().finish())
 }
@@ -67,23 +67,26 @@ struct SetRoleResponse {
 pub async fn set_role(
     _: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<SetRoleBody>,
 ) -> RecordsResponse<impl Responder> {
-    sqlx::query("UPDATE players SET role = ? WHERE login = ?")
-        .bind(body.role)
-        .bind(&body.player_login)
-        .execute(&db.mysql_pool)
+    players::Entity::update_many()
+        .filter(players::Column::Login.eq(&body.player_login))
+        .col_expr(players::Column::Role, Expr::val(body.role).into())
+        .exec(&conn)
         .await
         .with_api_err()
         .fit(req_id)?;
 
-    let role = sqlx::query_scalar("SELECT role_name FROM role WHERE id = ?")
-        .bind(body.role)
-        .fetch_one(&db.mysql_pool)
+    let role = role::Entity::find_by_id(body.role)
+        .select_only()
+        .column(role::Column::RoleName)
+        .into_tuple()
+        .one(&conn)
         .await
         .with_api_err()
-        .fit(req_id)?;
+        .fit(req_id)?
+        .unwrap_or_else(|| panic!("Role with ID {} should exist in database", body.role));
 
     json(SetRoleResponse {
         player_login: body.player_login,
@@ -124,11 +127,9 @@ struct BanishmentsResponse {
 pub async fn banishments(
     _: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     web::Query(body): web::Query<BanishmentsBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
-
     let player_id = records_lib::must::have_player(&conn, &body.player_login)
         .await
         .fit(req_id)?
@@ -207,11 +208,9 @@ struct BanResponse {
 pub async fn ban(
     MPAuthGuard { login }: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<BanBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
-
     let player = records_lib::must::have_player(&conn, &body.player_login)
         .await
         .fit(req_id)?;
@@ -334,11 +333,9 @@ struct UnbanResponse {
 pub async fn unban(
     _: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<UnbanBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
-
     let player_id = records_lib::must::have_player(&conn, &body.player_login)
         .await
         .fit(req_id)?
@@ -381,11 +378,9 @@ struct PlayerNoteResponse {
 pub async fn player_note(
     _: MPAuthGuard<{ privilege::ADMIN }>,
     req_id: RequestId,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<PlayerNoteBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
-
     let admins_note = records_lib::must::have_player(&conn, &body.player_login)
         .await
         .fit(req_id)?

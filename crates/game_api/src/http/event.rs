@@ -19,9 +19,8 @@ use records_lib::{
 };
 use sea_orm::{
     ActiveValue::Set,
-    ColumnTrait as _, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult,
-    QueryFilter, QueryOrder, QuerySelect, QueryTrait as _, RelationTrait as _, StatementBuilder,
-    StreamTrait,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, QuerySelect, QueryTrait as _, RelationTrait as _, StatementBuilder, StreamTrait,
     prelude::Expr,
     sea_query::{Asterisk, Func, Query},
 };
@@ -32,7 +31,7 @@ use crate::{
     FitRequestId, ModeVersion, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt,
     Res,
     auth::MPAuthGuard,
-    utils::{self, json},
+    utils::{self, ExtractDbConn, json},
 };
 
 use super::{
@@ -305,11 +304,9 @@ struct EventListQuery {
 
 async fn event_list(
     req_id: RequestId,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     web::Query(EventListQuery { include_expired }): web::Query<EventListQuery>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
-
     let out = event::event_list(&conn, !include_expired)
         .await
         .with_api_err()
@@ -319,12 +316,11 @@ async fn event_list(
 }
 
 async fn event_editions(
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     req_id: RequestId,
     event_handle: Path<String>,
 ) -> RecordsResponse<impl Responder> {
     let event_handle = event_handle.into_inner();
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
     let id = records_lib::must::have_event_handle(&conn, &event_handle)
         .await
@@ -387,13 +383,11 @@ struct AuthorWithPlayerTime {
 
 async fn edition(
     auth: Option<MPAuthGuard>,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     req_id: RequestId,
     path: Path<(String, u32)>,
 ) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
-
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
     let (event, edition) = records_lib::must::have_event_edition(&conn, &event_handle, edition_id)
         .await
@@ -793,7 +787,7 @@ async fn edition_overview(
     path: Path<(String, u32)>,
     query: overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
+    let conn = DbConn::from(db.0.mysql_pool);
     let mut redis_conn = db.0.redis_pool.get().await.with_api_err().fit(req_id)?;
 
     let (event, edition) = path.into_inner();
@@ -895,7 +889,7 @@ pub async fn edition_finished_at(
     at: chrono::NaiveDateTime,
     mode_version: Option<records_lib::ModeVersion>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
+    let conn = DbConn::from(db.0.mysql_pool);
 
     let (event_handle, edition_id) = path.into_inner();
 
@@ -988,12 +982,10 @@ async fn edition_pb(
     MPAuthGuard { login }: MPAuthGuard,
     req_id: RequestId,
     path: Path<(String, u32)>,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     body: pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
-
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
 
     let (event, edition, EventMap { map, .. }) = records_lib::must::have_event_edition_with_map(
         &conn,

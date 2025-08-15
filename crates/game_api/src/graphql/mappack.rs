@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use async_graphql::SimpleObject;
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
-    Database, MySqlPool, RedisConnection, RedisPool, map,
+    Database, RedisConnection, RedisPool, map,
     mappack::{AnyMappackId, update_mappack},
     must, player,
     redis_key::{
@@ -14,7 +14,7 @@ use records_lib::{
     },
 };
 use reqwest::Client;
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use sea_orm::{ConnectionTrait, DbConn};
 use serde::Deserialize;
 
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
@@ -185,7 +185,7 @@ impl MappackPlayer<'_> {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<MappackMap>> {
         let db = ctx.data_unchecked::<Database>();
-        let conn = DatabaseConnection::from(db.mysql_pool.clone());
+        let conn = DbConn::from(db.mysql_pool.clone());
         let mut redis_conn = db.redis_pool.get().await?;
 
         let maps_uids: Vec<String> = redis_conn
@@ -305,7 +305,7 @@ impl Mappack {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<MappackPlayer<'a>>> {
         let db = ctx.data_unchecked::<Database>();
-        let conn = DatabaseConnection::from(db.mysql_pool.clone());
+        let conn = DbConn::from(db.mysql_pool.clone());
         let mut redis_conn = db.redis_pool.get().await?;
 
         let leaderboard: Vec<u32> = redis_conn
@@ -330,10 +330,9 @@ impl Mappack {
         ctx: &async_graphql::Context<'_>,
         login: String,
     ) -> async_graphql::Result<MappackPlayer<'a>> {
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let conn = DatabaseConnection::from(mysql_pool.clone());
+        let conn = ctx.data_unchecked::<DbConn>();
 
-        let player = must::have_player(&conn, &login).await?;
+        let player = must::have_player(conn, &login).await?;
 
         Ok(MappackPlayer {
             inner: player.into(),
@@ -370,7 +369,7 @@ pub async fn get_mappack(
     mappack_id: String,
 ) -> RecordsResult<Mappack> {
     let db = ctx.data_unchecked::<Database>();
-    let conn = DatabaseConnection::from(db.mysql_pool.clone());
+    let conn = ctx.data_unchecked::<DbConn>();
     let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
 
     let mappack = AnyMappackId::Id(&mappack_id);
@@ -389,11 +388,11 @@ pub async fn get_mappack(
         let client = ctx.data_unchecked::<Client>();
 
         // We fill the mappack
-        fill_mappack(&conn, &mut redis_conn, client, mappack, mappack_id_int).await?;
+        fill_mappack(conn, &mut redis_conn, client, mappack, mappack_id_int).await?;
 
         // And we update it to have its scores cached
         update_mappack(
-            &conn,
+            conn,
             &mut redis_conn,
             AnyMappackId::Id(&mappack_id),
             Default::default(),

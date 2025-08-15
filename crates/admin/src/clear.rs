@@ -1,9 +1,7 @@
 use deadpool_redis::redis::AsyncCommands;
 use entity::{event, event_edition, event_edition_maps};
 use records_lib::{Database, RedisConnection, mappack::AnyMappackId, must, redis_key::mappack_key};
-use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DatabaseConnection, EntityTrait as _, QueryFilter as _,
-};
+use sea_orm::{ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, QueryFilter as _};
 
 #[derive(clap::Args)]
 pub struct ClearCommand {
@@ -41,7 +39,7 @@ pub async fn clear(
         event_edition,
     }: ClearCommand,
 ) -> anyhow::Result<()> {
-    let conn = DatabaseConnection::from(db.mysql_pool);
+    let conn = DbConn::from(db.mysql_pool);
     let mut redis_conn = db.redis_pool.get().await?;
 
     let (event, edition) = must::have_event_edition(&conn, &event_handle, event_edition).await?;

@@ -1,11 +1,14 @@
-use async_graphql::{dataloader::DataLoader, Context};
-use records_lib::models::{self, RatingKind};
+use async_graphql::{Context, dataloader::DataLoader};
+use entity::{player_rating, rating_kind, types};
+use records_lib::models;
+use sea_orm::{ColumnTrait as _, DbConn, EntityTrait, FromQueryResult, QueryFilter};
 
 use super::{
     map::{Map, MapLoader},
     player::{Player, PlayerLoader},
 };
 
+// TODO: where is this used?
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Rating {
     #[sqlx(flatten)]
@@ -18,14 +21,14 @@ impl From<models::Rating> for Rating {
     }
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, FromQueryResult)]
 pub struct PlayerRating {
-    #[sqlx(flatten)]
-    inner: models::PlayerRating,
+    #[sea_orm(nested)]
+    inner: player_rating::Model,
 }
 
-impl From<models::PlayerRating> for PlayerRating {
-    fn from(inner: models::PlayerRating) -> Self {
+impl From<player_rating::Model> for PlayerRating {
+    fn from(inner: player_rating::Model) -> Self {
         Self { inner }
     }
 }
@@ -33,14 +36,17 @@ impl From<models::PlayerRating> for PlayerRating {
 #[async_graphql::Object]
 impl Rating {
     async fn ratings(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<PlayerRating>> {
-        let db = ctx.data_unchecked();
-        Ok(
-            sqlx::query_as("SELECT * FROM player_rating WHERE player_id = ? AND map_id = ?")
-                .bind(self.inner.player_id)
-                .bind(self.inner.map_id)
-                .fetch_all(db)
-                .await?,
-        )
+        let conn = ctx.data_unchecked::<DbConn>();
+        let all = player_rating::Entity::find()
+            .filter(
+                player_rating::Column::PlayerId
+                    .eq(self.inner.player_id)
+                    .and(player_rating::Column::MapId.eq(self.inner.map_id)),
+            )
+            .into_model()
+            .all(conn)
+            .await?;
+        Ok(all)
     }
 
     async fn player(&self, ctx: &Context<'_>) -> async_graphql::Result<Player> {
@@ -64,12 +70,24 @@ impl Rating {
 
 #[async_graphql::Object]
 impl PlayerRating {
-    async fn kind(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<RatingKind> {
-        let db = ctx.data_unchecked();
-        Ok(sqlx::query_as("SELECT * FROM rating_kind WHERE id = ?")
-            .bind(self.inner.kind)
-            .fetch_one(db)
-            .await?)
+    async fn kind(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<types::RatingKind> {
+        let conn = ctx.data_unchecked::<DbConn>();
+
+        let kind = rating_kind::Entity::find_by_id(self.inner.kind)
+            .into_model()
+            .one(conn)
+            .await?
+            .unwrap_or_else(|| {
+                panic!(
+                    "Rating kind with ID {} must exist in database",
+                    self.inner.kind
+                )
+            });
+
+        Ok(kind)
     }
 
     async fn rating(&self) -> f32 {

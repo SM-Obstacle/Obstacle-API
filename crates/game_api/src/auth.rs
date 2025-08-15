@@ -55,14 +55,14 @@ use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
 #[cfg(auth)]
 use deadpool_redis::redis::AsyncCommands;
+use entity::types;
 #[cfg(auth)]
 use entity::{players, role};
 use futures::Future;
 use records_lib::Database;
-use records_lib::models::ApiStatusKind;
 #[cfg(auth)]
 use records_lib::redis_key::{mp_token_key, web_token_key};
-use sea_orm::DatabaseConnection;
+use sea_orm::DbConn;
 #[cfg(auth)]
 use sea_orm::{ColumnTrait as _, EntityTrait, QueryFilter as _, QuerySelect};
 use serde::{Deserialize, Serialize};
@@ -80,7 +80,7 @@ use tracing_actix_web::RequestId;
 #[cfg(auth)]
 use crate::RecordsResultExt as _;
 use crate::utils::{ApiStatus, get_api_status};
-use crate::{AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, Res, must};
+use crate::{AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, must};
 use crate::{RecordsErrorKind, RecordsResult, http::player};
 #[cfg(auth)]
 use records_lib::gen_random_str;
@@ -307,7 +307,7 @@ pub async fn check_auth_for(
     #[cfg_attr(not(auth), allow(unused_variables))] token: &str,
     #[cfg_attr(not(auth), allow(unused_variables))] required: privilege::Flags,
 ) -> RecordsResult<u32> {
-    let conn = DatabaseConnection::from(db.mysql_pool.clone());
+    let conn = DbConn::from(db.mysql_pool.clone());
 
     let player = records_lib::must::have_player(&conn, login).await?;
 
@@ -380,7 +380,7 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
         #[cfg(auth)]
         async fn check<const ROLE: privilege::Flags>(
             request_id: RequestId,
-            db: Res<Database>,
+            db: crate::Res<Database>,
             login: Option<String>,
             token: Option<String>,
         ) -> RecordsResponse<MPAuthGuard<ROLE>> {
@@ -479,23 +479,20 @@ impl FromRequest for ApiAvailable {
     type Future = Pin<Box<dyn Future<Output = RecordsResponse<Self>>>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        async fn check_status(
-            db: Res<Database>,
-            req_id: RequestId,
-        ) -> RecordsResponse<ApiAvailable> {
-            match get_api_status(&db).await.fit(req_id)? {
+        async fn check_status(conn: DbConn, req_id: RequestId) -> RecordsResponse<ApiAvailable> {
+            match get_api_status(&conn).await.fit(req_id)? {
                 ApiStatus {
                     at,
-                    kind: ApiStatusKind::Maintenance,
+                    kind: types::ApiStatusKind::Maintenance,
                 } => Err(RecordsErrorKind::Maintenance(at)).fit(req_id),
                 _ => Ok(ApiAvailable),
             }
         }
 
         let req_id = must::have_request_id(req);
-        let db = must::have_db(req);
+        let conn = must::have_dbconn(req);
 
-        Box::pin(check_status(db, req_id))
+        Box::pin(check_status(conn, req_id))
     }
 }
 

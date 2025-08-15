@@ -7,7 +7,7 @@ use actix_web::{
     body::BoxBody,
     web::{self, Json},
 };
-use entity::{banishments, current_bans, maps, players, records};
+use entity::{banishments, current_bans, maps, players, records, role};
 use futures::TryStreamExt;
 use records_lib::{
     Database, ModeVersion, RedisConnection, event, must, opt_event::OptEvent, player, transaction,
@@ -17,13 +17,12 @@ use reqwest::Client;
 use reqwest::StatusCode;
 use sea_orm::{
     ActiveValue::Set,
-    ColumnTrait as _, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult,
-    QueryFilter, QuerySelect, StatementBuilder, StreamTrait, TransactionTrait,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait, FromQueryResult, QueryFilter,
+    QuerySelect, StatementBuilder, StreamTrait, TransactionTrait,
     prelude::Expr,
     sea_query::{ExprTrait as _, Query},
 };
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 #[cfg(auth)]
 use tokio::time::timeout;
 #[cfg(auth)]
@@ -39,7 +38,7 @@ use crate::{
 use crate::{
     FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
     auth::{self, ApiAvailable, AuthHeader, MPAuthGuard, privilege},
-    utils::{self, json},
+    utils::{self, ExtractDbConn, json},
 };
 use dsc_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 
@@ -125,7 +124,7 @@ pub async fn update(
     Json(body): Json<PlayerInfoNetBody>,
 ) -> RecordsResponse<impl Responder> {
     let auth_check = auth::check_auth_for(&db, &login, &token, privilege::PLAYER).await;
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
+    let conn = DbConn::from(db.0.mysql_pool);
 
     match auth_check {
         Ok(id) => update_player(&conn, id, body).await.fit(req_id)?,
@@ -324,7 +323,7 @@ pub async fn finished_at_with_pool(
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.mysql_pool);
+    let conn = DbConn::from(db.mysql_pool);
     let mut redis_conn = db.redis_pool.get().await.with_api_err().fit(req_id)?;
     let res = finished_at(
         &conn,
@@ -501,11 +500,9 @@ async fn pb(
     _: ApiAvailable,
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     web::Query(body): pb::PbReq,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
-
     let map = must::have_map(&conn, &body.map_uid)
         .await
         .with_api_err()
@@ -560,11 +557,9 @@ struct TimesResponseItem {
 async fn times(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<TimesBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
-
     let player = records_lib::must::have_player(&conn, &login)
         .await
         .fit(req_id)?;
@@ -594,7 +589,7 @@ pub struct InfoBody {
     login: String,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize, FromQueryResult)]
 struct InfoResponse {
     id: u32,
     login: String,
@@ -606,19 +601,28 @@ struct InfoResponse {
 
 pub async fn info(
     req_id: RequestId,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     web::Query(body): web::Query<InfoBody>,
 ) -> RecordsResponse<impl Responder> {
-    let Some(info) = sqlx::query_as::<_, InfoResponse>(
-        "SELECT *, (SELECT role_name FROM role WHERE id = role) as role_name
-        FROM players WHERE login = ?",
-    )
-    .bind(&body.login)
-    .fetch_optional(&db.mysql_pool)
-    .await
-    .with_api_err()
-    .fit(req_id)?
-    else {
+    let info = players::Entity::find()
+        .filter(players::Column::Login.eq(&body.login))
+        .inner_join(role::Entity)
+        .select_only()
+        .columns([
+            players::Column::Id,
+            players::Column::Login,
+            players::Column::Name,
+            players::Column::JoinDate,
+            players::Column::ZonePath,
+        ])
+        .column(role::Column::RoleName)
+        .into_model::<InfoResponse>()
+        .one(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?;
+
+    let Some(info) = info else {
         return Err(RecordsErrorKind::from(
             records_lib::error::RecordsError::PlayerNotFound(body.login),
         ))

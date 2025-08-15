@@ -14,19 +14,40 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         entities::role::Entity::insert_many([
             entities::role::ActiveModel {
-                id: Set(1),
+                id: Set(0),
                 role_name: Set("player".to_owned()),
                 privileges: Set(Some(1)),
             },
             entities::role::ActiveModel {
-                id: Set(2),
+                id: Set(1),
                 role_name: Set("mod".to_owned()),
                 privileges: Set(Some(3)),
             },
             entities::role::ActiveModel {
-                id: Set(3),
+                id: Set(2),
                 role_name: Set("admin".to_owned()),
                 privileges: Set(Some(255)),
+            },
+        ])
+        .exec(manager.get_connection())
+        .await?;
+
+        entities::rating_kind::Entity::insert_many([
+            entities::rating_kind::ActiveModel {
+                id: Set(0),
+                kind: Set("route".to_owned()),
+            },
+            entities::rating_kind::ActiveModel {
+                id: Set(1),
+                kind: Set("deco".to_owned()),
+            },
+            entities::rating_kind::ActiveModel {
+                id: Set(2),
+                kind: Set("smoothness".to_owned()),
+            },
+            entities::rating_kind::ActiveModel {
+                id: Set(3),
+                kind: Set("difficulty".to_owned()),
             },
         ])
         .exec(manager.get_connection())
@@ -57,8 +78,13 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        entities::rating_kind::Entity::delete_many()
+            .filter(entities::rating_kind::Column::Id.is_in([0, 1, 2, 3]))
+            .exec(manager.get_connection())
+            .await?;
+
         entities::role::Entity::delete_many()
-            .filter(entities::role::Column::Id.is_in([1, 2, 3]))
+            .filter(entities::role::Column::Id.is_in([0, 1, 2]))
             .exec(manager.get_connection())
             .await?;
 

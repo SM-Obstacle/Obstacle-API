@@ -18,8 +18,8 @@ use records_lib::{
     transaction,
 };
 use sea_orm::{
-    ActiveValue::Set, ConnectionTrait, DatabaseConnection, EntityTrait, StatementBuilder,
-    TransactionTrait, sea_query::Query,
+    ActiveValue::Set, ConnectionTrait, DbConn, EntityTrait, StatementBuilder, TransactionTrait,
+    sea_query::Query,
 };
 
 use crate::clear;
@@ -284,7 +284,7 @@ pub async fn populate(
         kind,
     }: PopulateCommand,
 ) -> anyhow::Result<()> {
-    let conn = DatabaseConnection::from(db.mysql_pool);
+    let conn = DbConn::from(db.mysql_pool);
     let mut redis_conn = db.redis_pool.get().await?;
 
     let (event, edition) = must::have_event_edition(&conn, &event_handle, event_edition).await?;

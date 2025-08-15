@@ -1,7 +1,7 @@
 use crate::{
     FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
     auth::{self, ApiAvailable, AuthHeader, MPAuthGuard, privilege},
-    utils::{any_repeated, json},
+    utils::{ExtractDbConn, any_repeated, json},
 };
 use actix_web::{
     HttpResponse, Responder, Scope,
@@ -12,8 +12,8 @@ use futures::{StreamExt, future::try_join_all};
 use records_lib::Database;
 use sea_orm::{
     ActiveValue::Set,
-    ColumnTrait as _, ConnectionTrait, DatabaseConnection, EntityTrait as _, FromQueryResult,
-    PaginatorTrait, QueryFilter, QuerySelect, StatementBuilder,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, PaginatorTrait,
+    QueryFilter, QuerySelect, StatementBuilder,
     prelude::Expr,
     sea_query::{Func, Query},
 };
@@ -44,11 +44,9 @@ struct UpdateMapBody {
 async fn insert(
     _: ApiAvailable,
     req_id: RequestId,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<UpdateMapBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
-
     let res = records_lib::map::get_map_from_uid(&conn, &body.map_uid)
         .await
         .fit(req_id)?;
@@ -114,11 +112,9 @@ struct PlayerRatingResponse {
 pub async fn player_rating(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<PlayerRatingBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
-
     let player_id = records_lib::must::have_player(&conn, &login)
         .await
         .fit(req_id)?
@@ -211,7 +207,7 @@ pub async fn ratings(
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<RatingsBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool.clone());
+    let conn = DbConn::from(db.0.mysql_pool.clone());
 
     let player = records_lib::must::have_player(&conn, &login)
         .await
@@ -304,11 +300,9 @@ struct RatingResponse {
 
 pub async fn rating(
     req_id: RequestId,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     web::Query(body): web::Query<RatingBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
-
     let info = maps::Entity::find()
         .inner_join(players::Entity)
         .filter(maps::Column::GameId.eq(&body.map_uid))
@@ -381,11 +375,9 @@ struct RateResponse {
 pub async fn rate(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<RateBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DatabaseConnection::from(db.0.mysql_pool);
-
     let players::Model {
         id: player_id,
         login: player_login,
@@ -594,38 +586,40 @@ struct ResetRatingsResponse {
 pub async fn reset_ratings(
     req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::ADMIN }>,
-    db: Res<Database>,
+    ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<ResetRatingsBody>,
 ) -> RecordsResponse<impl Responder> {
-    let Some((map_id, map_name, author_login)) = sqlx::query_as(
-        "SELECT m.id, m.name, login
-        FROM maps m
-        INNER JOIN players p ON p.id = player_id
-        WHERE game_id = ?",
-    )
-    .bind(&body.map_id)
-    .fetch_optional(&db.mysql_pool)
-    .await
-    .with_api_err()
-    .fit(req_id)?
-    else {
+    let info = maps::Entity::find()
+        .filter(maps::Column::GameId.eq(&body.map_id))
+        .inner_join(players::Entity)
+        .select_only()
+        .columns([maps::Column::Id, maps::Column::Name])
+        .column(players::Column::Login)
+        .into_tuple()
+        .one(&conn)
+        .await
+        .with_api_err()
+        .fit(req_id)?;
+
+    let Some((map_id, map_name, author_login)) = info else {
         return Err(RecordsErrorKind::from(
             records_lib::error::RecordsError::MapNotFound(body.map_id),
         ))
         .fit(req_id);
     };
+
     let map_id: u32 = map_id;
 
-    sqlx::query("DELETE FROM player_rating WHERE map_id = ?")
-        .bind(map_id)
-        .execute(&db.mysql_pool)
+    player_rating::Entity::delete_many()
+        .filter(player_rating::Column::MapId.eq(map_id))
+        .exec(&conn)
         .await
         .with_api_err()
         .fit(req_id)?;
 
-    sqlx::query("DELETE FROM rating WHERE map_id = ?")
-        .bind(map_id)
-        .execute(&db.mysql_pool)
+    rating::Entity::delete_many()
+        .filter(rating::Column::MapId.eq(map_id))
+        .exec(&conn)
         .await
         .with_api_err()
         .fit(req_id)?;
