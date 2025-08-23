@@ -231,7 +231,9 @@ pub async fn ratings(
         (privilege::ADMIN, login)
     };
 
-    auth::check_auth_for(&db, &login, &token, role)
+    let mut redis_conn = db.0.redis_pool.get().await.with_api_err().fit(req_id)?;
+
+    auth::check_auth_for(&conn, &mut redis_conn, &login, Some(token.as_str()), role)
         .await
         .fit(req_id)?;
 

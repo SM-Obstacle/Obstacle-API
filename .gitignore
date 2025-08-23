@@ -7,3 +7,4 @@ Cargo.lock
 .docker
 *.http
 *.csv
+**/.zed/*

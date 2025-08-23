@@ -1,7 +1,5 @@
-#[cfg(auth)]
-use actix_session::Session;
-#[cfg(auth)]
-use actix_web::web::Data;
+mod auth;
+
 use actix_web::{
     HttpResponse, Responder, Scope,
     body::BoxBody,
@@ -13,8 +11,6 @@ use records_lib::{
     Database, ModeVersion, RedisConnection, event, must, opt_event::OptEvent, player, transaction,
 };
 use reqwest::Client;
-#[cfg(auth)]
-use reqwest::StatusCode;
 use sea_orm::{
     ActiveValue::Set,
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait, FromQueryResult, QueryFilter,
@@ -23,21 +19,11 @@ use sea_orm::{
     sea_query::{ExprTrait as _, Query},
 };
 use serde::{Deserialize, Serialize};
-#[cfg(auth)]
-use tokio::time::timeout;
-#[cfg(auth)]
-use tracing::Level;
 use tracing_actix_web::RequestId;
-
-#[cfg(auth)]
-use crate::{
-    AccessTokenErr,
-    auth::{AuthState, Message, TIMEOUT, WEB_TOKEN_SESS_KEY, WebToken},
-};
 
 use crate::{
     FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
-    auth::{self, ApiAvailable, AuthHeader, MPAuthGuard, privilege},
+    auth::{ApiAvailable, AuthHeader, MPAuthGuard, privilege},
     utils::{self, ExtractDbConn, json},
 };
 use dsc_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
@@ -54,7 +40,7 @@ pub fn player_scope() -> Scope {
     let scope = web::scope("/player")
         .route("/update", web::post().to(update))
         .route("/finished", web::post().to(finished))
-        .route("/get_token", web::post().to(get_token))
+        .route("/get_token", web::post().to(auth::get_token))
         .route("/pb", web::get().to(pb))
         .route("/times", web::post().to(times))
         .route("/info", web::get().to(info))
@@ -65,7 +51,7 @@ pub fn player_scope() -> Scope {
     let scope = scope.service(
         web::scope("")
             .wrap(FlagFalseRequest::<WebsiteFilter>::default())
-            .route("/give_token", web::post().to(post_give_token)),
+            .route("/give_token", web::post().to(auth::post_give_token)),
     );
     #[cfg(not(feature = "request_filter"))]
     let scope = scope.route("/give_token", web::post().to(post_give_token));
@@ -123,10 +109,19 @@ pub async fn update(
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<PlayerInfoNetBody>,
 ) -> RecordsResponse<impl Responder> {
-    let auth_check = auth::check_auth_for(&db, &login, &token, privilege::PLAYER).await;
     let conn = DbConn::from(db.0.mysql_pool);
+    let mut redis_conn = db.0.redis_pool.get().await.with_api_err().fit(req_id)?;
 
-    match auth_check {
+    let auth_result = crate::auth::check_auth_for(
+        &conn,
+        &mut redis_conn,
+        &login,
+        Some(token.as_str()),
+        privilege::PLAYER,
+    )
+    .await;
+
+    match auth_result {
         Ok(id) => update_player(&conn, id, body).await.fit(req_id)?,
         // At this point, if Redis has registered a token with the login, it means that
         // the player is not yet added to the Obstacle database but effectively
@@ -192,79 +187,6 @@ pub async fn check_banned<C: ConnectionTrait>(
         .map(From::from);
 
     Ok(r)
-}
-
-#[cfg(auth)]
-#[derive(Serialize)]
-struct MPAccessTokenBody<'a> {
-    grant_type: &'a str,
-    client_id: &'a str,
-    client_secret: &'a str,
-    code: &'a str,
-    redirect_uri: &'a str,
-}
-
-#[cfg(auth)]
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum MPAccessTokenResponse {
-    AccessToken { access_token: String },
-    Error(AccessTokenErr),
-}
-
-#[cfg(auth)]
-#[derive(Deserialize, Debug)]
-struct MPServerRes {
-    #[serde(alias = "login")]
-    res_login: String,
-}
-
-#[cfg(auth)]
-async fn test_access_token(
-    client: &Client,
-    login: &str,
-    code: &str,
-    redirect_uri: &str,
-) -> RecordsResult<bool> {
-    let res = client
-        .post("https://prod.live.maniaplanet.com/login/oauth2/access_token")
-        .form(&MPAccessTokenBody {
-            grant_type: "authorization_code",
-            client_id: &crate::env().mp_client_id,
-            client_secret: &crate::env().mp_client_secret,
-            code,
-            redirect_uri,
-        })
-        .send()
-        .await
-        .with_api_err()?
-        .json()
-        .await
-        .with_api_err()?;
-
-    let access_token = match res {
-        MPAccessTokenResponse::AccessToken { access_token } => access_token,
-        MPAccessTokenResponse::Error(err) => return Err(RecordsErrorKind::AccessTokenErr(err)),
-    };
-
-    check_mp_token(client, login, access_token).await
-}
-
-#[cfg(auth)]
-async fn check_mp_token(client: &Client, login: &str, token: String) -> RecordsResult<bool> {
-    let res = client
-        .get("https://prod.live.maniaplanet.com/webservices/me")
-        .header("Accept", "application/json")
-        .bearer_auth(token)
-        .send()
-        .await
-        .with_api_err()?;
-    let MPServerRes { res_login } = match res.status() {
-        StatusCode::OK => res.json().await.with_api_err()?,
-        _ => return Ok(false),
-    };
-
-    Ok(res_login.to_lowercase() == login.to_lowercase())
 }
 
 async fn finished_impl<C: ConnectionTrait + StreamTrait>(
@@ -386,114 +308,6 @@ async fn finished(
         chrono::Utc::now().naive_utc(),
     )
     .await
-}
-
-#[cfg(auth)]
-#[derive(Deserialize)]
-pub struct GetTokenBody {
-    login: String,
-    state: String,
-    redirect_uri: String,
-}
-
-#[derive(Serialize)]
-struct GetTokenResponse {
-    token: String,
-}
-
-// Handler used when the `auth` feature is disabled.
-// This is used for older versions of the game that still rely on the `/player/get_token` route.
-#[cfg(not(auth))]
-async fn get_token() -> RecordsResponse<impl Responder> {
-    json(GetTokenResponse {
-        token: "if you see this gg".to_owned(),
-    })
-}
-
-#[cfg(auth)]
-async fn get_token(
-    _: ApiAvailable,
-    req_id: RequestId,
-    db: Res<Database>,
-    Res(client): Res<Client>,
-    state: Data<AuthState>,
-    Json(body): Json<GetTokenBody>,
-) -> RecordsResponse<impl Responder> {
-    // retrieve access_token from browser redirection
-    let (tx, rx) = state
-        .connect_with_browser(body.state.clone())
-        .await
-        .fit(req_id)?;
-    let code = match timeout(TIMEOUT, rx).await {
-        Ok(Ok(Message::MPCode(access_token))) => access_token,
-        _ => {
-            tracing::event!(
-                Level::WARN,
-                "Token state `{}` timed out, removing it",
-                body.state.clone()
-            );
-            state.remove_state(body.state).await;
-            return Err(RecordsErrorKind::Timeout(TIMEOUT)).fit(req_id);
-        }
-    };
-
-    let err_msg = "/get_token rx should not be dropped at this point";
-
-    // check access_token and generate new token for player ...
-    match test_access_token(&client, &body.login, &code, &body.redirect_uri).await {
-        Ok(true) => (),
-        Ok(false) => {
-            tx.send(Message::InvalidMPCode).expect(err_msg);
-            return Err(RecordsErrorKind::InvalidMPCode).fit(req_id);
-        }
-        Err(RecordsErrorKind::AccessTokenErr(err)) => {
-            tx.send(Message::AccessTokenErr(err.clone()))
-                .expect(err_msg);
-            return Err(RecordsErrorKind::AccessTokenErr(err)).fit(req_id);
-        }
-        err => {
-            let _ = err.fit(req_id)?;
-        }
-    }
-
-    let (mp_token, web_token) = auth::gen_token_for(&db, &body.login).await.fit(req_id)?;
-    tx.send(Message::Ok(WebToken {
-        login: body.login,
-        token: web_token,
-    }))
-    .expect(err_msg);
-
-    json(GetTokenResponse { token: mp_token })
-}
-
-#[cfg(not(auth))]
-#[inline(always)]
-async fn post_give_token() -> RecordsResponse<impl Responder> {
-    Ok(HttpResponse::Ok().finish())
-}
-
-#[cfg(auth)]
-#[derive(Deserialize)]
-pub struct GiveTokenBody {
-    code: String,
-    state: String,
-}
-
-#[cfg(auth)]
-async fn post_give_token(
-    req_id: RequestId,
-    session: Session,
-    state: Data<AuthState>,
-    Json(body): Json<GiveTokenBody>,
-) -> RecordsResponse<impl Responder> {
-    let web_token = state
-        .browser_connected_for(body.state, body.code)
-        .await
-        .fit(req_id)?;
-    session
-        .insert(WEB_TOKEN_SESS_KEY, web_token)
-        .expect("unable to insert session web token");
-    Ok(HttpResponse::Ok().finish())
 }
 
 async fn pb(

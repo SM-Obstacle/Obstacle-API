@@ -1,6 +1,12 @@
 //! Module used to serve the routes mainly used by the Obstacle gamemode. Each submodule is
 //! specific for a route segment.
 
+#[cfg(auth)]
+pub mod admin;
+pub mod event;
+pub mod map;
+pub mod player;
+
 use std::fmt;
 
 use actix_web::body::BoxBody;
@@ -25,12 +31,6 @@ use actix_web::Responder;
 use dsc_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 #[cfg(feature = "request_filter")]
 use request_filter::{FlagFalseRequest, InGameFilter};
-
-#[cfg(auth)]
-pub mod admin;
-pub mod event;
-pub mod map;
-pub mod player;
 
 mod overview;
 mod pb;

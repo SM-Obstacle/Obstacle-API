@@ -48,26 +48,25 @@
 //! See <https://github.com/maniaplanet/documentation/blob/master/13.web-services/01.oauth2/docs.md#auth-code-flow-or-explicit-flow-or-server-side-flow>
 //! for more information.
 
-// TODO: remove this shitty conditional compilation thing which blows up imports
+#[cfg(auth)]
+pub mod gen_token;
 
+mod check;
+pub use check::check_auth_for;
+
+use records_lib::RedisPool;
+
+use crate::RecordsResultExt as _;
+use crate::utils::{ApiStatus, get_api_status};
+use crate::{AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, must};
+use crate::{RecordsErrorKind, RecordsResult};
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
-#[cfg(auth)]
-use deadpool_redis::redis::AsyncCommands;
 use entity::types;
-#[cfg(auth)]
-use entity::{players, role};
 use futures::Future;
-use records_lib::Database;
-#[cfg(auth)]
-use records_lib::redis_key::{mp_token_key, web_token_key};
 use sea_orm::DbConn;
-#[cfg(auth)]
-use sea_orm::{ColumnTrait as _, EntityTrait, QueryFilter as _, QuerySelect};
 use serde::{Deserialize, Serialize};
-#[cfg(auth)]
-use sha256::digest;
 use std::future::{Ready, ready};
 use std::pin::Pin;
 use std::{collections::HashMap, time::Duration};
@@ -77,15 +76,7 @@ use tokio::time::timeout;
 use tracing::Level;
 use tracing_actix_web::RequestId;
 
-#[cfg(auth)]
-use crate::RecordsResultExt as _;
-use crate::utils::{ApiStatus, get_api_status};
-use crate::{AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, must};
-use crate::{RecordsErrorKind, RecordsResult, http::player};
-#[cfg(auth)]
-use records_lib::gen_random_str;
-
-#[allow(unused)]
+#[allow(dead_code)] // Allow unused flags
 pub mod privilege {
     pub type Flags = u8;
 
@@ -254,107 +245,12 @@ impl AuthState {
     }
 }
 
-/// Generates a ManiaPlanet and Website token for the player with the provided login.
-///
-/// The player might not yet exist in the database.
-/// It returns a couple of (ManiaPlanet token ; Website token).
-///
-/// The tokens are stored in the Redis database.
-#[cfg(auth)]
-pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String, String)> {
-    use crate::RecordsResultExt as _;
-
-    let mp_token = gen_random_str(256);
-    let web_token = gen_random_str(32);
-
-    let mut connection = db.redis_pool.get().await.with_api_err()?;
-    let mp_key = mp_token_key(login);
-    let web_key = web_token_key(login);
-
-    let ex = crate::env().auth_token_ttl as _;
-
-    let mp_token_hash = digest(&*mp_token);
-    let web_token_hash = digest(&*web_token);
-
-    let _: () = connection
-        .set_ex(mp_key, mp_token_hash, ex)
-        .await
-        .with_api_err()?;
-    let _: () = connection
-        .set_ex(web_key, web_token_hash, ex)
-        .await
-        .with_api_err()?;
-    Ok((mp_token, web_token))
+struct ExtAuthHeaders {
+    player_login: Option<String>,
+    authorization: Option<String>,
 }
 
-/// Checks for a successful authentication for the player with its login and ManiaPlanet token.
-///
-/// # Arguments
-///
-/// * `_: AuthHeader`: the authentication headers retrieved from the HTTP request.
-/// * `required: Role` the required role to be authorized.
-///
-/// # Returns
-///
-/// * If the token is invalid, it returns an `Unauthorized` error
-/// * If it is valid, but the player doesn't exist in the database, it returns a `PlayerNotFound` error
-/// * If the player hasn't the required role, or is banned, it returns a `Forbidden` error
-/// * Otherwise, it returns Ok(())
-// TODO: don't ask for a database but for mysql and redis connections directly
-pub async fn check_auth_for(
-    db: &Database,
-    login: &str,
-    #[cfg_attr(not(auth), allow(unused_variables))] token: &str,
-    #[cfg_attr(not(auth), allow(unused_variables))] required: privilege::Flags,
-) -> RecordsResult<u32> {
-    let conn = DbConn::from(db.mysql_pool.clone());
-
-    let player = records_lib::must::have_player(&conn, login).await?;
-
-    if let Some(ban) = player::check_banned(&conn, player.id).await? {
-        return Err(RecordsErrorKind::BannedPlayer(ban));
-    };
-
-    #[cfg(not(auth))]
-    {
-        Ok(player.id)
-    }
-
-    #[cfg(auth)]
-    {
-        let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
-        let stored_token: Option<String> =
-            redis_conn.get(mp_token_key(login)).await.with_api_err()?;
-
-        if !matches!(stored_token, Some(t) if t == digest(token)) {
-            return Err(RecordsErrorKind::Unauthorized);
-        }
-
-        let role: privilege::Flags = players::Entity::find()
-            .filter(players::Column::Id.eq(player.id))
-            .inner_join(role::Entity)
-            .select_only()
-            .column(role::Column::Privileges)
-            .into_tuple()
-            .one(&conn)
-            .await
-            .with_api_err()?
-            .unwrap_or_else(|| panic!("Player {} should have a role", player.id));
-
-        if role & required != required {
-            return Err(RecordsErrorKind::Forbidden);
-        }
-
-        Ok(player.id)
-    }
-}
-
-pub struct ExtAuthHeaders {
-    pub player_login: Option<String>,
-    pub authorization: Option<String>,
-}
-
-pub fn ext_auth_headers(req: &HttpRequest) -> ExtAuthHeaders {
+fn ext_auth_headers(req: &HttpRequest) -> ExtAuthHeaders {
     fn ext_header(req: &HttpRequest, header: &str) -> Option<String> {
         req.headers()
             .get(header)
@@ -377,10 +273,10 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
     type Future = Pin<Box<dyn Future<Output = RecordsResponse<Self>>>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        #[cfg(auth)]
         async fn check<const ROLE: privilege::Flags>(
             request_id: RequestId,
-            db: crate::Res<Database>,
+            conn: DbConn,
+            redis_pool: RedisPool,
             login: Option<String>,
             token: Option<String>,
         ) -> RecordsResponse<MPAuthGuard<ROLE>> {
@@ -388,11 +284,9 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
                 return Err(RecordsErrorKind::Unauthorized).fit(request_id);
             };
 
-            let Some(token) = token else {
-                return Err(RecordsErrorKind::Unauthorized).fit(request_id);
-            };
+            let mut redis_conn = redis_pool.get().await.with_api_err().fit(request_id)?;
 
-            check_auth_for(&db, &login, &token, ROLE)
+            check::check_auth_for(&conn, &mut redis_conn, &login, token.as_deref(), ROLE)
                 .await
                 .fit(request_id)?;
 
@@ -400,25 +294,17 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
         }
 
         let req_id = must::have_request_id(req);
+        let ExtAuthHeaders {
+            player_login,
+            authorization,
+        } = ext_auth_headers(req);
 
-        #[cfg(auth)]
-        {
-            let ExtAuthHeaders {
-                player_login,
-                authorization,
-            } = ext_auth_headers(req);
-
-            let db = must::have_db(req);
-            Box::pin(check(req_id, db, player_login, authorization))
-        }
-
-        #[cfg(not(auth))]
-        Box::pin(ready(
-            ext_auth_headers(req)
-                .player_login
-                .ok_or(RecordsErrorKind::Unauthorized)
-                .fit(req_id)
-                .map(|login| MPAuthGuard { login }),
+        Box::pin(check(
+            req_id,
+            must::have_dbconn(req),
+            must::have_redis_pool(req),
+            player_login,
+            authorization,
         ))
     }
 }
