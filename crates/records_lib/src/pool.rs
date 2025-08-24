@@ -24,6 +24,12 @@ pub enum DatabaseCreationError {
     DeadpoolRedis(#[from] deadpool_redis::CreatePoolError),
 }
 
+#[inline(always)]
+#[cfg(feature = "test")]
+const fn empty_query_results() -> std::iter::Empty<std::iter::Empty<sea_orm::MockRow>> {
+    std::iter::empty::<std::iter::Empty<sea_orm::MockRow>>()
+}
+
 impl Database {
     fn from_db_conn(
         db_conn: DbConn,
@@ -45,7 +51,65 @@ impl Database {
         Self::from_db_conn(db_conn, redis_url).map_err(From::from)
     }
 
-    /// Returns the database from the URL of the Redis database, and the backend of the SQL database.
+    /// Returns the database from the URL of the Redis database, and the backend of the SQL database,
+    /// with initial data for the mock database.
+    ///
+    /// This is used for testing, by simulating an SQL database.
+    #[cfg(feature = "test")]
+    #[cfg_attr(nightly, doc(cfg(feature = "test")))]
+    pub fn from_mock_db_with_initial<I1, I2>(
+        db_backend: sea_orm::DbBackend,
+        redis_url: String,
+        query_results: I1,
+        exec_results: I2,
+    ) -> Result<Self, deadpool_redis::CreatePoolError>
+    where
+        I1: IntoIterator<Item: IntoIterator<Item: sea_orm::IntoMockRow>>,
+        I2: IntoIterator<Item = sea_orm::MockExecResult>,
+    {
+        let db_conn = sea_orm::MockDatabase::new(db_backend)
+            .append_query_results(query_results)
+            .append_exec_results(exec_results)
+            .into_connection();
+        Self::from_db_conn(db_conn, redis_url)
+    }
+
+    /// Returns the database from the URL of the Redis database, and the backend of the SQL database,
+    /// with initial query results for the mock database.
+    ///
+    /// This is used for testing, by simulating an SQL database.
+    #[cfg(feature = "test")]
+    #[cfg_attr(nightly, doc(cfg(feature = "test")))]
+    pub fn from_mock_db_with_query_results<I>(
+        db_backend: sea_orm::DbBackend,
+        redis_url: String,
+        query_results: I,
+    ) -> Result<Self, deadpool_redis::CreatePoolError>
+    where
+        I: IntoIterator<Item: IntoIterator<Item: sea_orm::IntoMockRow>>,
+    {
+        Self::from_mock_db_with_initial(db_backend, redis_url, query_results, [])
+    }
+
+    /// Returns the database from the URL of the Redis database, and the backend of the SQL database,
+    /// with initial exec results for the mock database.
+    ///
+    /// This is used for testing, by simulating an SQL database.
+    #[cfg(feature = "test")]
+    #[cfg_attr(nightly, doc(cfg(feature = "test")))]
+    pub fn from_mock_db_with_exec_results<I>(
+        db_backend: sea_orm::DbBackend,
+        redis_url: String,
+        exec_results: I,
+    ) -> Result<Self, deadpool_redis::CreatePoolError>
+    where
+        I: IntoIterator<Item = sea_orm::MockExecResult>,
+    {
+        Self::from_mock_db_with_initial(db_backend, redis_url, empty_query_results(), exec_results)
+    }
+
+    /// Returns the database from the URL of the Redis database, and the backend of the SQL database,
+    /// with no data in the mock database.
     ///
     /// This is used for testing, by simulating an SQL database.
     #[cfg(feature = "test")]
@@ -54,8 +118,7 @@ impl Database {
         db_backend: sea_orm::DbBackend,
         redis_url: String,
     ) -> Result<Self, deadpool_redis::CreatePoolError> {
-        let db_conn = sea_orm::MockDatabase::new(db_backend).into_connection();
-        Self::from_db_conn(db_conn, redis_url)
+        Self::from_mock_db_with_initial(db_backend, redis_url, empty_query_results(), [])
     }
 }
 

@@ -20,21 +20,29 @@ impl RootSpanBuilder for CustomRootSpanBuilder {
         let db = request.app_data::<Database>().unwrap();
         let pool_size = {
             #[allow(unreachable_patterns)]
-            match () {
+            match db.sql_conn {
                 #[cfg(feature = "mysql")]
-                _ => db.sql_conn.get_mysql_connection_pool().size(),
+                sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(_) => {
+                    db.sql_conn.get_mysql_connection_pool().size()
+                }
                 #[cfg(feature = "postgres")]
-                _ => db.sql_conn.get_postgres_connection_pool().size(),
+                sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(_) => {
+                    db.sql_conn.get_postgres_connection_pool().size()
+                }
                 _ => 0,
             }
         };
         let pool_num_idle = {
             #[allow(unreachable_patterns)]
-            match () {
+            match db.sql_conn {
                 #[cfg(feature = "mysql")]
-                _ => db.sql_conn.get_mysql_connection_pool().num_idle(),
+                sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(_) => {
+                    db.sql_conn.get_mysql_connection_pool().num_idle()
+                }
                 #[cfg(feature = "postgres")]
-                _ => db.sql_conn.get_postgres_connection_pool().num_idle(),
+                sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(_) => {
+                    db.sql_conn.get_postgres_connection_pool().num_idle()
+                }
                 _ => 0,
             }
         };

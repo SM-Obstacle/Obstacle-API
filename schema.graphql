@@ -1,0 +1,248 @@
+type CheckpointTime {
+	cpNum: Int!
+	time: Int!
+}
+
+"""
+Implement the DateTime<Utc> scalar
+
+The input/output is a string in RFC3339 format.
+"""
+scalar DateTime
+
+type Event {
+	handle: String!
+	cooldown: Int
+	admins: [Player!]!
+	categories: [EventCategory!]!
+	editions: [EventEdition!]!
+	lastEdition: EventEdition
+	edition(editionId: Int!): EventEdition
+}
+
+type EventCategory {
+	handle: String!
+	name: String!
+	bannerImgUrl: String
+	hexColor: String
+}
+
+type EventEdition {
+	id: Int!
+	mappack: Mappack
+	admins: [Player!]!
+	event: Event!
+	name: String!
+	subtitle: String
+	startDate: NaiveDateTime!
+	bannerImgUrl: String
+	expiresIn: Int
+	player(login: String!): EventEditionPlayer!
+	map(gameId: String!): EventEditionMap!
+	categories: [EventCategory!]!
+}
+
+type EventEditionMap {
+	edition: EventEdition!
+	map: Map!
+	linkToOriginal: Boolean!
+	originalMap: Map
+	records(rankSortBy: SortState, dateSortBy: SortState): [RankedRecord!]!
+	medalTimes: MedalTimes
+}
+
+type EventEditionMapExt {
+	map: Map!
+	lastRank: Int!
+	medalTimes: MedalTimes
+}
+
+type EventEditionPlayer {
+	player: Player!
+	rank: Int!
+	rankAvg: Float!
+	mapFinished: Int!
+	worstRank: Int!
+	categorizedRanks: [EventEditionPlayerCategorizedRank!]!
+	unfinishedMaps: [EventEditionMapExt!]!
+}
+
+type EventEditionPlayerCategorizedRank {
+	categoryName: String!
+	bannerImgUrl: String
+	hexColor: String
+	nbMaps: Int!
+	ranks: [EventEditionPlayerRank!]!
+}
+
+type EventEditionPlayerRank {
+	rank: Int!
+	time: Int!
+	map: EventEditionMapExt!
+}
+
+type Map {
+	id: ID!
+	gameId: String!
+	playerId: ID!
+	cpsNumber: Int
+	player: Player!
+	name: String!
+	relatedEventEditions: [RelatedEdition!]!
+	averageRating: [PlayerRating!]!
+	records(rankSortBy: SortState, dateSortBy: SortState): [RankedRecord!]!
+}
+
+type Mappack {
+	nbMaps: Int!
+	mxAuthor: String
+	mxCreatedAt: NaiveDateTime
+	mxName: String
+	leaderboard: [MappackPlayer!]!
+	player(login: String!): MappackPlayer!
+	nextUpdateIn: Int
+}
+
+type MappackMap {
+	rank: Int!
+	lastRank: Int!
+	map: Map!
+}
+
+type MappackPlayer {
+	rank: Int!
+	player: Player!
+	ranks: [MappackMap!]!
+	rankAvg: Float!
+	mapFinished: Int!
+	worstRank: Int!
+}
+
+"""
+Represents the medal times, in milliseconds.
+"""
+type MedalTimes {
+	"""
+	The time of the bronze medal.
+	"""
+	bronzeTime: Int!
+	"""
+	The time of the silver medal.
+	"""
+	silverTime: Int!
+	"""
+	The time of the gold medal.
+	"""
+	goldTime: Int!
+	"""
+	The time of the champion/author medal.
+	"""
+	championTime: Int!
+}
+
+"""
+ISO 8601 combined date and time without timezone.
+
+# Examples
+
+* `2015-07-01T08:59:60.123`,
+"""
+scalar NaiveDateTime
+
+type Player {
+	id: ID!
+	login: String!
+	name: String!
+	zonePath: String
+	role: PlayerRole!
+	records(dateSortBy: SortState): [RankedRecord!]!
+}
+
+type PlayerRating {
+	kind: RatingKind!
+	rating: Float!
+}
+
+enum PlayerRole {
+	PLAYER
+	MODERATOR
+	ADMIN
+}
+
+type QueryRoot {
+	eventEditionFromMxId(mxId: Int!): EventEdition
+	mappack(mappackId: String!): Mappack!
+	event(handle: String!): Event!
+	events: [Event!]!
+	record(recordId: Int!): RankedRecord!
+	map(gameId: String!): Map!
+	player(login: String!): Player!
+	records(dateSortBy: SortState): [RankedRecord!]!
+}
+
+type RankedRecord {
+	id: Int!
+	rank: Int!
+	map: Map!
+	player: Player!
+	averageCpsTimes: [CheckpointTime!]!
+	cpsTimes: [CheckpointTime!]!
+	time: Int!
+	respawnCount: Int!
+	tryCount: Int!
+	recordDate: DateTime!
+	flags: Int!
+}
+
+enum RatingKind {
+	"""
+	The rating of the route.
+	"""
+	ROUTE
+	"""
+	The rating of the decoration.
+	"""
+	DECO
+	"""
+	The rating of the smoothness.
+	"""
+	SMOOTHNESS
+	"""
+	The rating of the difficulty.
+	"""
+	DIFFICULTY
+}
+
+type RelatedEdition {
+	map: Map!
+	"""
+	Tells the website to redirect to the event map page instead of the regular map page.
+	
+	This avoids to have access to the `/map/X_benchmark` page for example, because a Benchmark
+	map won't have any record in this context. Thus, it should be redirected to
+	`/event/benchmark/2/map/X_benchmark`.
+	"""
+	redirectToEvent: Boolean!
+	edition: EventEdition!
+}
+
+enum SortState {
+	SORT
+	REVERSE
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Provides a scalar specification URL for specifying the behavior of custom scalar types.
+"""
+directive @specifiedBy(url: String!) on SCALAR
+schema {
+	query: QueryRoot
+}
