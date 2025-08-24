@@ -5,6 +5,7 @@ use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, Default, PartialEq, DeriveEntityModel, SimpleObject, Eq)]
 #[sea_orm(table_name = "event_category")]
+#[graphql(name = "EventCategory")]
 pub struct Model {
     #[sea_orm(primary_key)]
     #[graphql(skip)]

@@ -43,6 +43,11 @@ sea-orm = { workspace = true }
 migration = { path = "../migration" }
 entity = { path = "../entity" }
 
+[dev-dependencies]
+actix-http = "3.11.0"
+records-lib = { path = "../records_lib", features = ["test"] }
+serde_json = { workspace = true }
+
 [features]
 default = ["request_filter"]
 gql_schema = []

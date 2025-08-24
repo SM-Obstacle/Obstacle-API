@@ -5,7 +5,11 @@
 pub use deadpool_redis::Pool as RedisPool;
 pub use sqlx::MySqlPool;
 
+#[cfg(test)]
+mod tests;
+
 mod auth;
+pub mod configure;
 mod env;
 mod error;
 mod graphql;
