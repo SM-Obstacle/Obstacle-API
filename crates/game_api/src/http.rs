@@ -15,7 +15,7 @@ use actix_web::web::{JsonConfig, Query};
 use actix_web::{HttpResponse, Scope, web};
 use entity::latestnews_image;
 use records_lib::Database;
-use sea_orm::{DbConn, EntityTrait, FromQueryResult, QuerySelect};
+use sea_orm::{EntityTrait, FromQueryResult, QuerySelect};
 use serde::Serialize;
 use tracing_actix_web::RequestId;
 
@@ -219,17 +219,15 @@ async fn overview(
     db: Res<Database>,
     Query(query): overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DbConn::from(db.0.mysql_pool);
-
-    let map = records_lib::must::have_map(&conn, &query.map_uid)
+    let map = records_lib::must::have_map(&db.sql_conn, &query.map_uid)
         .await
         .with_api_err()
         .fit(req_id)?;
 
-    let mut redis_conn = db.0.redis_pool.get().await.with_api_err().fit(req_id)?;
+    let mut redis_conn = db.redis_pool.get().await.with_api_err().fit(req_id)?;
 
     let res = overview::overview(
-        &conn,
+        &db.sql_conn,
         &mut redis_conn,
         &query.login,
         &map,

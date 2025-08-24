@@ -185,7 +185,6 @@ impl MappackPlayer<'_> {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<MappackMap>> {
         let db = ctx.data_unchecked::<Database>();
-        let conn = DbConn::from(db.mysql_pool.clone());
         let mut redis_conn = db.redis_pool.get().await?;
 
         let maps_uids: Vec<String> = redis_conn
@@ -213,7 +212,7 @@ impl MappackPlayer<'_> {
                     game_id,
                 ))
                 .await?;
-            let map = must::have_map(&conn, game_id).await?;
+            let map = must::have_map(&db.sql_conn, game_id).await?;
 
             out.push(MappackMap {
                 map: map.into(),
@@ -305,7 +304,6 @@ impl Mappack {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<MappackPlayer<'a>>> {
         let db = ctx.data_unchecked::<Database>();
-        let conn = DbConn::from(db.mysql_pool.clone());
         let mut redis_conn = db.redis_pool.get().await?;
 
         let leaderboard: Vec<u32> = redis_conn
@@ -315,7 +313,7 @@ impl Mappack {
         let mut out = Vec::with_capacity(leaderboard.len());
 
         for id in leaderboard {
-            let player = player::get_player_from_id(&conn, id).await?;
+            let player = player::get_player_from_id(&db.sql_conn, id).await?;
             out.push(MappackPlayer {
                 inner: player.into(),
                 mappack: self,

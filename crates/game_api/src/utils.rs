@@ -8,12 +8,12 @@ use actix_web::{
     FromRequest, HttpRequest, HttpResponse, Responder, body::MessageBody, dev::Payload,
 };
 use entity::{api_status, api_status_history, types};
+use records_lib::Database;
 use sea_orm::{
     ConnectionTrait, DbConn, EntityTrait, FromQueryResult, QueryOrder, QuerySelect, prelude::Expr,
     sea_query::Asterisk,
 };
 use serde::Serialize;
-use sqlx::MySqlPool;
 
 use crate::{RecordsResult, RecordsResultExt};
 
@@ -153,9 +153,9 @@ impl FromRequest for ExtractDbConn {
 
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
         ready(
-            <Res<MySqlPool> as FromRequest>::from_request(req, payload)
+            <Res<Database> as FromRequest>::from_request(req, payload)
                 .into_inner()
-                .map(|pool| Self(DbConn::from(pool.0))),
+                .map(|db| Self(db.0.sql_conn)),
         )
     }
 }

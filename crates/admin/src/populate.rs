@@ -18,7 +18,7 @@ use records_lib::{
     transaction,
 };
 use sea_orm::{
-    ActiveValue::Set, ConnectionTrait, DbConn, EntityTrait, StatementBuilder, TransactionTrait,
+    ActiveValue::Set, ConnectionTrait, EntityTrait, StatementBuilder, TransactionTrait,
     sea_query::Query,
 };
 
@@ -284,16 +284,24 @@ pub async fn populate(
         kind,
     }: PopulateCommand,
 ) -> anyhow::Result<()> {
-    let conn = DbConn::from(db.mysql_pool);
     let mut redis_conn = db.redis_pool.get().await?;
 
-    let (event, edition) = must::have_event_edition(&conn, &event_handle, event_edition).await?;
+    let (event, edition) =
+        must::have_event_edition(&db.sql_conn, &event_handle, event_edition).await?;
 
-    run_populate(&conn, &mut redis_conn, &event, &edition, &client, kind).await?;
+    run_populate(
+        &db.sql_conn,
+        &mut redis_conn,
+        &event,
+        &edition,
+        &client,
+        kind,
+    )
+    .await?;
 
     tracing::info!("Filling mappack in the Redis database...");
     mappack::update_mappack(
-        &conn,
+        &db.sql_conn,
         &mut redis_conn,
         AnyMappackId::Event(&event, &edition),
         Default::default(),

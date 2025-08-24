@@ -1,5 +1,5 @@
 use records_lib::{Database, RedisConnection, leaderboard, map, must, time::Time};
-use sea_orm::{ConnectionTrait, DbConn, StreamTrait};
+use sea_orm::{ConnectionTrait, StreamTrait};
 
 #[derive(clap::Subcommand)]
 pub enum LbCommand {
@@ -76,11 +76,10 @@ async fn full<C: ConnectionTrait + StreamTrait>(
 }
 
 pub async fn leaderboard(db: Database, cmd: LbCommand) -> anyhow::Result<()> {
-    let conn = DbConn::from(db.mysql_pool);
     let mut redis_conn = db.redis_pool.get().await?;
 
     match cmd {
-        LbCommand::Full(full_cmd) => full(&conn, &mut redis_conn, full_cmd).await?,
+        LbCommand::Full(full_cmd) => full(&db.sql_conn, &mut redis_conn, full_cmd).await?,
     }
 
     Ok(())

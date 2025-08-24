@@ -5,7 +5,7 @@ use records_lib::{
     opt_event::OptEvent,
     redis_key::{mappack_key, mappacks_key},
 };
-use sea_orm::{ConnectionTrait, DbConn, StreamTrait, TransactionTrait};
+use sea_orm::{ConnectionTrait, StreamTrait, TransactionTrait};
 
 #[tracing::instrument(skip(conn, redis_conn), fields(mappack = %mappack.mappack_id()))]
 async fn update_mappack<C: TransactionTrait + Sync>(
@@ -55,15 +55,14 @@ where
 
 pub async fn update(db: Database) -> anyhow::Result<()> {
     let mut redis_conn = db.redis_pool.get().await?;
-    let conn = DbConn::from(db.mysql_pool);
 
-    update_event_mappacks(&conn, &mut redis_conn).await?;
+    update_event_mappacks(&db.sql_conn, &mut redis_conn).await?;
 
     let mappacks: Vec<String> = redis_conn.smembers(mappacks_key()).await?;
 
     for mappack_id in mappacks {
         update_mappack(
-            &conn,
+            &db.sql_conn,
             &mut redis_conn,
             AnyMappackId::Id(&mappack_id),
             Default::default(),

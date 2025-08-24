@@ -8,3 +8,8 @@ serde = { workspace = true }
 sea-orm = { workspace = true }
 thiserror = { workspace = true }
 async-graphql = { workspace = true }
+
+[features]
+default = []
+mysql = ["sea-orm/sqlx-mysql"]
+postgres = ["sea-orm/sqlx-postgres"]

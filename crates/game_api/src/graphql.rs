@@ -259,6 +259,8 @@ type Schema = async_graphql::Schema<
 
 #[allow(clippy::let_and_return)]
 fn create_schema(db: Database, client: Client) -> Schema {
+    let db_clone = db.clone();
+
     let schema = async_graphql::Schema::build(
         QueryRoot,
         async_graphql::EmptyMutation,
@@ -266,24 +268,23 @@ fn create_schema(db: Database, client: Client) -> Schema {
     )
     .extension(ApolloTracing)
     .data(DataLoader::new(
-        PlayerLoader(db.mysql_pool.clone()),
+        PlayerLoader(db.clone().sql_conn),
         tokio::spawn,
     ))
     .data(DataLoader::new(
-        MapLoader(db.mysql_pool.clone()),
+        MapLoader(db.clone().sql_conn),
         tokio::spawn,
     ))
     .data(DataLoader::new(
-        EventLoader(db.mysql_pool.clone()),
+        EventLoader(db.clone().sql_conn),
         tokio::spawn,
     ))
     .data(DataLoader::new(
-        EventCategoryLoader(db.mysql_pool.clone()),
+        EventCategoryLoader(db.clone().sql_conn),
         tokio::spawn,
     ))
-    .data(db.mysql_pool.clone())
-    .data(db.redis_pool.clone())
-    .data(DbConn::from(db.mysql_pool.clone()))
+    .data(db_clone.sql_conn)
+    .data(db_clone.redis_pool)
     .data(db)
     .data(client)
     .limit_depth(16)

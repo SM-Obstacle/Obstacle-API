@@ -1,10 +1,7 @@
 use std::time::Duration;
 
-use deadpool_redis::Runtime;
 use entity::types::InGameAlignment;
 use once_cell::sync::OnceCell;
-
-use crate::{MySqlPool, RedisPool};
 
 mkenv::make_env! {
 /// The environment used to set up a connection to the MySQL/MariaDB database.
@@ -209,24 +206,4 @@ pub fn init_env(env: LibEnv) {
 pub fn env() -> &'static LibEnv {
     // SAFETY: this function is always called when `init_env()` is called at the start.
     unsafe { ENV.get_unchecked() }
-}
-
-/// Creates and returns the MySQL/MariaDB pool with the provided URL.
-pub async fn get_mysql_pool(url: String) -> anyhow::Result<MySqlPool> {
-    let mysql_pool = sqlx::mysql::MySqlPoolOptions::new()
-        .max_connections(20)
-        .acquire_timeout(Duration::from_secs(10))
-        .connect(&url)
-        .await?;
-    Ok(mysql_pool)
-}
-
-/// Creates and returns the Redis pool with the provided URL.
-pub fn get_redis_pool(url: String) -> anyhow::Result<RedisPool> {
-    let cfg = deadpool_redis::Config {
-        url: Some(url),
-        connection: None,
-        pool: None,
-    };
-    Ok(cfg.create_pool(Some(Runtime::Tokio1))?)
 }

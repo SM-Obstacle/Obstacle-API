@@ -19,8 +19,8 @@ use records_lib::{
 };
 use sea_orm::{
     ActiveValue::Set,
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait, FromQueryResult, QueryFilter,
-    QueryOrder, QuerySelect, QueryTrait as _, RelationTrait as _, StatementBuilder, StreamTrait,
+    ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    QuerySelect, QueryTrait as _, RelationTrait as _, StatementBuilder, StreamTrait,
     prelude::Expr,
     sea_query::{Asterisk, Func, Query},
 };
@@ -787,23 +787,26 @@ async fn edition_overview(
     path: Path<(String, u32)>,
     query: overview::OverviewReq,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DbConn::from(db.0.mysql_pool);
     let mut redis_conn = db.0.redis_pool.get().await.with_api_err().fit(req_id)?;
 
     let (event, edition) = path.into_inner();
 
-    let (event, edition, EventMap { map, .. }) =
-        records_lib::must::have_event_edition_with_map(&conn, &query.map_uid, &event, edition)
-            .await
-            .with_api_err()
-            .fit(req_id)?;
+    let (event, edition, EventMap { map, .. }) = records_lib::must::have_event_edition_with_map(
+        &db.sql_conn,
+        &query.map_uid,
+        &event,
+        edition,
+    )
+    .await
+    .with_api_err()
+    .fit(req_id)?;
 
     if edition.has_expired() {
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
     let res = overview::overview(
-        &conn,
+        &db.sql_conn,
         &mut redis_conn,
         &query.login,
         &map,
@@ -889,8 +892,6 @@ pub async fn edition_finished_at(
     at: chrono::NaiveDateTime,
     mode_version: Option<records_lib::ModeVersion>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DbConn::from(db.0.mysql_pool);
-
     let (event_handle, edition_id) = path.into_inner();
 
     // We first check that the event and its edition exist
@@ -903,7 +904,7 @@ pub async fn edition_finished_at(
             original_map_id,
         },
     ) = records_lib::must::have_event_edition_with_map(
-        &conn,
+        &db.sql_conn,
         &body.map_uid,
         &event_handle,
         edition_id,
@@ -916,7 +917,7 @@ pub async fn edition_finished_at(
     // The edition is transparent, so we save the record for the map directly.
     if edition.is_transparent != 0 {
         let res = super::player::finished_at(
-            &conn,
+            &db.sql_conn,
             &mut redis_conn,
             req_id,
             mode_version,
@@ -934,7 +935,7 @@ pub async fn edition_finished_at(
         return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
     }
 
-    let res: pf::FinishedOutput = transaction::within(&conn, async |txn| {
+    let res: pf::FinishedOutput = transaction::within(&db.sql_conn, async |txn| {
         let params = ExpandedInsertRecordParams {
             body: &body.rest,
             at,

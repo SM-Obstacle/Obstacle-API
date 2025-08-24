@@ -7,7 +7,6 @@ use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, DbErr, EntityTrait, FromQueryResult, QueryFilter,
     QueryOrder, QuerySelect, StreamTrait,
 };
-use sqlx::MySqlPool;
 
 use crate::RecordsErrorKind;
 
@@ -145,7 +144,7 @@ async fn get_player_records<C: ConnectionTrait + StreamTrait>(
     Ok(ranked_records)
 }
 
-pub struct PlayerLoader(pub MySqlPool);
+pub struct PlayerLoader(pub DbConn);
 
 impl Loader<u32> for PlayerLoader {
     type Value = Player;
@@ -154,7 +153,7 @@ impl Loader<u32> for PlayerLoader {
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
         let hashmap = players::Entity::find()
             .filter(players::Column::Id.is_in(keys.iter().copied()))
-            .all(&DbConn::from(self.0.clone()))
+            .all(&self.0)
             .await?
             .into_iter()
             .map(|player| (player.id, player.into()))

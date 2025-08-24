@@ -13,7 +13,6 @@ use sea_orm::{
     prelude::Expr,
     sea_query::{ExprTrait as _, Func, Query},
 };
-use sqlx::MySqlPool;
 
 use records_lib::{
     RedisPool,
@@ -162,7 +161,7 @@ impl Event {
     }
 }
 
-pub struct EventLoader(pub MySqlPool);
+pub struct EventLoader(pub DbConn);
 
 impl Loader<u32> for EventLoader {
     type Value = Event;
@@ -171,7 +170,7 @@ impl Loader<u32> for EventLoader {
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
         let hashmap = event::Entity::find()
             .filter(event::Column::Id.is_in(keys.iter().copied()))
-            .all(&DbConn::from(self.0.clone()))
+            .all(&self.0)
             .await?
             .into_iter()
             .map(|row| (row.id, row.into()))
@@ -180,7 +179,7 @@ impl Loader<u32> for EventLoader {
     }
 }
 
-pub struct EventCategoryLoader(pub MySqlPool);
+pub struct EventCategoryLoader(pub DbConn);
 
 impl Loader<u32> for EventCategoryLoader {
     type Value = event_category::Model;
@@ -189,7 +188,7 @@ impl Loader<u32> for EventCategoryLoader {
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
         let hashmap = event_category::Entity::find()
             .filter(event_category::Column::Id.is_in(keys.iter().copied()))
-            .all(&DbConn::from(self.0.clone()))
+            .all(&self.0)
             .await?
             .into_iter()
             .map(|category| (category.id, category))

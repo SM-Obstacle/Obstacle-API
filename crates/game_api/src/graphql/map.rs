@@ -23,7 +23,6 @@ use sea_orm::{
     prelude::Expr,
     sea_query::{Asterisk, ExprTrait, Func, Query},
 };
-use sqlx::MySqlPool;
 
 use super::{
     SortState,
@@ -146,10 +145,9 @@ impl Map {
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
-        let conn = DbConn::from(db.mysql_pool.clone());
         let mut redis_conn = db.redis_pool.get().await?;
 
-        records_lib::assert_future_send(transaction::within(&conn, async |txn| {
+        records_lib::assert_future_send(transaction::within(&db.sql_conn, async |txn| {
             get_map_records(
                 txn,
                 &mut redis_conn,
@@ -285,7 +283,7 @@ impl Map {
     }
 }
 
-pub struct MapLoader(pub MySqlPool);
+pub struct MapLoader(pub DbConn);
 
 impl Loader<u32> for MapLoader {
     type Value = Map;
@@ -294,7 +292,7 @@ impl Loader<u32> for MapLoader {
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
         let hashmap = maps::Entity::find()
             .filter(maps::Column::Id.is_in(keys.iter().copied()))
-            .all(&DbConn::from(self.0.clone()))
+            .all(&self.0)
             .await?
             .into_iter()
             .map(|map| (map.id, map.into()))

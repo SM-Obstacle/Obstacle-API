@@ -12,7 +12,7 @@ use futures::{StreamExt, future::try_join_all};
 use records_lib::Database;
 use sea_orm::{
     ActiveValue::Set,
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, PaginatorTrait,
+    ColumnTrait as _, ConnectionTrait, EntityTrait as _, FromQueryResult, PaginatorTrait,
     QueryFilter, QuerySelect, StatementBuilder,
     prelude::Expr,
     sea_query::{Func, Query},
@@ -207,12 +207,10 @@ pub async fn ratings(
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<RatingsBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DbConn::from(db.0.mysql_pool.clone());
-
-    let player = records_lib::must::have_player(&conn, &login)
+    let player = records_lib::must::have_player(&db.sql_conn, &login)
         .await
         .fit(req_id)?;
-    let map = records_lib::must::have_map(&conn, &body.map_id)
+    let map = records_lib::must::have_map(&db.sql_conn, &body.map_id)
         .await
         .fit(req_id)?;
 
@@ -223,7 +221,7 @@ pub async fn ratings(
             .select_only()
             .column(players::Column::Login)
             .into_tuple()
-            .one(&conn)
+            .one(&db.sql_conn)
             .await
             .with_api_err()
             .fit(req_id)?
@@ -231,15 +229,21 @@ pub async fn ratings(
         (privilege::ADMIN, login)
     };
 
-    let mut redis_conn = db.0.redis_pool.get().await.with_api_err().fit(req_id)?;
+    let mut redis_conn = db.redis_pool.get().await.with_api_err().fit(req_id)?;
 
-    auth::check_auth_for(&conn, &mut redis_conn, &login, Some(token.as_str()), role)
-        .await
-        .fit(req_id)?;
+    auth::check_auth_for(
+        &db.sql_conn,
+        &mut redis_conn,
+        &login,
+        Some(token.as_str()),
+        role,
+    )
+    .await
+    .fit(req_id)?;
 
     let players_ratings = rating::Entity::find()
         .filter(rating::Column::MapId.eq(map.id))
-        .stream(&conn)
+        .stream(&db.sql_conn)
         .await
         .with_api_err()
         .fit(req_id)?
@@ -250,7 +254,7 @@ pub async fn ratings(
                 .select_only()
                 .column(players::Column::Login)
                 .into_tuple()
-                .one(&conn)
+                .one(&db.sql_conn)
                 .await
                 .with_api_err()?
                 .unwrap_or_else(|| panic!("Player {} should exist in database", rating.player_id));
@@ -266,7 +270,7 @@ pub async fn ratings(
                 .column(rating_kind::Column::Kind)
                 .column(player_rating::Column::Rating)
                 .into_model::<Rating>()
-                .all(&conn)
+                .all(&db.sql_conn)
                 .await
                 .with_api_err()?;
 

@@ -7,10 +7,12 @@
 //! at the [`game_api`](../game_api/index.html) package.
 
 #![warn(missing_docs)]
+#![cfg_attr(nightly, feature(doc_cfg))]
 
 mod env;
 mod modeversion;
 mod mptypes;
+pub mod pool;
 
 pub mod error;
 pub mod event;
@@ -40,6 +42,7 @@ use std::future::Future;
 pub use env::*;
 pub use modeversion::*;
 pub use mptypes::*;
+pub use pool::Database;
 use rand::Rng as _;
 
 /// Asserts that the type of the provided future is Send, and returns an opaque type from it.
@@ -61,32 +64,4 @@ pub fn gen_random_str(len: usize) -> String {
         .map(char::from)
         .take(len)
         .collect()
-}
-
-/// Represents a connection to the API database, both MariaDB and Redis.
-pub struct DatabaseConnection<'a> {
-    /// The connection to the MariaDB database.
-    pub mysql_conn: MySqlConnection<'a>,
-    /// The connection to the Redis database.
-    pub redis_conn: &'a mut RedisConnection,
-}
-
-/// Represents the database of the API, meaning the MariaDB and Redis pools.
-#[derive(Clone)]
-pub struct Database {
-    /// The MySQL (more precisely MariaDB) pool.
-    pub mysql_pool: MySqlPool,
-    /// The Redis pool.
-    pub redis_pool: RedisPool,
-}
-
-#[allow(missing_docs)]
-#[macro_export]
-macro_rules! acquire {
-    ($db:ident $($t:tt)*) => {{
-        $crate::DatabaseConnection {
-            mysql_conn: &mut $db.mysql_pool.acquire().await $($t)*,
-            redis_conn: &mut $db.redis_pool.get().await $($t)*,
-        }
-    }};
 }

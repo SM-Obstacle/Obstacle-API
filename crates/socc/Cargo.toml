@@ -17,3 +17,8 @@ tracing-subscriber = { workspace = true }
 mkenv = { workspace = true }
 entity = { path = "../entity" }
 sea-orm = { workspace = true }
+
+[features]
+default = []
+mysql = ["records-lib/mysql"]
+postgres = ["records-lib/postgres"]

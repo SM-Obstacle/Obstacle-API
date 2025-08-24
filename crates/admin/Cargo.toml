@@ -22,3 +22,8 @@ mkenv = { workspace = true }
 prettytable = { version = "0.10.0", default-features = false }
 entity = { path = "../entity" }
 sea-orm = { workspace = true }
+
+[features]
+default = []
+mysql = ["records-lib/mysql"]
+postgres = ["records-lib/postgres"]

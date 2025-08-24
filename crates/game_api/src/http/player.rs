@@ -13,8 +13,8 @@ use records_lib::{
 use reqwest::Client;
 use sea_orm::{
     ActiveValue::Set,
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait, FromQueryResult, QueryFilter,
-    QuerySelect, StatementBuilder, StreamTrait, TransactionTrait,
+    ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect,
+    StatementBuilder, StreamTrait, TransactionTrait,
     prelude::Expr,
     sea_query::{ExprTrait as _, Query},
 };
@@ -109,11 +109,10 @@ pub async fn update(
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<PlayerInfoNetBody>,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DbConn::from(db.0.mysql_pool);
-    let mut redis_conn = db.0.redis_pool.get().await.with_api_err().fit(req_id)?;
+    let mut redis_conn = db.redis_pool.get().await.with_api_err().fit(req_id)?;
 
     let auth_result = crate::auth::check_auth_for(
-        &conn,
+        &db.sql_conn,
         &mut redis_conn,
         &login,
         Some(token.as_str()),
@@ -122,12 +121,12 @@ pub async fn update(
     .await;
 
     match auth_result {
-        Ok(id) => update_player(&conn, id, body).await.fit(req_id)?,
+        Ok(id) => update_player(&db.sql_conn, id, body).await.fit(req_id)?,
         // At this point, if Redis has registered a token with the login, it means that
         // the player is not yet added to the Obstacle database but effectively
         // has a ManiaPlanet account
         Err(RecordsErrorKind::Lib(records_lib::error::RecordsError::PlayerNotFound(_))) => {
-            let _ = insert_player(&conn, &body).await.fit(req_id)?;
+            let _ = insert_player(&db.sql_conn, &body).await.fit(req_id)?;
         }
         Err(e) => return Err(e).fit(req_id),
     }
@@ -245,10 +244,9 @@ pub async fn finished_at_with_pool(
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResponse<impl Responder> {
-    let conn = DbConn::from(db.mysql_pool);
     let mut redis_conn = db.redis_pool.get().await.with_api_err().fit(req_id)?;
     let res = finished_at(
-        &conn,
+        &db.sql_conn,
         &mut redis_conn,
         req_id,
         mode_version,

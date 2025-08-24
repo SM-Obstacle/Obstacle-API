@@ -19,7 +19,7 @@ use game_api_lib::{
     AuthState, FitRequestId, RecordsErrorKind, RecordsResponse, api_route, graphql_route,
 };
 use migration::MigratorTrait;
-use records_lib::{Database, get_mysql_pool, get_redis_pool};
+use records_lib::Database;
 use reqwest::Client;
 use tracing::level_filters::LevelFilter;
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId, RootSpanBuilder, TracingLogger};
@@ -29,11 +29,36 @@ struct CustomRootSpanBuilder;
 
 impl RootSpanBuilder for CustomRootSpanBuilder {
     fn on_request_start(request: &actix_web::dev::ServiceRequest) -> tracing::Span {
+        #[cfg_attr(
+            all(not(feature = "mysql"), not(feature = "postgres")),
+            allow(unused_variables)
+        )]
         let db = request.app_data::<Database>().unwrap();
+        let pool_size = {
+            #[allow(unreachable_patterns)]
+            match () {
+                #[cfg(feature = "mysql")]
+                _ => db.sql_conn.get_mysql_connection_pool().size(),
+                #[cfg(feature = "postgres")]
+                _ => db.sql_conn.get_postgres_connection_pool().size(),
+                _ => 0,
+            }
+        };
+        let pool_num_idle = {
+            #[allow(unreachable_patterns)]
+            match () {
+                #[cfg(feature = "mysql")]
+                _ => db.sql_conn.get_mysql_connection_pool().num_idle(),
+                #[cfg(feature = "postgres")]
+                _ => db.sql_conn.get_postgres_connection_pool().num_idle(),
+                _ => 0,
+            }
+        };
+
         tracing_actix_web::root_span!(
             request,
-            pool_size = db.mysql_pool.size(),
-            pool_num_idle = db.mysql_pool.num_idle()
+            pool_size = pool_size,
+            pool_num_idle = pool_num_idle,
         )
     }
 
@@ -59,21 +84,10 @@ async fn main() -> anyhow::Result<()> {
     request_filter::init_wh_url(env.used_once.wh_invalid_req_url)
         .unwrap_or_else(|_| panic!("Invalid request WH URL isn't supposed to be set twice"));
 
-    let db = sea_orm::Database::connect(&env.db_env.db_url.db_url)
-        .await
-        .context("Cannot connect to MySQL server")?;
-    let mysql_pool = get_mysql_pool(env.db_env.db_url.db_url)
-        .await
-        .context("Cannot create MySQL pool")?;
-    let redis_pool =
-        get_redis_pool(env.db_env.redis_url.redis_url).context("Cannot create Redis pool")?;
+    let db =
+        Database::from_db_url(env.db_env.db_url.db_url, env.db_env.redis_url.redis_url).await?;
 
-    migration::Migrator::up(&db, None).await?;
-
-    let db = Database {
-        mysql_pool: mysql_pool.clone(),
-        redis_pool: redis_pool.clone(),
-    };
+    migration::Migrator::up(&db.sql_conn, None).await?;
 
     let client = Client::new();
 
@@ -86,10 +100,26 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    tracing::info!(
-        "Using max connections: {}",
-        db.mysql_pool.options().get_max_connections()
-    );
+    let max_connections = {
+        #[allow(unreachable_patterns)]
+        match () {
+            #[cfg(feature = "mysql")]
+            _ => db
+                .sql_conn
+                .get_mysql_connection_pool()
+                .options()
+                .get_max_connections(),
+            #[cfg(feature = "postgres")]
+            _ => db
+                .sql_conn
+                .get_postgres_connection_pool()
+                .options()
+                .get_max_connections(),
+            _ => 0,
+        }
+    };
+
+    tracing::info!("Using max connections: {max_connections}");
 
     let auth_state = Data::new(AuthState::default());
 
@@ -121,8 +151,6 @@ async fn main() -> anyhow::Result<()> {
             )
             .app_data(auth_state.clone())
             .app_data(client.clone())
-            .app_data(mysql_pool.clone())
-            .app_data(redis_pool.clone())
             .app_data(db.clone())
             .service(graphql_route(db.clone(), client.clone()))
             .service(api_route())
