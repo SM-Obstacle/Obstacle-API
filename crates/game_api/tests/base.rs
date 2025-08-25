@@ -1,5 +1,3 @@
-mod root;
-
 use std::fmt;
 
 use actix_http::Request;
@@ -15,17 +13,17 @@ use records_lib::Database;
 use sea_orm::{ConnectionTrait, DbConn};
 use tracing_actix_web::TracingLogger;
 
-use crate::{configure, init_env};
+use game_api_lib::{configure, init_env};
 
 #[derive(Debug, serde::Deserialize)]
-struct ErrorResponse<'a> {
+pub struct ErrorResponse<'a> {
     #[allow(dead_code)]
-    request_id: &'a str,
-    r#type: i32,
-    message: &'a str,
+    pub request_id: &'a str,
+    pub r#type: i32,
+    pub message: &'a str,
 }
 
-fn get_env() -> anyhow::Result<crate::InitEnvOut> {
+pub fn get_env() -> anyhow::Result<game_api_lib::InitEnvOut> {
     match dotenvy::dotenv() {
         Err(err) if !err.not_found() => return Err(err).context("retrieving .env files"),
         _ => (),
@@ -34,7 +32,7 @@ fn get_env() -> anyhow::Result<crate::InitEnvOut> {
     init_env()
 }
 
-async fn get_app(
+pub async fn get_app(
     db: Database,
 ) -> impl Service<Request, Response = ServiceResponse<impl MessageBody>, Error = Error> {
     test::init_service(
@@ -68,7 +66,7 @@ impl fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
-trait IntoResult {
+pub trait IntoResult {
     type Out;
 
     fn into_result(self) -> anyhow::Result<Self::Out>;
@@ -93,7 +91,7 @@ where
     }
 }
 
-async fn wrap<F, R>(db_url: String, test: F) -> anyhow::Result<<R as IntoResult>::Out>
+pub async fn wrap<F, R>(db_url: String, test: F) -> anyhow::Result<<R as IntoResult>::Out>
 where
     F: AsyncFnOnce(DbConn) -> R,
     R: IntoResult,
@@ -146,7 +144,7 @@ where
     }
 }
 
-fn try_from_slice<'de, T>(slice: &'de [u8]) -> Result<T, ApiError>
+pub fn try_from_slice<'de, T>(slice: &'de [u8]) -> Result<T, ApiError>
 where
     T: serde::Deserialize<'de>,
 {
