@@ -322,7 +322,6 @@ async fn show_around() -> anyhow::Result<()> {
 
             let body = test::read_body(resp).await;
             let body = base::try_from_slice::<Response>(&body)?;
-            println!("ok ({player_id}) {body:#?}");
 
             assert_eq!(status, 200);
             assert_eq!(body.response.len(), ROWS as usize);
