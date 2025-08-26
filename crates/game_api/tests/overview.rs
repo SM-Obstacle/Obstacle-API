@@ -361,13 +361,15 @@ async fn competition_ranking() -> anyhow::Result<()> {
             .await
             .context("couldn't insert players")?;
 
+        let player_ids = 1..=5;
         let times = [1000, 3000, 3000, 5000, 7000];
-        // Notice that player 3 made the same time earlier than player 2
         let datetime_offsets = [0, 2, 1, 0, 0];
+
+        let expected_player_ids = [1, 3, 2, 4, 5];
         let expected_ranks = [1, 2, 2, 4, 5];
 
         let map_id = insert_sample_map(&db.sql_conn).await?;
-        let records = (1..=5)
+        let records = player_ids
             .zip(times)
             .zip(datetime_offsets)
             .map(|((player_id, time), offset)| new_record(map_id, player_id, time, offset));
@@ -396,7 +398,7 @@ async fn competition_ranking() -> anyhow::Result<()> {
 
         itertools::assert_equal(
             body.response,
-            [1, 3, 2, 4, 5]
+            expected_player_ids
                 .into_iter()
                 .zip(times)
                 .zip(expected_ranks)
