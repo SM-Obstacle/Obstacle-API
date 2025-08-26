@@ -67,8 +67,8 @@ use entity::{event_edition_records, records};
 use futures::TryStreamExt;
 use itertools::{EitherOrBoth, Itertools};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, EntityTrait, Order, QueryFilter as _, QueryOrder,
-    QuerySelect, SelectModel, Selector, StreamTrait, sea_query::expr,
+    ColumnTrait as _, ConnectionTrait, EntityTrait, Order, PaginatorTrait, QueryFilter as _,
+    QueryOrder, QuerySelect, QueryTrait, SelectModel, Selector, StreamTrait, sea_query::expr,
 };
 
 use std::{
@@ -87,7 +87,7 @@ use tokio::sync::{Mutex, Semaphore};
 /// If many tasks wrap their procedure for the same ID, it is guaranteed that only one of them
 /// will execute at a time, implying the other tasks to wait before executing the next one.
 ///
-/// Therefore, this function might block (asynchronously), with a timeout of 10 seconds.
+/// Therefore, this function might asynchronously pend, with a timeout of 10 seconds.
 pub async fn lock_within<F, Fut, R>(map_id: u32, f: F) -> R
 where
     F: FnOnce() -> Fut,
@@ -162,11 +162,10 @@ async fn count_records_map<C: ConnectionTrait>(
     conn: &C,
     map_id: u32,
     event: OptEvent<'_>,
-) -> RecordsResult<i64> {
+) -> RecordsResult<u64> {
     let query = records::Entity::find()
         .filter(records::Column::MapId.eq(map_id))
-        .group_by(records::Column::RecordPlayerId)
-        .column(records::Column::RecordId);
+        .group_by(records::Column::RecordPlayerId);
 
     let query = match event.event {
         Some((ev, ed)) => query.reverse_join(event_edition_records::Entity).filter(
@@ -177,17 +176,12 @@ async fn count_records_map<C: ConnectionTrait>(
         None => query,
     };
 
-    let result = query
-        .into_tuple()
-        .one(conn)
-        .await?
-        .expect("Query is supposed to return at least one row with the rows count");
-
+    let result = query.count(conn).await?;
     Ok(result)
 }
 
 /// Checks if the Redis leaderboard for the map with the provided ID has a different count
-/// than in the database, and reupdates the Redis leaderboard completly if so.
+/// than in the database, and reupdates the Redis leaderboard completely if so.
 ///
 /// This is a check to avoid differences between the MariaDB and the Redis leaderboards.
 ///
@@ -197,13 +191,13 @@ pub async fn update_leaderboard<C: ConnectionTrait + StreamTrait>(
     redis_conn: &mut RedisConnection,
     map_id: u32,
     event: OptEvent<'_>,
-) -> RecordsResult<i64> {
-    let mysql_count: i64 = count_records_map(conn, map_id, event).await?;
+) -> RecordsResult<u64> {
+    let mysql_count = count_records_map(conn, map_id, event).await?;
 
     lock_within(map_id, || async move {
         let key = map_key(map_id, event);
 
-        let redis_count: i64 = redis_conn.zcount(key, "-inf", "+inf").await?;
+        let redis_count: u64 = redis_conn.zcount(key, "-inf", "+inf").await?;
         if redis_count != mysql_count {
             force_update_locked(conn, redis_conn, map_id, event).await?;
         }
@@ -225,23 +219,22 @@ fn get_mariadb_lb_query(
     map_id: u32,
     event: OptEvent<'_>,
 ) -> Selector<SelectModel<DbLeaderboardItem>> {
-    let builder = records::Entity::find()
+    records::Entity::find()
         .filter(records::Column::MapId.eq(map_id))
         .group_by(records::Column::RecordPlayerId)
         .order_by(records::Column::Time, Order::Asc)
         .order_by(records::Column::RecordPlayerId, Order::Asc)
+        .apply_if(event.event, |builder, (ev, ed)| {
+            builder.reverse_join(event_edition_records::Entity).filter(
+                event_edition_records::Column::EventId
+                    .eq(ev.id)
+                    .and(event_edition_records::Column::EditionId.eq(ed.id)),
+            )
+        })
+        .select_only()
         .column(records::Column::RecordPlayerId)
-        .column_as(expr::Expr::col(records::Column::Time).min(), "time");
-
-    match event.event {
-        Some((ev, ed)) => builder.reverse_join(event_edition_records::Entity).filter(
-            event_edition_records::Column::EventId
-                .eq(ev.id)
-                .and(event_edition_records::Column::EditionId.eq(ed.id)),
-        ),
-        None => builder,
-    }
-    .into_model()
+        .column_as(expr::Expr::col(records::Column::Time).min(), "time")
+        .into_model()
 }
 
 async fn force_update_locked<C: ConnectionTrait + StreamTrait>(
@@ -306,9 +299,9 @@ pub async fn get_rank<C: ConnectionTrait + StreamTrait>(
     time: i32,
     event: OptEvent<'_>,
 ) -> RecordsResult<i32> {
-    lock_within(map_id, || async move {
-        let key = map_key(map_id, event);
+    let key = map_key(map_id, event);
 
+    lock_within(map_id, || async move {
         // We update the Redis leaderboard if it doesn't have the requested `time`, and keep
         // track of the previous time if it's lower than ours.
         let score: Option<i32> = redis_conn.zscore(&key, player_id).await?;

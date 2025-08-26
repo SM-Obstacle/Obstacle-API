@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, panic};
 
 use actix_http::Request;
 use actix_web::{
@@ -8,8 +8,9 @@ use actix_web::{
     test,
 };
 use anyhow::Context;
+use futures::FutureExt;
 use migration::MigratorTrait as _;
-use records_lib::Database;
+use records_lib::{Database, pool::get_redis_pool};
 use sea_orm::{ConnectionTrait, DbConn};
 use tracing_actix_web::TracingLogger;
 
@@ -45,14 +46,20 @@ pub async fn get_app(
 
 #[derive(Debug)]
 pub enum ApiError {
-    InvalidJson,
+    InvalidJson(Vec<u8>),
     Error { r#type: i32, message: String },
 }
 
 impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ApiError::InvalidJson => f.write_str("Invalid JSON returned by the API"),
+            ApiError::InvalidJson(raw) => match str::from_utf8(&raw) {
+                Ok(s) => write!(f, "Invalid JSON returned by the API: {s}"),
+                Err(_) => write!(
+                    f,
+                    "Invalid JSON returned by the API, with some non-UTF8 characters: {raw:?}"
+                ),
+            },
             ApiError::Error { r#type, message } => {
                 f.write_str("Error returned from API: ")?;
                 f.debug_map()
@@ -91,6 +98,22 @@ where
     }
 }
 
+pub async fn with_db<F, R>(test: F) -> anyhow::Result<<R as IntoResult>::Out>
+where
+    F: AsyncFnOnce(Database) -> R,
+    R: IntoResult,
+{
+    let env = get_env()?;
+    wrap(env.db_env.db_url.db_url, async |sql_conn| {
+        let db = Database {
+            sql_conn,
+            redis_pool: get_redis_pool(env.db_env.redis_url.redis_url)?,
+        };
+        test(db).await.into_result()
+    })
+    .await
+}
+
 pub async fn wrap<F, R>(db_url: String, test: F) -> anyhow::Result<<R as IntoResult>::Out>
 where
     F: AsyncFnOnce(DbConn) -> R,
@@ -109,6 +132,7 @@ where
     master_db
         .execute_unprepared(&format!("create database {db_name}"))
         .await?;
+    println!("Created database {db_name}");
 
     let db = match master_db {
         #[cfg(feature = "mysql")]
@@ -132,15 +156,36 @@ where
 
     migration::Migrator::up(&db, None).await?;
 
-    let r = test(db).await;
-    match r.into_result() {
-        Ok(out) => {
-            master_db
-                .execute_unprepared(&format!("drop database {db_name}"))
-                .await?;
-            Ok(out)
+    let r = panic::AssertUnwindSafe(test(db)).catch_unwind().await;
+    #[cfg(test_force_db_deletion)]
+    {
+        master_db
+            .execute_unprepared(&format!("drop database {db_name}"))
+            .await?;
+        println!("Database {db_name} force-deleted");
+        match r {
+            Ok(r) => r.into_result(),
+            Err(e) => panic::resume_unwind(e),
         }
-        Err(e) => Err(e),
+    }
+    #[cfg(not(test_force_db_deletion))]
+    {
+        match r.map(IntoResult::into_result) {
+            Ok(Ok(out)) => {
+                master_db
+                    .execute_unprepared(&format!("drop database {db_name}"))
+                    .await?;
+                Ok(out)
+            }
+            other => {
+                println!("Test failed, leaving database {db_name} as-is");
+                match other {
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => panic::resume_unwind(e),
+                    _ => unreachable!(),
+                }
+            }
+        }
     }
 }
 
@@ -155,7 +200,7 @@ where
                 r#type: err.r#type,
                 message: err.message.to_owned(),
             }),
-            Err(_) => Err(ApiError::InvalidJson),
+            Err(_) => Err(ApiError::InvalidJson(slice.to_vec())),
         },
     }
 }

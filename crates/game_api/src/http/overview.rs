@@ -1,13 +1,15 @@
 use crate::{RecordsResult, RecordsResultExt};
 use actix_web::web::Query;
-use deadpool_redis::redis::AsyncCommands;
-use entity::maps;
-use records_lib::RedisConnection;
+use entity::{event_edition_records, maps, records};
 use records_lib::leaderboard::{self, Row};
 use records_lib::opt_event::OptEvent;
 use records_lib::ranks::update_leaderboard;
-use records_lib::{player, redis_key::map_key, transaction};
-use sea_orm::{ConnectionTrait, StreamTrait, TransactionTrait};
+use records_lib::{RedisConnection, ranks};
+use records_lib::{player, transaction};
+use sea_orm::{
+    ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, QueryTrait,
+    StreamTrait, TransactionTrait,
+};
 
 #[derive(serde::Deserialize)]
 pub struct OverviewQuery {
@@ -23,7 +25,7 @@ async fn extend_range<C: ConnectionTrait + StreamTrait>(
     conn: &C,
     redis_conn: &mut RedisConnection,
     records: &mut Vec<Row>,
-    (start, end): (i64, i64),
+    (start, end): (i32, i32),
     map_id: u32,
     event: OptEvent<'_>,
 ) -> RecordsResult<()> {
@@ -59,28 +61,47 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
         .with_api_err()?;
 
     // Update redis if needed
-    let key = map_key(map.id, event);
-    let count = update_leaderboard(conn, redis_conn, map.id, event).await?;
+    let count = update_leaderboard(conn, redis_conn, map.id, event).await? as _;
 
     let mut ranked_records = vec![];
 
     // -- Compute display ranges
-    const TOTAL_ROWS: i64 = 15;
-    const NO_RECORD_ROWS: i64 = TOTAL_ROWS - 1;
+    const TOTAL_ROWS: i32 = 15;
+    const NO_RECORD_ROWS: i32 = TOTAL_ROWS - 1;
 
-    // N.B. Though Redis ordering for players having the same time on a map is based on their ID, rather
-    // than their record date, this doesn't really matter. Indeed, this small difference could be noticed
-    // when:
-    // - On the same map, two players made the same time
-    // - Both players have the rank 15
-    // - The player who made the record earlier has an ID that is greater than the one who made the record later.
-    // What the overview request should provide as the leaderboard for the player who made the record earlier:
-    // - The top 15, with the player being 15th.
-    // What it actually provides:
-    // - The top 3, then the leaderboard centered around the player, still being 15th (using the ranks
-    //   module), but with the other player who made the record later being ahead of them.
-    let player_rank: Option<i64> = match player {
-        Some(ref player) => redis_conn.zrank(&key, player.id).await.with_api_err()?,
+    let player_rank = match player {
+        Some(ref p) => {
+            let min_time = records::Entity::find()
+                .filter(
+                    records::Column::RecordPlayerId
+                        .eq(p.id)
+                        .and(records::Column::MapId.eq(map.id)),
+                )
+                .apply_if(event.event, |query, (ev, ed)| {
+                    query.inner_join(event_edition_records::Entity).filter(
+                        event_edition_records::Column::EventId
+                            .eq(ev.id)
+                            .and(event_edition_records::Column::EditionId.eq(ed.id)),
+                    )
+                })
+                .select_only()
+                .column_as(records::Column::Time.min(), "min_time")
+                .into_tuple()
+                .one(conn)
+                .await
+                .with_api_err()?
+                .expect("Query should return at least one row");
+
+            match min_time {
+                Some(time) => {
+                    let rank = ranks::get_rank(conn, redis_conn, map.id, p.id, time, event)
+                        .await
+                        .with_api_err()?;
+                    Some(rank)
+                }
+                None => None,
+            }
+        }
         None => None,
     };
 
@@ -103,11 +124,11 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
             extend_range(conn, redis_conn, &mut ranked_records, (0, 3), map.id, event).await?;
 
             // the rest is centered around the player
-            let row_minus_top3 = TOTAL_ROWS - 3;
+            const ROWS_MINUS_TOP3: i32 = TOTAL_ROWS - 3;
             let range = {
-                let start = player_rank - row_minus_top3 / 2;
-                let end = player_rank + row_minus_top3 / 2;
-                if end >= count as _ {
+                let start = player_rank - ROWS_MINUS_TOP3 / 2;
+                let end = player_rank + ROWS_MINUS_TOP3 / 2;
+                if end >= count {
                     (start - (end - count), count)
                 } else {
                     (start, end)

@@ -2,7 +2,7 @@ mod base;
 
 use actix_http::StatusCode;
 use actix_web::test;
-use records_lib::{Database, pool::get_redis_pool};
+use records_lib::Database;
 use sea_orm::DbBackend;
 
 #[tokio::test]
@@ -45,24 +45,17 @@ async fn test_info() -> anyhow::Result<()> {
         status: ApiStatus<'a>,
     }
 
-    let env = base::get_env()?;
-
-    base::wrap(env.db_env.db_url.db_url, async |sql_conn| {
-        let db = Database {
-            sql_conn,
-            redis_pool: get_redis_pool(env.db_env.redis_url.redis_url)?,
-        };
-
+    base::with_db(async |db| {
         let app = base::get_app(db).await;
         let req = test::TestRequest::get().uri("/info").to_request();
 
         let resp = test::call_service(&app, req).await;
-        let status_code = resp.status();
+        let status = resp.status();
 
         let body = test::read_body(resp).await;
-        let body: InfoResponse = base::try_from_slice(&body)?;
+        let body = base::try_from_slice::<InfoResponse>(&body)?;
 
-        assert_eq!(status_code, StatusCode::OK);
+        assert_eq!(status, 200);
         assert_eq!(body.status.kind, "Normal");
 
         anyhow::Ok(())

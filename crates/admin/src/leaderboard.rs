@@ -10,10 +10,10 @@ pub enum LbCommand {
 #[clap(name = "full")]
 pub struct FullCmd {
     #[arg(long)]
-    offset: Option<i64>,
+    offset: Option<i32>,
 
     #[arg(long, short = 'n')]
-    limit: Option<i64>,
+    limit: Option<i32>,
 
     #[clap(subcommand)]
     map: Map,
@@ -36,8 +36,8 @@ async fn mariadb_lb<C: ConnectionTrait + StreamTrait>(
     conn: &C,
     redis_conn: &mut RedisConnection,
     map_id: u32,
-    offset: Option<i64>,
-    limit: Option<i64>,
+    offset: Option<i32>,
+    limit: Option<i32>,
 ) -> anyhow::Result<()> {
     let leaderboard =
         leaderboard::leaderboard(conn, redis_conn, map_id, offset, limit, Default::default())

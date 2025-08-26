@@ -4,7 +4,7 @@ use deadpool_redis::redis::AsyncCommands as _;
 use entity::{event_edition_records, players, records};
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, Order, QueryFilter as _,
-    QueryOrder, QuerySelect, StreamTrait, prelude::Expr,
+    QueryOrder, QuerySelect, QueryTrait, StreamTrait, prelude::Expr,
 };
 
 use crate::{
@@ -139,8 +139,8 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
     conn: &C,
     redis_conn: &mut RedisConnection,
     map_id: u32,
-    start: Option<i64>,
-    end: Option<i64>,
+    start: Option<i32>,
+    end: Option<i32>,
     rows: &mut Vec<Row>,
     event: OptEvent<'_>,
 ) -> RecordsResult<()> {
@@ -156,7 +156,7 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
         return Ok(());
     }
 
-    let query = records::Entity::find()
+    let result = records::Entity::find()
         .inner_join(players::Entity)
         .filter(
             records::Column::MapId
@@ -166,22 +166,23 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
         .group_by(records::Column::RecordPlayerId)
         .order_by(records::Column::Time, Order::Asc)
         .order_by(records::Column::RecordDate, Order::Asc)
+        .apply_if(event.event, |query, (ev, ed)| {
+            query.reverse_join(event_edition_records::Entity).filter(
+                event_edition_records::Column::EventId
+                    .eq(ev.id)
+                    .and(event_edition_records::Column::EditionId.eq(ed.id)),
+            )
+        })
+        .select_only()
         .column_as(records::Column::RecordPlayerId, "player_id")
         .column_as(players::Column::Login, "login")
         .column_as(players::Column::Name, "nickname")
         .column_as(Expr::col(records::Column::Time).min(), "time")
-        .column_as(records::Column::MapId, "map_id");
+        .column_as(records::Column::MapId, "map_id")
+        .into_model::<RecordQueryRow>()
+        .all(conn)
+        .await?;
 
-    let query = match event.event {
-        Some((ev, ed)) => query.reverse_join(event_edition_records::Entity).filter(
-            event_edition_records::Column::EventId
-                .eq(ev.id)
-                .and(event_edition_records::Column::EditionId.eq(ed.id)),
-        ),
-        None => query,
-    };
-
-    let result = query.into_model::<RecordQueryRow>().all(conn).await?;
     rows.reserve(result.len());
 
     for r in result {
@@ -201,8 +202,8 @@ pub async fn leaderboard<C: ConnectionTrait + StreamTrait>(
     conn: &C,
     redis_conn: &mut RedisConnection,
     map_id: u32,
-    start: Option<i64>,
-    end: Option<i64>,
+    start: Option<i32>,
+    end: Option<i32>,
     event: OptEvent<'_>,
 ) -> RecordsResult<Vec<Row>> {
     let mut out = Vec::new();
