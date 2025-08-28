@@ -239,10 +239,11 @@ pub async fn ban(
     };
 
     let ban_id = banishments::Entity::insert(new_ban)
-        .exec_with_returning_keys(&conn)
+        .exec(&conn)
         .await
         .with_api_err()
-        .fit(req_id)?[0];
+        .fit(req_id)?
+        .last_insert_id;
 
     let ban = banishments::Entity::find_by_id(ban_id)
         .join_as(

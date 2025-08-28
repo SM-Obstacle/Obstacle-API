@@ -299,6 +299,7 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
             authorization,
         } = ext_auth_headers(req);
 
+        // FIXME: by extracting sql and redis pools separately, we're cloning each of them twice.
         Box::pin(check(
             req_id,
             must::have_dbconn(req),

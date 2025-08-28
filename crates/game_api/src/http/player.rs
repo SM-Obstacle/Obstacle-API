@@ -334,6 +334,8 @@ async fn pb(
 
     drop(editions);
 
+    // FIXME: is this intended? if the player has a PB not in an event that is better than the one in the event,
+    // it doesn't return the good one.
     let res = match edition {
         Some((event_id, edition_id, _)) if single_edition => {
             let (event, edition) = must::have_event_edition_from_ids(&conn, event_id, edition_id)

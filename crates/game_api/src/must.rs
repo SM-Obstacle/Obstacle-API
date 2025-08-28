@@ -14,10 +14,11 @@ pub fn have_request_id(req: &HttpRequest) -> RequestId {
 }
 
 pub fn have_redis_pool(req: &HttpRequest) -> RedisPool {
-    <Res<RedisPool> as FromRequest>::extract(req)
+    <Res<records_lib::Database> as FromRequest>::extract(req)
         .into_inner()
         .unwrap()
         .0
+        .redis_pool
 }
 
 pub fn have_dbconn(req: &HttpRequest) -> DbConn {

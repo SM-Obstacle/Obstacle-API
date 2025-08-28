@@ -45,7 +45,13 @@ pub async fn pb<C: ConnectionTrait + StreamTrait>(
         Some((ev, ed)) => global_event_records::Entity::find()
             .inner_join(maps::Entity)
             .inner_join(players::Entity)
-            .reverse_join(checkpoint_times::Entity)
+            .join(
+                sea_orm::JoinType::InnerJoin,
+                global_event_records::Entity::belongs_to(checkpoint_times::Entity)
+                    .from(global_event_records::Column::RecordId)
+                    .to(checkpoint_times::Column::RecordId)
+                    .into(),
+            )
             .filter(
                 maps::Column::GameId
                     .eq(map_uid)
@@ -64,7 +70,13 @@ pub async fn pb<C: ConnectionTrait + StreamTrait>(
         None => global_records::Entity::find()
             .inner_join(maps::Entity)
             .inner_join(players::Entity)
-            .reverse_join(checkpoint_times::Entity)
+            .join(
+                sea_orm::JoinType::InnerJoin,
+                global_records::Entity::belongs_to(checkpoint_times::Entity)
+                    .from(global_records::Column::RecordId)
+                    .to(checkpoint_times::Column::RecordId)
+                    .into(),
+            )
             .filter(
                 maps::Column::GameId
                     .eq(map_uid)

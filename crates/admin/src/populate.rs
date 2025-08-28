@@ -541,9 +541,7 @@ async fn populate_from_mx_id<C: ConnectionTrait>(
                     name: Set(map.GbxMapName),
                     ..Default::default()
                 };
-                maps::Entity::insert(map)
-                    .exec_with_returning_keys(conn)
-                    .await?[0]
+                maps::Entity::insert(map).exec(conn).await?.last_insert_id
             }
         };
 
