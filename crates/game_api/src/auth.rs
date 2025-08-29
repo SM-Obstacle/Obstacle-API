@@ -352,7 +352,11 @@ impl FromRequest for AuthHeader {
         #[cfg(not(auth))]
         ready(Ok(Self {
             login,
-            token: authorization.unwrap_or_default(),
+            token: {
+                // For security reasons we ignore the header
+                let _ = authorization;
+                Default::default()
+            },
         }))
     }
 }

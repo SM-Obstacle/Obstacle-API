@@ -12,11 +12,11 @@ use records_lib::{
 };
 use reqwest::Client;
 use sea_orm::{
-    ActiveValue::Set,
+    ActiveValue::{Set, Unchanged},
     ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect,
-    StatementBuilder, StreamTrait, TransactionTrait,
+    StreamTrait, TransactionTrait,
     prelude::Expr,
-    sea_query::{ExprTrait as _, Query},
+    sea_query::ExprTrait as _,
 };
 use serde::{Deserialize, Serialize};
 use tracing_actix_web::RequestId;
@@ -54,7 +54,7 @@ pub fn player_scope() -> Scope {
             .route("/give_token", web::post().to(auth::post_give_token)),
     );
     #[cfg(not(feature = "request_filter"))]
-    let scope = scope.route("/give_token", web::post().to(post_give_token));
+    let scope = scope.route("/give_token", web::post().to(auth::post_give_token));
 
     scope
 }
@@ -109,6 +109,10 @@ pub async fn update(
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<PlayerInfoNetBody>,
 ) -> RecordsResponse<impl Responder> {
+    if body.login != login {
+        return Err(RecordsErrorKind::Unauthorized).fit(req_id);
+    }
+
     let mut redis_conn = db.redis_pool.get().await.with_api_err().fit(req_id)?;
 
     let auth_result = crate::auth::check_auth_for(
@@ -139,14 +143,22 @@ pub async fn update_player<C: ConnectionTrait>(
     player_id: u32,
     body: PlayerInfoNetBody,
 ) -> RecordsResult<()> {
-    let mut update = Query::update();
-    let update = update
-        .table(players::Entity)
-        .and_where(players::Column::Id.eq(player_id))
-        .value(players::Column::Name, body.name)
-        .value(players::Column::ZonePath, body.zone_path);
-    let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
-    conn.execute(stmt).await.with_api_err()?;
+    let player = players::Entity::find_by_id(player_id)
+        .one(conn)
+        .await?
+        .unwrap_or_else(|| panic!("Player {player_id} should exist in database"));
+
+    let player_update = players::ActiveModel {
+        name: Set(body.name),
+        zone_path: Set(body.zone_path),
+        join_date: match player.join_date {
+            Some(date) => Unchanged(Some(date)),
+            None => Set(Some(chrono::Utc::now().naive_utc())),
+        },
+        ..From::from(player)
+    };
+
+    players::Entity::update(player_update).exec(conn).await?;
 
     Ok(())
 }
