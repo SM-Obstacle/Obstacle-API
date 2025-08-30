@@ -47,20 +47,22 @@ async fn insert(
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<UpdateMapBody>,
 ) -> RecordsResponse<impl Responder> {
-    let res = records_lib::map::get_map_from_uid(&conn, &body.map_uid)
+    let map = records_lib::map::get_map_from_uid(&conn, &body.map_uid)
         .await
         .fit(req_id)?;
 
-    if let Some(maps::Model { id, cps_number, .. }) = res {
-        if cps_number.is_none() {
-            let mut update = Query::update();
-            let update = update
-                .table(maps::Entity)
-                .value(maps::Column::CpsNumber, body.cps_number)
-                .and_where(maps::Column::Id.eq(id));
-            let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
-            conn.execute(stmt).await.with_api_err().fit(req_id)?;
-        }
+    if let Some(map) = map
+        && map.cps_number.is_none()
+    {
+        let map = maps::ActiveModel {
+            cps_number: Set(Some(body.cps_number)),
+            ..From::from(map)
+        };
+        maps::Entity::update(map)
+            .exec(&conn)
+            .await
+            .with_api_err()
+            .fit(req_id)?;
     } else {
         let player = player::get_or_insert(&conn, &body.author)
             .await
