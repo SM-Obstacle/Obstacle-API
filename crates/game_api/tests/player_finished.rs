@@ -1,7 +1,10 @@
 use std::{array, iter};
 
 use actix_web::test;
-use entity::{checkpoint_times, global_records, maps, players, records};
+use entity::{
+    checkpoint_times, event, event_edition, event_edition_maps, global_event_records,
+    global_records, maps, players, records,
+};
 use sea_orm::{
     ActiveValue::Set, ColumnTrait as _, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
@@ -47,6 +50,17 @@ impl PartialEq<Record> for global_records::Model {
 }
 
 impl PartialEq<Record> for records::Model {
+    fn eq(&self, other: &Record) -> bool {
+        self.map_id == other.map_id
+            && self.record_player_id == other.player_id
+            && self.time == other.time
+            && self.respawn_count == other.respawn_count
+            && self.time == other.time
+            && self.flags == other.flags
+    }
+}
+
+impl PartialEq<Record> for global_event_records::Model {
     fn eq(&self, other: &Record) -> bool {
         self.map_id == other.map_id
             && self.record_player_id == other.player_id
@@ -585,6 +599,166 @@ async fn many_records() -> anyhow::Result<()> {
             assert_eq!(status, 200);
             assert_eq!(body, times[i].expected_response);
         }
+
+        anyhow::Ok(())
+    })
+    .await
+}
+
+/// Setup: one player, one map, one event and its edition that has flag "save_non_event_records"
+/// Test: /player/finished of that player on the map, just once
+/// Expected: the event should contain the record
+#[tokio::test]
+async fn save_record_for_related_event() -> anyhow::Result<()> {
+    let player = players::ActiveModel {
+        id: Set(1),
+        login: Set("player_login".to_owned()),
+        name: Set("player_name".to_owned()),
+        role: Set(0),
+        ..Default::default()
+    };
+
+    let map = maps::ActiveModel {
+        id: Set(1),
+        game_id: Set("map_uid".to_owned()),
+        name: Set("map_name".to_owned()),
+        player_id: Set(1),
+        ..Default::default()
+    };
+
+    let event = event::ActiveModel {
+        id: Set(1),
+        handle: Set("event_handle".to_owned()),
+        ..Default::default()
+    };
+
+    let edition = event_edition::ActiveModel {
+        event_id: Set(1),
+        id: Set(1),
+        name: Set(Default::default()),
+        start_date: Set(chrono::Utc::now().naive_utc()),
+        non_original_maps: Set(0),
+        save_non_event_record: Set(1),
+        is_transparent: Set(0),
+        ..Default::default()
+    };
+
+    let edition_map = event_edition_maps::ActiveModel {
+        event_id: Set(1),
+        edition_id: Set(1),
+        map_id: Set(1),
+        order: Set(0),
+        ..Default::default()
+    };
+
+    base::with_db(async |db| {
+        players::Entity::insert(player).exec(&db.sql_conn).await?;
+        maps::Entity::insert(map).exec(&db.sql_conn).await?;
+        event::Entity::insert(event).exec(&db.sql_conn).await?;
+        event_edition::Entity::insert(edition)
+            .exec(&db.sql_conn)
+            .await?;
+        event_edition_maps::Entity::insert(edition_map)
+            .exec(&db.sql_conn)
+            .await?;
+
+        let app = base::get_app(db.clone()).await;
+
+        let req = test::TestRequest::post()
+            .uri("/player/finished")
+            .insert_header(("PlayerLogin", "player_login"))
+            .set_json(Request {
+                map_uid: "map_uid".to_owned(),
+                time: 10000,
+                flags: Some(682),
+                respawn_count: 7,
+                cps: vec![10000],
+            })
+            .to_request();
+
+        let res = test::call_service(&app, req).await;
+        let status = res.status();
+        let body = test::read_body(res).await;
+        // Deserialize the response without checking it
+        let _ = base::try_from_slice::<Response>(&body)?;
+
+        assert_eq!(status, 200);
+        let event_record = global_event_records::Entity::find()
+            .filter(
+                global_event_records::Column::MapId
+                    .eq(1)
+                    .and(global_event_records::Column::RecordPlayerId.eq(1)),
+            )
+            .one(&db.sql_conn)
+            .await?
+            .unwrap_or_else(|| panic!("global_event_records row should exist in database"));
+
+        assert_eq!(
+            event_record,
+            Record {
+                map_id: 1,
+                player_id: 1,
+                time: 10000,
+                respawn_count: 7,
+                flags: 682,
+            }
+        );
+        assert_eq!(event_record.event_id, 1);
+        assert_eq!(event_record.edition_id, 1);
+
+        // Check CP times saved in DB
+        let cp_times = checkpoint_times::Entity::find()
+            .filter(checkpoint_times::Column::RecordId.eq(event_record.record_id))
+            .all(&db.sql_conn)
+            .await?;
+
+        itertools::assert_equal(
+            cp_times,
+            iter::once(checkpoint_times::Model {
+                cp_num: 0,
+                map_id: 1,
+                record_id: event_record.record_id,
+                time: 10000,
+            }),
+        );
+
+        let normal_record = global_records::Entity::find()
+            .filter(
+                global_records::Column::MapId
+                    .eq(1)
+                    .and(global_records::Column::RecordPlayerId.eq(1)),
+            )
+            .one(&db.sql_conn)
+            .await?
+            .unwrap_or_else(|| panic!("global_records row should exist in database"));
+
+        assert_eq!(
+            normal_record,
+            Record {
+                map_id: 1,
+                player_id: 1,
+                time: 10000,
+                respawn_count: 7,
+                flags: 682,
+            }
+        );
+        assert_eq!(normal_record.event_record_id, Some(event_record.record_id));
+
+        // Check CP times saved in DB
+        let cp_times = checkpoint_times::Entity::find()
+            .filter(checkpoint_times::Column::RecordId.eq(normal_record.record_id))
+            .all(&db.sql_conn)
+            .await?;
+
+        itertools::assert_equal(
+            cp_times,
+            iter::once(checkpoint_times::Model {
+                cp_num: 0,
+                map_id: 1,
+                record_id: normal_record.record_id,
+                time: 10000,
+            }),
+        );
 
         anyhow::Ok(())
     })
