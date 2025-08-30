@@ -164,8 +164,6 @@ async fn get_old_record<C: ConnectionTrait>(
         .with_api_err()
 }
 
-// conn, guard, params, at, mode_version, event
-
 pub async fn finished<C: ConnectionTrait + StreamTrait>(
     conn: &C,
     redis_conn: &mut RedisConnection,

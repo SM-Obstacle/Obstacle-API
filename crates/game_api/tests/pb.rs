@@ -77,8 +77,7 @@ async fn test_pb() -> anyhow::Result<()> {
 
         // 4 first times are 0.25s, the 5th one is <record_time> - 1s
         let cp_times = records.into_iter().flat_map(|record| {
-            iter::repeat(250)
-                .take(4)
+            iter::repeat_n(250, 4)
                 .chain(iter::once(record.time - 1000))
                 .enumerate()
                 .map(move |(cp_num, cp_time)| checkpoint_times::ActiveModel {
@@ -110,8 +109,7 @@ async fn test_pb() -> anyhow::Result<()> {
 
         itertools::assert_equal(
             body.cps_times,
-            iter::repeat(250)
-                .take(4)
+            iter::repeat_n(250, 4)
                 .enumerate()
                 .map(|(cp_num, time)| ResponseItem {
                     cp_num: cp_num as _,
