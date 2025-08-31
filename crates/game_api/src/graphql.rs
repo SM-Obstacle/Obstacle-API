@@ -4,7 +4,7 @@ use actix_web::{HttpResponse, Resource, Responder};
 use async_graphql::dataloader::DataLoader;
 use async_graphql::extensions::ApolloTracing;
 use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
-use async_graphql::{Enum, ErrorExtensionValues, ID, Value};
+use async_graphql::{Enum, ErrorExtensionValues, Value};
 use async_graphql_actix_web::GraphQLRequest;
 use entity::{event as event_entity, event_edition, global_records, players, records};
 use records_lib::opt_event::OptEvent;
@@ -31,7 +31,6 @@ use self::mappack::Mappack;
 use self::player::Player;
 use self::record::RankedRecord;
 
-mod ban;
 mod event;
 mod map;
 mod mappack;
@@ -45,13 +44,6 @@ pub(crate) enum SortState {
     Reverse,
 }
 
-#[derive(async_graphql::Interface)]
-#[graphql(field(name = "id", ty = "ID"))]
-enum Node {
-    Map(Map),
-    Player(Player),
-}
-
 struct QueryRoot;
 
 #[async_graphql::Object]
@@ -60,7 +52,7 @@ impl QueryRoot {
         &self,
         ctx: &async_graphql::Context<'_>,
         mx_id: i64,
-    ) -> async_graphql::Result<Option<EventEdition>> {
+    ) -> async_graphql::Result<Option<EventEdition<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let edition = event_edition::Entity::find()

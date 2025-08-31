@@ -98,7 +98,7 @@ impl Event {
     async fn editions(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventEdition>> {
+    ) -> async_graphql::Result<Vec<EventEdition<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let q = event_utils::event_editions_list(conn, &self.inner.handle).await?;
@@ -114,7 +114,7 @@ impl Event {
     async fn last_edition(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<EventEdition>> {
+    ) -> async_graphql::Result<Option<EventEdition<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let edition = event_edition::Entity::find()
@@ -149,7 +149,7 @@ impl Event {
         &self,
         ctx: &async_graphql::Context<'_>,
         edition_id: u32,
-    ) -> async_graphql::Result<Option<EventEdition>> {
+    ) -> async_graphql::Result<Option<EventEdition<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let edition = event_utils::get_edition_by_id(conn, self.inner.id, edition_id).await?;
@@ -366,7 +366,7 @@ impl EventEditionPlayerCategorizedRank<'_> {
     async fn ranks(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventEditionPlayerRank>> {
+    ) -> async_graphql::Result<Vec<EventEditionPlayerRank<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let mut select = Query::select();
@@ -475,7 +475,7 @@ impl EventEditionPlayer<'_> {
     async fn categorized_ranks(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventEditionPlayerCategorizedRank>> {
+    ) -> async_graphql::Result<Vec<EventEditionPlayerCategorizedRank<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let categories = event_utils::get_categories_by_edition_id(
             conn,

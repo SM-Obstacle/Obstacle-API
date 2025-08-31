@@ -213,7 +213,7 @@ impl Map {
     async fn related_event_editions(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<RelatedEdition>> {
+    ) -> async_graphql::Result<Vec<RelatedEdition<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
 

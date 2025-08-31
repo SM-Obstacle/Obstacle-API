@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::{fmt, panic};
 
 use actix_http::Request;
@@ -18,7 +20,6 @@ use game_api_lib::{configure, init_env};
 
 #[derive(Debug, serde::Deserialize)]
 pub struct ErrorResponse {
-    #[allow(dead_code)]
     pub request_id: String,
     pub r#type: i32,
     pub message: String,

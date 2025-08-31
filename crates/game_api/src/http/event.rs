@@ -856,15 +856,26 @@ async fn edition_finished(
     .await
 }
 
-async fn edition_finished_impl<C: ConnectionTrait + StreamTrait>(
-    conn: &C,
-    redis_conn: &mut RedisConnection,
-    params: ExpandedInsertRecordParams<'_>,
-    player_login: &str,
-    map: &maps::Model,
+struct EditionFinishedParams<'a> {
+    player_login: &'a str,
+    map: &'a maps::Model,
     event_id: u32,
     edition_id: u32,
     original_map_id: Option<u32>,
+    inner_params: ExpandedInsertRecordParams<'a>,
+}
+
+async fn edition_finished_impl<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
+    EditionFinishedParams {
+        player_login,
+        map,
+        event_id,
+        edition_id,
+        original_map_id,
+        inner_params: params,
+    }: EditionFinishedParams<'_>,
 ) -> RecordsResult<pf::FinishedOutput> {
     // Then we insert the record for the global records
     let res = pf::finished(conn, redis_conn, params, player_login, map).await?;
@@ -953,24 +964,21 @@ pub async fn edition_finished_at(
     }
 
     let res: pf::FinishedOutput = transaction::within(&db.sql_conn, async |txn| {
-        let params = ExpandedInsertRecordParams {
-            body: &body.rest,
-            at,
-            event: OptEvent::new(&event, &edition),
-            mode_version,
+        let params = EditionFinishedParams {
+            player_login: &login,
+            map: &map,
+            event_id: event.id,
+            edition_id: edition.id,
+            original_map_id,
+            inner_params: ExpandedInsertRecordParams {
+                body: &body.rest,
+                at,
+                event: OptEvent::new(&event, &edition),
+                mode_version,
+            },
         };
 
-        edition_finished_impl(
-            txn,
-            &mut redis_conn,
-            params,
-            &login,
-            &map,
-            event.id,
-            edition.id,
-            original_map_id,
-        )
-        .await
+        edition_finished_impl(txn, &mut redis_conn, params).await
     })
     .await
     .fit(req_id)?;
