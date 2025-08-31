@@ -1,4 +1,5 @@
 mod base;
+mod overview_base;
 
 use std::{fmt, time::Duration};
 
@@ -7,21 +8,10 @@ use anyhow::Context as _;
 use entity::{maps, players, records};
 use sea_orm::{ActiveValue::Set, ConnectionTrait, EntityTrait as _};
 
+use crate::overview_base::{Response, Row};
+
 const ROWS: i32 = 15;
 const ROWS_MINUS_TOP_3: i32 = ROWS - 3;
-
-#[derive(Debug, PartialEq, serde::Deserialize)]
-struct Row {
-    rank: i32,
-    login: String,
-    nickname: String,
-    time: i32,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct Response {
-    response: Vec<Row>,
-}
 
 fn player_id_to_player_active_model(player_id: u32) -> players::ActiveModel {
     players::ActiveModel {

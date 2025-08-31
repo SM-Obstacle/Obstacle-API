@@ -4,19 +4,10 @@ use actix_web::test;
 use entity::{checkpoint_times, maps, players, records};
 use sea_orm::{ActiveValue::Set, EntityTrait};
 
+use crate::pb_base::{Response, ResponseItem};
+
 mod base;
-
-#[derive(Debug, PartialEq, serde::Deserialize)]
-struct ResponseItem {
-    cp_num: u32,
-    time: i32,
-}
-
-#[derive(serde::Deserialize)]
-struct Response {
-    rs_count: i32,
-    cps_times: Vec<ResponseItem>,
-}
+mod pb_base;
 
 fn new_record(time: i32, rs_count: i32, datetime_offset_secs: u64) -> records::ActiveModel {
     records::ActiveModel {

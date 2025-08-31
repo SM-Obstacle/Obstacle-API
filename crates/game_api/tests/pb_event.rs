@@ -7,19 +7,10 @@ use entity::{
 };
 use sea_orm::{ActiveValue::Set, EntityTrait};
 
+use crate::pb_base::Response;
+
 mod base;
-
-#[derive(Debug, PartialEq, serde::Deserialize)]
-struct ResponseItem {
-    cp_num: u32,
-    time: i32,
-}
-
-#[derive(serde::Deserialize)]
-struct Response {
-    rs_count: i32,
-    cps_times: Vec<ResponseItem>,
-}
+mod pb_base;
 
 #[tokio::test]
 async fn diff_pb_original_map_event_map() -> anyhow::Result<()> {
