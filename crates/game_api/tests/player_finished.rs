@@ -84,8 +84,10 @@ async fn single_try() -> anyhow::Result<()> {
         ..Default::default()
     };
 
+    let map_id = rand::random_range(1..=100);
+
     let map = maps::ActiveModel {
-        id: Set(1),
+        id: Set(map_id),
         game_id: Set("map_uid".to_owned()),
         name: Set("map_name".to_owned()),
         player_id: Set(1),
@@ -134,7 +136,7 @@ async fn single_try() -> anyhow::Result<()> {
         let record = global_records::Entity::find()
             .filter(
                 global_records::Column::MapId
-                    .eq(1)
+                    .eq(map_id)
                     .and(global_records::Column::RecordPlayerId.eq(1)),
             )
             .one(&db.sql_conn)
@@ -144,7 +146,7 @@ async fn single_try() -> anyhow::Result<()> {
         assert_eq!(
             record,
             Record {
-                map_id: 1,
+                map_id,
                 player_id: 1,
                 time: 10000,
                 respawn_count: 7,
@@ -162,12 +164,12 @@ async fn single_try() -> anyhow::Result<()> {
             cp_times,
             iter::once(checkpoint_times::Model {
                 cp_num: 0,
-                map_id: 1,
+                map_id,
                 record_id: record.record_id,
                 time: 0,
             })
             .chain((1..=5).map(|cp_num| checkpoint_times::Model {
-                map_id: 1,
+                map_id,
                 record_id: record.record_id,
                 time: 2000,
                 cp_num,
@@ -247,8 +249,10 @@ async fn many_tries() -> anyhow::Result<()> {
         ..Default::default()
     };
 
+    let map_id = rand::random_range(1..=100);
+
     let map = maps::ActiveModel {
-        id: Set(1),
+        id: Set(map_id),
         game_id: Set("map_uid".to_owned()),
         name: Set("map_name".to_owned()),
         player_id: Set(1),
@@ -301,7 +305,7 @@ async fn many_tries() -> anyhow::Result<()> {
         let records = records::Entity::find()
             .filter(
                 records::Column::MapId
-                    .eq(1)
+                    .eq(map_id)
                     .and(records::Column::RecordPlayerId.eq(1)),
             )
             .order_by_asc(records::Column::Time)
@@ -315,7 +319,7 @@ async fn many_tries() -> anyhow::Result<()> {
             times.iter().map(|time| Record {
                 flags: 682,
                 player_id: 1,
-                map_id: 1,
+                map_id,
                 respawn_count: time.rs_count,
                 time: time.time,
             }),
@@ -326,7 +330,7 @@ async fn many_tries() -> anyhow::Result<()> {
         let pb_record_from_db = global_records::Entity::find()
             .filter(
                 global_records::Column::MapId
-                    .eq(1)
+                    .eq(map_id)
                     .and(global_records::Column::RecordPlayerId.eq(1)),
             )
             .one(&db.sql_conn)
@@ -336,7 +340,7 @@ async fn many_tries() -> anyhow::Result<()> {
         assert_eq!(
             pb_record_from_db,
             Record {
-                map_id: 1,
+                map_id,
                 player_id: 1,
                 time: initial_pb_record.time,
                 respawn_count: initial_pb_record.rs_count,
@@ -355,18 +359,18 @@ async fn many_tries() -> anyhow::Result<()> {
                 cp_times,
                 iter::once(checkpoint_times::Model {
                     cp_num: 0,
-                    map_id: 1,
+                    map_id,
                     record_id,
                     time: 0,
                 })
                 .chain((1..=4).map(|cp_num| checkpoint_times::Model {
-                    map_id: 1,
+                    map_id,
                     record_id,
                     time: 250,
                     cp_num,
                 }))
                 .chain(iter::once(checkpoint_times::Model {
-                    map_id: 1,
+                    map_id,
                     record_id,
                     time: times[i].time - 1000,
                     cp_num: 5,
@@ -391,8 +395,10 @@ async fn with_mode_version() -> anyhow::Result<()> {
         ..Default::default()
     };
 
+    let map_id = rand::random_range(1..=100);
+
     let map = maps::ActiveModel {
-        id: Set(1),
+        id: Set(map_id),
         game_id: Set("map_uid".to_owned()),
         name: Set("map_name".to_owned()),
         player_id: Set(1),
@@ -442,7 +448,7 @@ async fn with_mode_version() -> anyhow::Result<()> {
         let modeversion = records::Entity::find()
             .filter(
                 records::Column::MapId
-                    .eq(1)
+                    .eq(map_id)
                     .and(records::Column::RecordPlayerId.eq(1)),
             )
             .select_only()
@@ -479,8 +485,10 @@ async fn many_records() -> anyhow::Result<()> {
         ..Default::default()
     });
 
+    let map_id = rand::random_range(1..=100);
+
     let map = maps::ActiveModel {
-        id: Set(1),
+        id: Set(map_id),
         game_id: Set("map_uid".to_owned()),
         name: Set("map_name".to_owned()),
         player_id: Set(1),
@@ -618,8 +626,10 @@ async fn save_record_for_related_event() -> anyhow::Result<()> {
         ..Default::default()
     };
 
+    let map_id = rand::random_range(1..=100);
+
     let map = maps::ActiveModel {
-        id: Set(1),
+        id: Set(map_id),
         game_id: Set("map_uid".to_owned()),
         name: Set("map_name".to_owned()),
         player_id: Set(1),
@@ -646,7 +656,7 @@ async fn save_record_for_related_event() -> anyhow::Result<()> {
     let edition_map = event_edition_maps::ActiveModel {
         event_id: Set(1),
         edition_id: Set(1),
-        map_id: Set(1),
+        map_id: Set(map_id),
         order: Set(0),
         ..Default::default()
     };
@@ -686,7 +696,7 @@ async fn save_record_for_related_event() -> anyhow::Result<()> {
         let event_record = global_event_records::Entity::find()
             .filter(
                 global_event_records::Column::MapId
-                    .eq(1)
+                    .eq(map_id)
                     .and(global_event_records::Column::RecordPlayerId.eq(1)),
             )
             .one(&db.sql_conn)
@@ -696,7 +706,7 @@ async fn save_record_for_related_event() -> anyhow::Result<()> {
         assert_eq!(
             event_record,
             Record {
-                map_id: 1,
+                map_id,
                 player_id: 1,
                 time: 10000,
                 respawn_count: 7,
@@ -716,7 +726,7 @@ async fn save_record_for_related_event() -> anyhow::Result<()> {
             cp_times,
             iter::once(checkpoint_times::Model {
                 cp_num: 0,
-                map_id: 1,
+                map_id,
                 record_id: event_record.record_id,
                 time: 10000,
             }),
@@ -725,7 +735,7 @@ async fn save_record_for_related_event() -> anyhow::Result<()> {
         let normal_record = global_records::Entity::find()
             .filter(
                 global_records::Column::MapId
-                    .eq(1)
+                    .eq(map_id)
                     .and(global_records::Column::RecordPlayerId.eq(1)),
             )
             .one(&db.sql_conn)
@@ -735,7 +745,7 @@ async fn save_record_for_related_event() -> anyhow::Result<()> {
         assert_eq!(
             normal_record,
             Record {
-                map_id: 1,
+                map_id,
                 player_id: 1,
                 time: 10000,
                 respawn_count: 7,
@@ -754,7 +764,7 @@ async fn save_record_for_related_event() -> anyhow::Result<()> {
             cp_times,
             iter::once(checkpoint_times::Model {
                 cp_num: 0,
-                map_id: 1,
+                map_id,
                 record_id: normal_record.record_id,
                 time: 10000,
             }),

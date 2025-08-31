@@ -1,11 +1,11 @@
 use crate::{RecordsResult, RecordsResultExt};
 use actix_web::web;
-use entity::{checkpoint_times, global_event_records, global_records, maps, players};
-use futures::StreamExt;
+use entity::{checkpoint_times, global_event_records, global_records, maps, players, records};
+use futures::{Stream as _, StreamExt, TryStreamExt};
 use records_lib::opt_event::OptEvent;
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect,
-    StreamTrait,
+    ColumnTrait as _, ConnectionTrait, FromQueryResult, StatementBuilder, StreamTrait,
+    prelude::Expr, sea_query::Query,
 };
 use serde::{Deserialize, Serialize};
 
@@ -41,67 +41,75 @@ pub async fn pb<C: ConnectionTrait + StreamTrait>(
     map_uid: &str,
     event: OptEvent<'_>,
 ) -> RecordsResult<PbResponse> {
-    let mut times = match event.event {
-        Some((ev, ed)) => global_event_records::Entity::find()
-            .inner_join(maps::Entity)
-            .inner_join(players::Entity)
-            .join(
-                sea_orm::JoinType::InnerJoin,
-                global_event_records::Entity::belongs_to(checkpoint_times::Entity)
-                    .from(global_event_records::Column::RecordId)
-                    .to(checkpoint_times::Column::RecordId)
-                    .into(),
-            )
-            .filter(
-                maps::Column::GameId
-                    .eq(map_uid)
-                    .and(players::Column::Login.eq(player_login))
-                    .and(global_event_records::Column::EventId.eq(ev.id))
-                    .and(global_event_records::Column::EditionId.eq(ed.id)),
-            )
-            .select_only()
-            .column_as(global_event_records::Column::RespawnCount, "rs_count")
-            .column_as(checkpoint_times::Column::CpNum, "cp_num")
-            .column_as(checkpoint_times::Column::Time, "time")
-            .into_model::<PbResponseItem>()
-            .stream(conn)
-            .await
-            .with_api_err()?,
-        None => global_records::Entity::find()
-            .inner_join(maps::Entity)
-            .inner_join(players::Entity)
-            .join(
-                sea_orm::JoinType::InnerJoin,
-                global_records::Entity::belongs_to(checkpoint_times::Entity)
-                    .from(global_records::Column::RecordId)
-                    .to(checkpoint_times::Column::RecordId)
-                    .into(),
-            )
-            .filter(
-                maps::Column::GameId
-                    .eq(map_uid)
-                    .and(players::Column::Login.eq(player_login)),
-            )
-            .select_only()
-            .column_as(global_records::Column::RespawnCount, "rs_count")
-            .column_as(checkpoint_times::Column::CpNum, "cp_num")
-            .column_as(checkpoint_times::Column::Time, "time")
-            .into_model::<PbResponseItem>()
-            .stream(conn)
-            .await
-            .with_api_err()?,
-    };
+    let mut select = Query::select();
+
+    match event.event {
+        Some((ev, ed)) => {
+            select.from_as(global_event_records::Entity, "r").and_where(
+                Expr::col(("r", global_event_records::Column::EventId))
+                    .eq(ev.id)
+                    .and(Expr::col(("r", global_event_records::Column::EditionId)).eq(ed.id)),
+            );
+        }
+        None => {
+            select.from_as(global_records::Entity, "r");
+        }
+    }
+
+    let times = select
+        .inner_join(
+            maps::Entity,
+            maps::Column::Id
+                .into_expr()
+                .eq(Expr::col(("r", records::Column::MapId))),
+        )
+        .inner_join(
+            players::Entity,
+            players::Column::Id
+                .into_expr()
+                .eq(Expr::col(("r", records::Column::RecordPlayerId))),
+        )
+        .inner_join(
+            checkpoint_times::Entity,
+            checkpoint_times::Column::RecordId
+                .into_expr()
+                .eq(Expr::col(("r", records::Column::RecordId))),
+        )
+        .and_where(
+            maps::Column::GameId
+                .eq(map_uid)
+                .and(players::Column::Login.eq(player_login)),
+        )
+        .expr_as(Expr::col(("r", records::Column::RespawnCount)), "rs_count")
+        .expr_as(
+            Expr::col((checkpoint_times::Entity, checkpoint_times::Column::CpNum)),
+            "cp_num",
+        )
+        .expr_as(
+            Expr::col((checkpoint_times::Entity, checkpoint_times::Column::Time)),
+            "time",
+        );
+
+    let stmt = StatementBuilder::build(&*times, &conn.get_database_backend());
+    let times = conn
+        .stream(stmt)
+        .await
+        .with_api_err()?
+        .map_ok(|result| PbResponseItem::from_query_result(&result, ""))
+        .map(Result::flatten);
 
     let mut res = PbResponse {
         rs_count: 0,
         cps_times: Vec::with_capacity(times.size_hint().0),
     };
 
+    futures::pin_mut!(times);
+
     while let Some(PbResponseItem {
         rs_count,
         cp_num,
         time,
-    }) = times.next().await.transpose().with_api_err()?
+    }) = times.try_next().await.with_api_err()?
     {
         res.rs_count = rs_count;
         res.cps_times.push(PbCpTimesResponseItem { cp_num, time });

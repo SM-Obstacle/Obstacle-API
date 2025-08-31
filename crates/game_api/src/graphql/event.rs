@@ -511,7 +511,7 @@ impl EventEditionPlayer<'_> {
         let mut unfinished_maps = maps::Entity::find()
             .join(
                 sea_orm::JoinType::InnerJoin,
-                event_edition_maps::Relation::Maps2.def(),
+                event_edition_maps::Relation::Maps.def(),
             )
             .left_join(records::Entity)
             .join(

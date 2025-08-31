@@ -48,7 +48,7 @@ pub enum Relation {
         on_update = "Restrict",
         on_delete = "Cascade"
     )]
-    Maps2,
+    Maps,
     #[sea_orm(
         belongs_to = "super::maps::Entity",
         from = "Column::OriginalMapId",
@@ -56,7 +56,7 @@ pub enum Relation {
         on_update = "Restrict",
         on_delete = "SetNull"
     )]
-    Maps1,
+    OriginalMaps,
 }
 
 impl Related<super::event_edition::Entity> for Entity {

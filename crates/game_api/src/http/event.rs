@@ -76,7 +76,7 @@ async fn get_maps_by_edition_id<C: ConnectionTrait>(
     let r = maps::Entity::find()
         .join_rev(
             sea_orm::JoinType::InnerJoin,
-            event_edition_maps::Relation::Maps2.def(),
+            event_edition_maps::Relation::Maps.def(),
         )
         .order_by_asc(event_edition_maps::Column::CategoryId)
         .order_by_asc(event_edition_maps::Column::Order)
@@ -414,7 +414,7 @@ async fn edition(
     let original_maps = event_edition_maps::Entity::find()
         .join(
             sea_orm::JoinType::InnerJoin,
-            event_edition_maps::Relation::Maps1.def(),
+            event_edition_maps::Relation::OriginalMaps.def(),
         )
         .filter(
             event_edition_maps::Column::EventId

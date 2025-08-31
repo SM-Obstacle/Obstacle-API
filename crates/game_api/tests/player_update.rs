@@ -93,7 +93,7 @@ async fn test_update_name_zone_path() -> anyhow::Result<()> {
         assert_eq!(player.login, "player_login");
         assert_eq!(player.name, "booga");
         assert_eq!(player.zone_path.as_deref(), Some("Germany"));
-        assert_eq!(player.join_date, Some(now.round_subsecs(0)));
+        assert_eq!(player.join_date, Some(now.trunc_subsecs(0)));
 
         anyhow::Ok(())
     })

@@ -6,8 +6,8 @@ use entity::{
 };
 use futures::{Stream, TryStreamExt as _};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbErr, EntityTrait, FromQueryResult, IntoSimpleExpr, Order,
-    QueryFilter, QueryOrder, QuerySelect, QueryTrait, RelationTrait as _, StreamTrait,
+    ColumnTrait as _, ConnectionTrait, DbErr, EntityTrait, FromQueryResult, Order, QueryFilter,
+    QueryOrder, QuerySelect, QueryTrait, RelationTrait as _, StreamTrait,
     prelude::Expr,
     sea_query::{Asterisk, ExprTrait as _, Func, IntoCondition, Query},
 };
@@ -126,7 +126,7 @@ pub async fn event_edition_maps<C: ConnectionTrait>(
     let result = maps::Entity::find()
         .join(
             sea_orm::JoinType::InnerJoin,
-            event_edition_maps::Relation::Maps1.def(),
+            event_edition_maps::Relation::OriginalMaps.def(),
         )
         .filter(
             event_edition_maps::Column::EventId
@@ -361,17 +361,17 @@ pub async fn get_map_in_edition<C: ConnectionTrait>(
     let map = event_edition_maps::Entity::find()
         .join_as(
             sea_orm::JoinType::InnerJoin,
-            event_edition_maps::Relation::Maps1.def(),
+            event_edition_maps::Relation::Maps.def(),
             "map",
         )
         .join_as(
             sea_orm::JoinType::InnerJoin,
-            event_edition_maps::Relation::Maps2
+            event_edition_maps::Relation::OriginalMaps
                 .def()
                 .condition_type(sea_orm::sea_query::ConditionType::Any)
                 .on_condition(|_left, right| {
                     Expr::col((right, maps::Column::Id))
-                        .equals(event_edition_maps::Column::OriginalMapId)
+                        .equals(event_edition_maps::Column::MapId)
                         .into_condition()
                 }),
             "original_map",
@@ -388,7 +388,7 @@ pub async fn get_map_in_edition<C: ConnectionTrait>(
                 ),
         )
         .select_only()
-        .column_as(Expr::col(("map", Asterisk)).into_simple_expr(), "map")
+        .expr(Expr::col(("map", Asterisk)))
         .column(event_edition_maps::Column::OriginalMapId)
         .into_model()
         .one(conn)
