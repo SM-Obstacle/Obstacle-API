@@ -69,6 +69,6 @@ pub async fn get_player_from_id<C: ConnectionTrait>(
     let player = players::Entity::find_by_id(player_id)
         .one(conn)
         .await?
-        .unwrap_or_else(|| panic!("Player with ID {player_id} is supposed to be in database"));
+        .unwrap_or_else(|| panic!("Player with ID {player_id} not found in get_player_from_id - this should not happen as the player is expected to exist"));
     Ok(player)
 }
