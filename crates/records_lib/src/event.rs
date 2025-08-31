@@ -232,6 +232,13 @@ pub async fn get_medal_times_of<C: ConnectionTrait>(
                 .and(event_edition_maps::Column::EditionId.eq(edition_id))
                 .and(event_edition_maps::Column::MapId.eq(map_id)),
         )
+        .select_only()
+        .columns([
+            event_edition_maps::Column::BronzeTime,
+            event_edition_maps::Column::SilverTime,
+            event_edition_maps::Column::GoldTime,
+            event_edition_maps::Column::AuthorTime,
+        ])
         .into_tuple()
         .one(conn)
         .await?

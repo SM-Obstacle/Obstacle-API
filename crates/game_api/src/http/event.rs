@@ -129,9 +129,26 @@ struct OriginalMap {
 }
 
 #[derive(Serialize)]
+struct MapMainAuthor {
+    login: String,
+    name: String,
+    zone_path: NullableText,
+}
+
+impl From<PlayerInfoNetBody> for MapMainAuthor {
+    fn from(value: PlayerInfoNetBody) -> Self {
+        Self {
+            login: value.login,
+            name: value.name,
+            zone_path: value.zone_path.into(),
+        }
+    }
+}
+
+#[derive(Serialize)]
 struct Map {
     mx_id: NullableInteger<0>,
-    main_author: PlayerInfoNetBody,
+    main_author: MapMainAuthor,
     name: String,
     map_uid: String,
     bronze_time: NullableInteger,
@@ -426,7 +443,7 @@ async fn edition(
                 ),
         )
         .select_only()
-        .column_as(Expr::col((maps::Entity, Asterisk)), "map")
+        .expr(Expr::col((maps::Entity, Asterisk)))
         .column(event_edition_maps::Column::OriginalMxId)
         .into_model::<RawOriginalMap>()
         .all(&conn)
@@ -646,7 +663,7 @@ async fn edition(
 
             maps.push(Map {
                 mx_id: mx_id.map(|id| id as _).into(),
-                main_author,
+                main_author: main_author.into(),
                 name: map.name,
                 map_uid: map.game_id,
                 bronze_time: medal_times.map(|m| m.bronze_time).into(),

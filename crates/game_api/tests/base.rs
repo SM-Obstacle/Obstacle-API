@@ -17,11 +17,11 @@ use tracing_actix_web::TracingLogger;
 use game_api_lib::{configure, init_env};
 
 #[derive(Debug, serde::Deserialize)]
-pub struct ErrorResponse<'a> {
+pub struct ErrorResponse {
     #[allow(dead_code)]
-    pub request_id: &'a str,
+    pub request_id: String,
     pub r#type: i32,
-    pub message: &'a str,
+    pub message: String,
 }
 
 pub fn get_env() -> anyhow::Result<game_api_lib::InitEnvOut> {
@@ -46,20 +46,30 @@ pub async fn get_app(
 
 #[derive(Debug)]
 pub enum ApiError {
-    InvalidJson(Vec<u8>),
+    InvalidJson(Vec<u8>, serde_json::Error),
+    UnexpectedJson(serde_json::Value, serde_json::Error),
     Error { r#type: i32, message: String },
 }
 
 impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ApiError::InvalidJson(raw) => match str::from_utf8(&raw) {
-                Ok(s) => write!(f, "Invalid JSON returned by the API: {s}"),
+            ApiError::InvalidJson(raw, deser_err) => match str::from_utf8(&raw) {
+                Ok(s) => write!(
+                    f,
+                    "Invalid JSON returned by the API: {s}\nError when deserializing: {deser_err}"
+                ),
                 Err(_) => write!(
                     f,
                     "Invalid JSON returned by the API, with some non-UTF8 characters: {raw:?}"
                 ),
             },
+            ApiError::UnexpectedJson(json, deser_err) => {
+                write!(
+                    f,
+                    "Unexpected JSON returned by the API:\n{json:#}\nError when deserializing: {deser_err}"
+                )
+            }
             ApiError::Error { r#type, message } => {
                 f.write_str("Error returned from API: ")?;
                 f.debug_map()
@@ -195,12 +205,15 @@ where
 {
     match serde_json::from_slice(slice) {
         Ok(t) => Ok(t),
-        Err(_) => match serde_json::from_slice::<ErrorResponse>(slice) {
-            Ok(err) => Err(ApiError::Error {
-                r#type: err.r#type,
-                message: err.message.to_owned(),
-            }),
-            Err(_) => Err(ApiError::InvalidJson(slice.to_vec())),
+        Err(e) => match serde_json::from_slice::<serde_json::Value>(slice) {
+            Ok(json) => match serde_json::from_value::<ErrorResponse>(json.clone()) {
+                Ok(err) => Err(ApiError::Error {
+                    r#type: err.r#type,
+                    message: err.message.to_owned(),
+                }),
+                Err(_) => Err(ApiError::UnexpectedJson(json, e)),
+            },
+            Err(e) => Err(ApiError::InvalidJson(slice.to_vec(), e)),
         },
     }
 }
