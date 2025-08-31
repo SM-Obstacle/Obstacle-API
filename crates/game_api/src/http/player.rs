@@ -217,6 +217,7 @@ async fn finished_impl<C: ConnectionTrait + StreamTrait>(
         .try_collect::<Vec<_>>()
         .await
         .with_api_err()?;
+
     for (event_id, edition_id, original_map_id) in editions {
         super::event::insert_event_record(conn, res.record_id, event_id, edition_id).await?;
 

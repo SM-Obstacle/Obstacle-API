@@ -320,6 +320,7 @@ pub async fn get_editions_which_contain<C: ConnectionTrait + StreamTrait>(
                 .ne(0)
                 .and(event_edition_maps::Column::MapId.eq(map_id)),
         )
+        .select_only()
         .columns([
             event_edition_maps::Column::EventId,
             event_edition_maps::Column::EditionId,

@@ -9,67 +9,10 @@ use sea_orm::{
     ActiveValue::Set, ColumnTrait as _, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 
+use crate::player_finished_base::{Record, Request, Response};
+
 mod base;
-
-#[derive(serde::Serialize)]
-struct Request {
-    map_uid: String,
-    time: i32,
-    respawn_count: i32,
-    flags: Option<u32>,
-    cps: Vec<i32>,
-}
-
-#[derive(Debug, PartialEq, serde::Deserialize)]
-struct Response {
-    has_improved: bool,
-    old: i32,
-    new: i32,
-    current_rank: i32,
-    old_rank: i32,
-}
-
-#[derive(Debug)]
-struct Record {
-    map_id: u32,
-    player_id: u32,
-    time: i32,
-    respawn_count: i32,
-    flags: u32,
-}
-
-impl PartialEq<Record> for global_records::Model {
-    fn eq(&self, other: &Record) -> bool {
-        self.map_id == other.map_id
-            && self.record_player_id == other.player_id
-            && self.time == other.time
-            && self.respawn_count == other.respawn_count
-            && self.time == other.time
-            && self.flags == other.flags
-    }
-}
-
-impl PartialEq<Record> for records::Model {
-    fn eq(&self, other: &Record) -> bool {
-        self.map_id == other.map_id
-            && self.record_player_id == other.player_id
-            && self.time == other.time
-            && self.respawn_count == other.respawn_count
-            && self.time == other.time
-            && self.flags == other.flags
-    }
-}
-
-impl PartialEq<Record> for global_event_records::Model {
-    fn eq(&self, other: &Record) -> bool {
-        self.map_id == other.map_id
-            && self.record_player_id == other.player_id
-            && self.time == other.time
-            && self.respawn_count == other.respawn_count
-            && self.time == other.time
-            && self.flags == other.flags
-    }
-}
+mod player_finished_base;
 
 /// Setup: one player, one map
 /// Test: /player/finished of that player on the map, just once
@@ -617,7 +560,7 @@ async fn many_records() -> anyhow::Result<()> {
 /// Test: /player/finished of that player on the map, just once
 /// Expected: the event should contain the record
 #[tokio::test]
-async fn save_record_for_related_event() -> anyhow::Result<()> {
+async fn save_record_for_related_non_transparent_event() -> anyhow::Result<()> {
     let player = players::ActiveModel {
         id: Set(1),
         login: Set("player_login".to_owned()),

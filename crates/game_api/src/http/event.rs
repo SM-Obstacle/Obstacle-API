@@ -842,7 +842,7 @@ async fn edition_finished(
     db: Res<Database>,
     path: Path<(String, u32)>,
     body: pf::PlayerFinishedBody,
-    mode_version: ModeVersion,
+    mode_version: Option<ModeVersion>,
 ) -> RecordsResponse<impl Responder> {
     edition_finished_at(
         login,
@@ -851,7 +851,7 @@ async fn edition_finished(
         path,
         body.0,
         chrono::Utc::now().naive_utc(),
-        Some(mode_version.0),
+        mode_version.map(|m| m.0),
     )
     .await
 }
