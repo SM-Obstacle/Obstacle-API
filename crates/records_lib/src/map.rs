@@ -16,7 +16,7 @@ pub async fn get_map_from_id<C: ConnectionTrait>(
     let map = maps::Entity::find_by_id(map_id)
         .one(conn)
         .await?
-        .unwrap_or_else(|| panic!("Map {map_id} is supposed to be in database"));
+        .unwrap_or_else(|| panic!("Map with ID {map_id} not found in get_map_from_id - expected to exist in database"));
     Ok(map)
 }
 
