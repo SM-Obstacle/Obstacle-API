@@ -47,7 +47,10 @@ impl From<RawSqlEventListItem> for EventListItem {
 }
 
 /// Returns the list of events from the database.
-// FIXME: this function doesn't list events with no map on purpose, why?
+///
+/// Note: This function intentionally excludes events that do not have any associated maps.
+/// Only events with at least one map are listed, as events without maps are not relevant
+/// for listing in this context.
 pub async fn event_list<C: ConnectionTrait + StreamTrait>(
     conn: &C,
     ignore_expired: bool,
