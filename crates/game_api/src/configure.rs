@@ -130,7 +130,8 @@ pub async fn mask_internal_errors(
             tokio::task::spawn(req_send);
 
             let new_err = TracedError {
-                error: RecordsErrorKind::Lib(records_lib::error::RecordsError::Internal).into(),
+                error: RecordsErrorKind::Lib(records_lib::error::RecordsError::MaskedInternal)
+                    .into(),
                 request_id,
                 status_code: Some(StatusCode::INTERNAL_SERVER_ERROR),
                 r#type: None,

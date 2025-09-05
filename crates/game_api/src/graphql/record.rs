@@ -5,6 +5,8 @@ use sea_orm::{
     sea_query::Func,
 };
 
+use crate::internal;
+
 use super::{
     map::{Map, MapLoader},
     player::{Player, PlayerLoader},
@@ -112,12 +114,13 @@ impl RankedRecord {
             .into_tuple()
             .one(conn)
             .await?
-            .unwrap_or_else(|| {
-                panic!(
+            .ok_or_else(|| {
+                internal!(
                     "Record of player {} on map {} must exist in database",
-                    self.inner.record.record_player_id, self.inner.record.map_id
+                    self.inner.record.record_player_id,
+                    self.inner.record.map_id
                 )
-            });
+            })?;
 
         Ok(sum.unwrap_or(1))
     }

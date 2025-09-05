@@ -7,7 +7,7 @@ use sea_orm::{
 use sha256::digest;
 
 use crate::{
-    RecordsErrorKind, RecordsResult, RecordsResultExt as _, auth::privilege, http::player,
+    RecordsErrorKind, RecordsResult, RecordsResultExt as _, auth::privilege, http::player, internal,
 };
 
 pub async fn check_auth_for<C: ConnectionTrait>(
@@ -42,7 +42,7 @@ pub async fn check_auth_for<C: ConnectionTrait>(
         .one(conn)
         .await
         .with_api_err()?
-        .unwrap_or_else(|| panic!("Player {} should have a role", player.id));
+        .ok_or_else(|| internal!("Player {} should have a role", player.id))?;
 
     if role & required != required {
         return Err(RecordsErrorKind::Forbidden);

@@ -448,5 +448,7 @@ async fn get_rank_failed<C: ConnectionTrait>(
         "missing player rank ({player_id} on map {map_id} with time {time}); tested time: {tested_time:?}\n{msg}"
     );
 
-    Ok(RecordsError::Internal)
+    Ok(RecordsError::Internal(
+        "Error when retrieving the rank of a player".to_owned(),
+    ))
 }

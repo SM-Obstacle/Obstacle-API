@@ -4,6 +4,7 @@ use entity::{global_event_records, global_records, players};
 use sea_orm::{ColumnTrait as _, ConnectionTrait, EntityTrait as _, QueryFilter as _, QuerySelect};
 
 use crate::error::RecordsResult;
+use crate::internal;
 use crate::opt_event::OptEvent;
 
 /// Returns the time of a player on a map.
@@ -69,6 +70,6 @@ pub async fn get_player_from_id<C: ConnectionTrait>(
     let player = players::Entity::find_by_id(player_id)
         .one(conn)
         .await?
-        .unwrap_or_else(|| panic!("Player with ID {player_id} not found in get_player_from_id - this should not happen as the player is expected to exist"));
+        .ok_or_else(|| internal!("Player with ID {player_id} not found in get_player_from_id - this should not happen as the player is expected to exist"))?;
     Ok(player)
 }

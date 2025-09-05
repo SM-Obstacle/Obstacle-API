@@ -15,7 +15,7 @@ use sea_orm::{ConnectionTrait, EntityTrait};
 
 use crate::{
     error::{RecordsError, RecordsResult},
-    event, map, player,
+    event, internal, map, player,
 };
 
 /// Returns the event in the database bound to the provided event handle.
@@ -39,10 +39,12 @@ pub async fn have_event_edition_from_ids<C: ConnectionTrait>(
     let event = event_entity::Entity::find_by_id(event_id)
         .one(conn)
         .await?
-        .unwrap_or_else(|| panic!("have_event_edition_from_ids: Event with ID {event_id} must be in database"));
+        .ok_or_else(|| {
+            internal!("have_event_edition_from_ids: Event with ID {event_id} must be in database")
+        })?;
 
     let edition = event_edition::Entity::find_by_id((event_id, edition_id)).one(conn).await?
-        .unwrap_or_else(|| panic!("Event edition with event ID {event_id} and edition ID {edition_id} must be in database"));
+        .ok_or_else(|| internal!("Event edition with event ID {event_id} and edition ID {edition_id} must be in database"))?;
 
     Ok((event, edition))
 }

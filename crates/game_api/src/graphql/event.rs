@@ -23,7 +23,7 @@ use records_lib::{
     redis_key::{mappack_map_last_rank, mappack_player_ranks_key},
 };
 
-use crate::{RecordsResult, RecordsResultExt, http::event::HasExpireTime as _};
+use crate::{RecordsResult, RecordsResultExt, http::event::HasExpireTime as _, internal};
 
 use super::{
     SortState,
@@ -214,7 +214,7 @@ impl EventEdition<'_> {
             .one(conn)
             .await
             .with_api_err()?
-            .unwrap_or_else(|| panic!("Event {} should be in database", inner.event_id));
+            .ok_or_else(|| internal!("Event {} should be in database", inner.event_id))?;
         Ok(Self {
             event: Cow::Owned(event),
             inner,
@@ -564,12 +564,14 @@ impl EventEditionMap<'_> {
         .into_tuple::<Option<_>>()
         .one(conn)
         .await?
-        .unwrap_or_else(|| {
-            panic!(
+        .ok_or_else(|| {
+            internal!(
                 "event_edition_maps({}, {}, {}) must exist in database",
-                self.edition.inner.event_id, self.edition.inner.id, self.map.inner.id
+                self.edition.inner.event_id,
+                self.edition.inner.id,
+                self.map.inner.id
             )
-        });
+        })?;
 
         let map = match original_map_id {
             Some(id) => Some(

@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     RecordsErrorKind, RecordsResult, RecordsResultExt, Res,
     auth::{ApiAvailable, AuthHeader, MPAuthGuard, privilege},
+    internal,
     utils::{self, ExtractDbConn, json},
 };
 use dsc_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
@@ -144,7 +145,7 @@ pub async fn update_player<C: ConnectionTrait>(
     let player = players::Entity::find_by_id(player_id)
         .one(conn)
         .await?
-        .unwrap_or_else(|| panic!("Player {player_id} should exist in database"));
+        .ok_or_else(|| internal!("Player {player_id} should exist in database"))?;
 
     let player_update = players::ActiveModel {
         name: Set(body.name),

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     RecordsErrorKind, RecordsResult, RecordsResultExt,
     auth::{MPAuthGuard, privilege},
+    internal,
     utils::{ExtractDbConn, json},
 };
 
@@ -81,7 +82,7 @@ pub async fn set_role(
         .one(&conn)
         .await
         .with_api_err()?
-        .unwrap_or_else(|| panic!("Role with ID {} should exist in database", body.role));
+        .ok_or_else(|| internal!("Role with ID {} should exist in database", body.role))?;
 
     json(SetRoleResponse {
         player_login: body.player_login,

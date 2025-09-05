@@ -8,7 +8,7 @@ use sea_orm::{
     QueryOrder, QuerySelect, StreamTrait,
 };
 
-use crate::RecordsErrorKind;
+use crate::{RecordsErrorKind, internal};
 
 use super::{SortState, get_rank, record::RankedRecord};
 
@@ -69,7 +69,7 @@ impl Player {
         let r = role::Entity::find_by_id(self.inner.role)
             .one(conn)
             .await?
-            .unwrap_or_else(|| panic!("Role with ID {} must exist in database", self.inner.role))
+            .ok_or_else(|| internal!("Role with ID {} must exist in database", self.inner.role))?
             .try_into()?;
 
         Ok(r)

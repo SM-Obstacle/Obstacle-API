@@ -15,78 +15,60 @@ pub struct AccessTokenErr {
 }
 
 #[derive(thiserror::Error, Debug)]
-#[repr(i32)] // i32 to be used with clients that don't support unsigned integers
 #[rustfmt::skip]
 pub enum RecordsErrorKind {
-    // Caution: when creating a new error, you must ensure its code isn't
-    // in conflict with another one in `records_lib::RecordsError`.
-
     // --------
     // --- Internal server errors
     // --------
 
     #[error(transparent)]
-    IOError(#[from] std::io::Error) = 101,
-
-    // ...Errors from records_lib
-
+    IOError(#[from] std::io::Error),
     #[error("unknown error: {0}")]
-    Unknown(String) = 105,
+    Unknown(String),
     #[error("server is in maintenance since {0}")]
-    Maintenance(chrono::NaiveDateTime) = 106,
+    Maintenance(chrono::NaiveDateTime),
     #[error("unknown api status: `{0}` named `{1}`")]
-    UnknownStatus(u8, String) = 107,
-
-    // ...Errors from records_lib
+    UnknownStatus(u8, String),
 
     // --------
     // --- Authentication errors
     // --------
 
     #[error("unauthorized")]
-    Unauthorized = 201,
+    Unauthorized,
     #[error("forbidden")]
-    Forbidden = 202,
+    Forbidden,
     #[error("missing the /player/get_token request")]
-    MissingGetTokenReq = 203,
+    MissingGetTokenReq,
     #[error("the state has already been received by the server")]
-    StateAlreadyReceived(chrono::DateTime<chrono::Utc>) = 204,
+    StateAlreadyReceived(chrono::DateTime<chrono::Utc>),
     #[error("banned player")]
-    BannedPlayer(banishments::Model) = 205,
+    BannedPlayer(banishments::Model),
     #[error("error on sending request to MP services: {0:?}")]
-    AccessTokenErr(AccessTokenErr) = 206,
+    AccessTokenErr(AccessTokenErr),
     #[error("invalid ManiaPlanet code on /player/give_token request")]
-    InvalidMPCode = 207,
+    InvalidMPCode,
     #[error("timeout exceeded")]
-    Timeout(std::time::Duration) = 208,
+    Timeout(std::time::Duration),
 
     // --------
     // --- Logical errors
     // --------
 
     #[error("not found")]
-    EndpointNotFound = 301,
-
-    // ...Error from records_lib
-
+    EndpointNotFound,
     #[error("player not banned: `{0}`")]
-    PlayerNotBanned(String) = 303,
-
-    // ...Error from records_lib
-
+    PlayerNotBanned(String),
     #[error("unknown role with id `{0}` and name `{1}`")]
-    UnknownRole(u8, String) = 305,
+    UnknownRole(u8, String),
     #[error("unknown rating kind with id `{0}` and name `{1}`")]
-    UnknownRatingKind(u8, String) = 307,
+    UnknownRatingKind(u8, String),
     #[error("no rating found to update for player with login: `{0}` and map with uid: `{1}`")]
-    NoRatingFound(String, String) = 308,
+    NoRatingFound(String, String),
     #[error("invalid rates (too many, or repeated rate)")]
-    InvalidRates = 309,
-
-    // ...Errors from records_lib
-
+    InvalidRates,
     #[error("invalid times")]
-    InvalidTimes = 313,
+    InvalidTimes,
     #[error("map pack id should be an integer, got `{0}`")]
     InvalidMappackId(String),
     #[error("event `{0}` {1} has expired")]
@@ -117,6 +99,13 @@ impl actix_web::ResponseError for RecordsErrorKind {
     }
 }
 
+#[macro_export]
+macro_rules! internal {
+    ($($t:tt)*) => {{
+        $crate::RecordsErrorKind::Lib($crate::__private::internal!($($t)*))
+    }};
+}
+
 impl RecordsErrorKind {
     pub fn get_err_type_and_status_code(&self) -> (i32, StatusCode) {
         use RecordsErrorKind as E;
@@ -132,8 +121,9 @@ impl RecordsErrorKind {
             E::Maintenance(_) => (106, S::INTERNAL_SERVER_ERROR),
             E::UnknownStatus(_, _) => (107, S::INTERNAL_SERVER_ERROR),
             E::Lib(LE::PoolError(_)) => (108, S::INTERNAL_SERVER_ERROR),
-            E::Lib(LE::Internal) => (109, S::INTERNAL_SERVER_ERROR),
+            E::Lib(LE::Internal(_)) => (109, S::INTERNAL_SERVER_ERROR),
             E::Lib(LE::DbError(_)) => (110, S::INTERNAL_SERVER_ERROR),
+            E::Lib(LE::MaskedInternal) => (111, S::INTERNAL_SERVER_ERROR),
 
             E::Unauthorized => (201, S::UNAUTHORIZED),
             E::Forbidden => (202, S::FORBIDDEN),

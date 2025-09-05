@@ -1,6 +1,8 @@
 use entity::{player_rating, rating_kind, types};
 use sea_orm::{DbConn, EntityTrait, FromQueryResult};
 
+use crate::internal;
+
 #[derive(Debug, Clone, FromQueryResult)]
 pub struct PlayerRating {
     #[sea_orm(nested)]
@@ -25,12 +27,12 @@ impl PlayerRating {
             .into_model()
             .one(conn)
             .await?
-            .unwrap_or_else(|| {
-                panic!(
+            .ok_or_else(|| {
+                internal!(
                     "Rating kind with ID {} must exist in database",
                     self.inner.kind
                 )
-            });
+            })?;
 
         Ok(kind)
     }

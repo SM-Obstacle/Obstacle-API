@@ -1,5 +1,4 @@
 use std::{
-    convert::Infallible,
     future::{Ready, ready},
     ops::{Deref, DerefMut},
 };
@@ -15,7 +14,7 @@ use sea_orm::{
 };
 use serde::Serialize;
 
-use crate::{RecordsResult, RecordsResultExt};
+use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt, internal};
 
 /// Converts the provided body to a `200 OK` JSON responses.
 pub fn json<T: Serialize, E>(obj: T) -> Result<HttpResponse, E> {
@@ -51,9 +50,9 @@ pub async fn get_api_status<C: ConnectionTrait>(conn: &C) -> RecordsResult<ApiSt
         .one(conn)
         .await
         .with_api_err()?
-        .unwrap_or_else(|| {
-            panic!("api_status and api_status_history must have at least one row in database")
-        });
+        .ok_or_else(|| {
+            internal!("api_status and api_status_history must have at least one row in database")
+        })?;
 
     Ok(result)
 }
@@ -100,17 +99,16 @@ impl<T> DerefMut for Res<T> {
 }
 
 impl<T: Clone + 'static> FromRequest for Res<T> {
-    // TODO: better error handling
-    type Error = Infallible;
+    type Error = RecordsErrorKind;
 
-    type Future = Ready<Result<Self, Infallible>>;
+    type Future = Ready<RecordsResult<Self>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let client = req
+        let obj = req
             .app_data::<T>()
-            .unwrap_or_else(|| panic!("{} should be present", std::any::type_name::<T>()))
-            .clone();
-        ready(Ok(Self(client)))
+            .ok_or_else(|| internal!("{} should be present", std::any::type_name::<T>()))
+            .cloned();
+        ready(obj.map(Self))
     }
 }
 
@@ -147,9 +145,9 @@ impl DerefMut for ExtractDbConn {
 }
 
 impl FromRequest for ExtractDbConn {
-    type Error = Infallible;
+    type Error = RecordsErrorKind;
 
-    type Future = Ready<Result<Self, Infallible>>;
+    type Future = Ready<RecordsResult<Self>>;
 
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
         ready(

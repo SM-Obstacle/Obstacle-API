@@ -22,3 +22,8 @@ pub use graphql::graphql_route;
 pub use http::api_route;
 pub use modeversion::*;
 pub use utils::Res;
+
+#[doc(hidden)]
+pub mod __private {
+    pub use records_lib::internal;
+}

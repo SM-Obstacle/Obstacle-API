@@ -25,7 +25,7 @@ use self::map::map_scope;
 use self::player::player_scope;
 use self::staggered::staggered_scope;
 use crate::utils::{self, ApiStatus, ExtractDbConn, get_api_status, json};
-use crate::{ModeVersion, RecordsResult, RecordsResultExt, Res};
+use crate::{ModeVersion, RecordsResult, RecordsResultExt, Res, internal};
 use actix_web::Responder;
 use dsc_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 #[cfg(feature = "request_filter")]
@@ -180,7 +180,7 @@ async fn latestnews_image(ExtractDbConn(conn): ExtractDbConn) -> RecordsResult<i
         .one(&conn)
         .await
         .with_api_err()?
-        .unwrap_or_else(|| panic!("latestnews_image must have at least one row in database"));
+        .ok_or_else(|| internal!("latestnews_image must have at least one row in database"))?;
     json(res)
 }
 

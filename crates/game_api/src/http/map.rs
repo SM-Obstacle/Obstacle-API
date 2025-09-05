@@ -1,6 +1,7 @@
 use crate::{
     RecordsErrorKind, RecordsResult, RecordsResultExt, Res,
     auth::{self, ApiAvailable, AuthHeader, MPAuthGuard, privilege},
+    internal,
     utils::{ExtractDbConn, any_repeated, json},
 };
 use actix_web::{
@@ -153,7 +154,7 @@ pub async fn player_rating(
         .one(&conn)
         .await
         .with_api_err()?
-        .unwrap_or_else(|| panic!("Map {map_id} should exist in database"));
+        .ok_or_else(|| internal!("Map {map_id} should exist in database"))?;
 
     json(PlayerRatingResponse {
         player_login: login,
@@ -200,7 +201,7 @@ pub async fn ratings(
             .one(&db.sql_conn)
             .await
             .with_api_err()?
-            .unwrap_or_else(|| panic!("Player {} should be in database", map.player_id));
+            .ok_or_else(|| internal!("Player {} should be in database", map.player_id))?;
         (privilege::ADMIN, login)
     };
 
@@ -230,7 +231,7 @@ pub async fn ratings(
                 .one(&db.sql_conn)
                 .await
                 .with_api_err()?
-                .unwrap_or_else(|| panic!("Player {} should exist in database", rating.player_id));
+                .ok_or_else(|| internal!("Player {} should exist in database", rating.player_id))?;
 
             let ratings = player_rating::Entity::find()
                 .inner_join(rating_kind::Entity)
@@ -372,7 +373,7 @@ pub async fn rate(
         .one(&conn)
         .await
         .with_api_err()?
-        .unwrap_or_else(|| panic!("Player {author_id} should be in database"));
+        .ok_or_else(|| internal!("Player {author_id} should be in database"))?;
 
     let rate_count = rating_kind::Entity::find()
         .count(&conn)
@@ -447,9 +448,11 @@ pub async fn rate(
                     .one(&conn)
                     .await
                     .with_api_err()?
-                    .unwrap_or_else(|| {
-                        panic!("Rating of player {player_id} on {map_id} should exist in database")
-                    })
+                    .ok_or_else(|| {
+                        internal!(
+                            "Rating of player {player_id} on {map_id} should exist in database"
+                        )
+                    })?
             } else {
                 let new_rating = rating::ActiveModel {
                     player_id: Set(player_id),
@@ -517,7 +520,7 @@ pub async fn rate(
                 .one(&conn)
                 .await
                 .with_api_err()?
-                .unwrap_or_else(|| panic!("Player rating of {player_id} on {map_id} and rating kind {} should exist in database", rate.kind));
+                .ok_or_else(|| internal!("Player rating of {player_id} on {map_id} and rating kind {} should exist in database", rate.kind))?;
 
             ratings.push(rating);
         }
