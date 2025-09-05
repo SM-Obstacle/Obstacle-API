@@ -22,7 +22,7 @@ jobs:
       - name: Setup MariaDB
         uses: ankane/setup-mariadb@v1
         with:
-          database: obs_records
+          database: master_db
           mariadb-version: ${{ matrix.mariadb }}
 
       - name: Setup Redis
@@ -39,8 +39,6 @@ jobs:
           sudo mariadb -e "CREATE USER 'api'@'localhost' IDENTIFIED BY '${{ secrets.MARIADB_PW }}'";
           sudo mariadb -e "GRANT ALL PRIVILEGES ON *.* TO 'api'@'localhost'";
           sudo mariadb -e "FLUSH PRIVILEGES";
-          sudo mariadb -D obs_records < db/last_dump.sql;
-          sudo mariadb -D obs_records < db/init_db.sql;
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.89.0
@@ -50,7 +48,7 @@ jobs:
 
       - name: Run tests
         env:
-          DATABASE_URL: mysql://api:${{ secrets.MARIADB_PW }}@localhost:3306/obs_records
+          DATABASE_URL: mysql://api:${{ secrets.MARIADB_PW }}@localhost:3306/master_db
           REDIS_URL: redis://localhost:6379
         run: RUST_BACKTRACE=1 cargo test -F mysql -F test
 

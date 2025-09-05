@@ -1,15 +1,22 @@
 //! Module used to serve the routes mainly used by the Obstacle gamemode. Each submodule is
 //! specific for a route segment.
 
+#[cfg(auth)]
+pub mod admin;
+pub mod event;
+pub mod map;
+pub mod player;
+
 use std::fmt;
 
 use actix_web::body::BoxBody;
 use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
 use actix_web::web::{JsonConfig, Query};
 use actix_web::{HttpResponse, Scope, web};
-use records_lib::{Database, acquire};
+use entity::latestnews_image;
+use records_lib::Database;
+use sea_orm::{EntityTrait, FromQueryResult, QuerySelect};
 use serde::Serialize;
-use tracing_actix_web::RequestId;
 
 #[cfg(auth)]
 use self::admin::admin_scope;
@@ -17,18 +24,12 @@ use self::event::event_scope;
 use self::map::map_scope;
 use self::player::player_scope;
 use self::staggered::staggered_scope;
-use crate::utils::{self, ApiStatus, get_api_status, json};
-use crate::{FitRequestId as _, ModeVersion, RecordsResponse, RecordsResultExt, Res};
+use crate::utils::{self, ApiStatus, ExtractDbConn, get_api_status, json};
+use crate::{ModeVersion, RecordsResult, RecordsResultExt, Res, internal};
 use actix_web::Responder;
 use dsc_webhook::{WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 #[cfg(feature = "request_filter")]
 use request_filter::{FlagFalseRequest, InGameFilter};
-
-#[cfg(auth)]
-pub mod admin;
-pub mod event;
-pub mod map;
-pub mod player;
 
 mod overview;
 mod pb;
@@ -97,10 +98,9 @@ struct ReportErrorBody {
 
 async fn report_error(
     Res(client): Res<reqwest::Client>,
-    req_id: RequestId,
     web::Json(body): web::Json<ReportErrorBody>,
     mode_vers: ModeVersion,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let mut fields = vec![
         WebhookBodyEmbedField {
             name: "HTTP method".to_owned(),
@@ -157,24 +157,30 @@ async fn report_error(
         })
         .send()
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     Ok(HttpResponse::Ok().finish())
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Serialize, FromQueryResult)]
 struct LatestnewsImageResponse {
     img_url: String,
     link: String,
 }
 
-async fn latestnews_image(req_id: RequestId, db: Res<Database>) -> RecordsResponse<impl Responder> {
-    let res: LatestnewsImageResponse = sqlx::query_as("select * from latestnews_image")
-        .fetch_one(&db.mysql_pool)
+async fn latestnews_image(ExtractDbConn(conn): ExtractDbConn) -> RecordsResult<impl Responder> {
+    let res = latestnews_image::Entity::find()
+        .limit(1)
+        .select_only()
+        .columns([
+            latestnews_image::Column::ImgUrl,
+            latestnews_image::Column::Link,
+        ])
+        .into_model::<LatestnewsImageResponse>()
+        .one(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?
+        .ok_or_else(|| internal!("latestnews_image must have at least one row in database"))?;
     json(res)
 }
 
@@ -186,9 +192,9 @@ struct InfoResponse {
     status: ApiStatus,
 }
 
-async fn info(req_id: RequestId, db: Res<Database>) -> RecordsResponse<impl Responder> {
+async fn info(ExtractDbConn(conn): ExtractDbConn) -> RecordsResult<impl Responder> {
     let api_version = env!("CARGO_PKG_VERSION");
-    let status = get_api_status(&db).await.fit(req_id)?;
+    let status = get_api_status(&conn).await?;
 
     json(InfoResponse {
         service_name: "Obstacle Records API",
@@ -199,19 +205,23 @@ async fn info(req_id: RequestId, db: Res<Database>) -> RecordsResponse<impl Resp
 }
 
 async fn overview(
-    req_id: RequestId,
     db: Res<Database>,
     Query(query): overview::OverviewReq,
-) -> RecordsResponse<impl Responder> {
-    let conn = acquire!(db.with_api_err().fit(req_id)?);
-
-    let map = records_lib::must::have_map(conn.mysql_conn, &query.map_uid)
+) -> RecordsResult<impl Responder> {
+    let map = records_lib::must::have_map(&db.sql_conn, &query.map_uid)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
-    let res = overview::overview(conn, &query.login, &map, Default::default())
-        .await
-        .fit(req_id)?;
+    let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
+
+    let res = overview::overview(
+        &db.sql_conn,
+        &mut redis_conn,
+        &query.login,
+        &map,
+        Default::default(),
+    )
+    .await?;
+
     utils::json(res)
 }

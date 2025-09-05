@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use crate::models;
+use entity::{event, event_edition};
 
 /// Optional event instances.
 ///
@@ -18,15 +18,15 @@ use crate::models;
 #[derive(Clone, Copy, Default)]
 pub struct OptEvent<'a> {
     /// The optional held event instances.
-    pub event: Option<(&'a models::Event, &'a models::EventEdition)>,
+    pub event: Option<(&'a event::Model, &'a event_edition::Model)>,
 }
 
 impl<'a> OptEvent<'a> {
     /// Creates a new optional event instances with the provided event instances,
     /// in a more convenient way.
-    pub fn new(event: &'a models::Event, edition: &'a models::EventEdition) -> Self {
+    pub fn new(event: &'a event::Model, edition: &'a event_edition::Model) -> Self {
         Self {
-            event: if edition.is_transparent {
+            event: if edition.is_transparent != 0 {
                 None
             } else {
                 Some((event, edition))

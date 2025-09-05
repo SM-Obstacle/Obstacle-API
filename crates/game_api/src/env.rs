@@ -2,11 +2,11 @@ use mkenv::{Env as _, EnvSplitIncluded as _};
 use once_cell::sync::OnceCell;
 use records_lib::{DbEnv, LibEnv};
 
-#[cfg(test)]
+#[cfg(feature = "test")]
 const DEFAULT_SESSION_KEY: &str = "";
 
 mkenv::make_env! {pub ApiEnvUsedOnce:
-    #[cfg(not(test))]
+    #[cfg(not(feature = "test"))]
     sess_key: {
         id: SessKey(String),
         kind: file,
@@ -14,7 +14,7 @@ mkenv::make_env! {pub ApiEnvUsedOnce:
         desc: "The path to the file containing the session key used by the API",
     },
 
-    #[cfg(test)]
+    #[cfg(feature = "test")]
     sess_key: {
         id: SessKey(String),
         kind: normal,
@@ -34,9 +34,9 @@ mkenv::make_env! {pub ApiEnvUsedOnce:
 
 const DEFAULT_PORT: u16 = 3000;
 const DEFAULT_TOKEN_TTL: u32 = 15_552_000;
-#[cfg(test)]
+#[cfg(feature = "test")]
 const DEFAULT_MP_CLIENT_ID: &str = "";
-#[cfg(test)]
+#[cfg(feature = "test")]
 const DEFAULT_MP_CLIENT_SECRET: &str = "";
 const DEFAULT_WH_REPORT_URL: &str = "";
 const DEFAULT_WH_AC_URL: &str = "";
@@ -72,14 +72,14 @@ mkenv::make_env! {pub ApiEnv includes [
         default: DEFAULT_TOKEN_TTL,
     },
 
-    #[cfg(not(test))]
+    #[cfg(not(feature = "test"))]
     mp_client_id: {
         id: MpClientId(String),
         kind: file,
         var: "RECORDS_MP_APP_CLIENT_ID_FILE",
         desc: "The path to the file containing the Obstacle ManiaPlanet client ID",
     },
-    #[cfg(test)]
+    #[cfg(feature = "test")]
     mp_client_id: {
         id: MpClientId(String),
         kind: normal,
@@ -88,14 +88,14 @@ mkenv::make_env! {pub ApiEnv includes [
         default: DEFAULT_MP_CLIENT_ID,
     },
 
-    #[cfg(not(test))]
+    #[cfg(not(feature = "test"))]
     mp_client_secret: {
         id: MpClientSecret(String),
         kind: file,
         var: "RECORDS_MP_APP_CLIENT_SECRET_FILE",
         desc: "The path to the file containing the Obstacle ManiaPlanet client secret",
     },
-    #[cfg(test)]
+    #[cfg(feature = "test")]
     mp_client_secret: {
         id: MpClientSecret(String),
         kind: normal,

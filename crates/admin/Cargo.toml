@@ -19,4 +19,11 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 mkenv = { workspace = true }
-prettytable = { version = "0.10.0", default-features = false }
+prettytable = { workspace = true }
+entity = { path = "../entity" }
+sea-orm = { workspace = true }
+
+[features]
+default = []
+mysql = ["records-lib/mysql"]
+postgres = ["records-lib/postgres"]

@@ -53,16 +53,8 @@ async fn main() -> anyhow::Result<()> {
     let event_scores_interval = env.lib_env.event_scores_interval;
     records_lib::init_env(env.lib_env);
 
-    let mysql_pool = records_lib::get_mysql_pool(env.db_env.db_url.db_url)
-        .await
-        .context("When creating MySQL pool")?;
-    let redis_pool = records_lib::get_redis_pool(env.db_env.redis_url.redis_url)
-        .context("When creating Redis pool")?;
-
-    let db = Database {
-        mysql_pool,
-        redis_pool,
-    };
+    let db =
+        Database::from_db_url(env.db_env.db_url.db_url, env.db_env.redis_url.redis_url).await?;
 
     let res = tokio::spawn(handle(
         db.clone(),

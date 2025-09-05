@@ -4,7 +4,6 @@ version = "1.2.0"
 edition = "2024"
 
 [dependencies]
-anyhow = { workspace = true }
 async-graphql = { workspace = true, features = ["chrono"] }
 chrono = { workspace = true }
 deadpool-redis = { workspace = true }
@@ -20,6 +19,17 @@ tokio = { workspace = true }
 itertools = { workspace = true }
 nom = { workspace = true }
 rand = { workspace = true }
+sea-orm = { workspace = true }
+entity = { path = "../entity" }
+prettytable = { workspace = true }
 
 [features]
 default = []
+mysql = ["sea-orm/sqlx-mysql"]
+postgres = ["sea-orm/sqlx-postgres"]
+sqlite = ["sea-orm/sqlx-sqlite"]
+sea-orm-proxy = ["sea-orm/proxy"]
+test = ["sea-orm/mock"]
+
+[build-dependencies]
+rustc_version = "0.4.1"

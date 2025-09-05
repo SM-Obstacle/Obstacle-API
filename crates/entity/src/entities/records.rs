@@ -1,0 +1,103 @@
+use sea_orm::entity::prelude::*;
+
+use crate::types::ModeVersion;
+
+/// A record in the database.
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[sea_orm(table_name = "records")]
+pub struct Model {
+    /// The record ID.
+    #[sea_orm(primary_key)]
+    pub record_id: u32,
+    /// The ID of the player who made the record.
+    pub record_player_id: u32,
+    /// The ID of the map.
+    pub map_id: u32,
+    /// The time in milliseconds of the run.
+    pub time: i32,
+    /// The amount of respawns.
+    pub respawn_count: i32,
+    /// The UTC date of the record.
+    pub record_date: DateTime,
+    /// The various flags of the run (Alt bug, fast respawn...)
+    pub flags: u32,
+    /// The amount of tries.
+    ///
+    /// This is optional as some old records don't have this info, and newest records neither, as it
+    /// can be calculated since the Summer update.
+    ///
+    /// In the future, this may be set to the amount of full respawn of the player in the session.
+    pub try_count: Option<u32>,
+    /// Represents the ID of the record that this record was cloned from.
+    ///
+    /// When saving a record for an event, if the map has an original map, the record is cloned
+    /// for this map, with this set to its ID. This helps to flag the cloned records
+    /// in this context.
+    pub event_record_id: Option<u32>,
+    /// The version of the Obstacle mode in which the player made this record.
+    pub modeversion: Option<ModeVersion>,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(has_many = "super::checkpoint_times::Entity")]
+    CheckpointTimes,
+    #[sea_orm(has_one = "super::event_edition_records::Entity")]
+    EventEditionRecords,
+    #[sea_orm(
+        belongs_to = "super::maps::Entity",
+        from = "Column::MapId",
+        to = "super::maps::Column::Id",
+        on_update = "Restrict",
+        on_delete = "Cascade"
+    )]
+    Maps,
+    #[sea_orm(
+        belongs_to = "super::players::Entity",
+        from = "Column::RecordPlayerId",
+        to = "super::players::Column::Id",
+        on_update = "Restrict",
+        on_delete = "Restrict"
+    )]
+    Players,
+    #[sea_orm(
+        belongs_to = "Entity",
+        from = "Column::EventRecordId",
+        to = "Column::RecordId",
+        on_update = "Restrict",
+        on_delete = "SetNull"
+    )]
+    SelfRef,
+}
+
+impl Related<super::checkpoint_times::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::CheckpointTimes.def()
+    }
+}
+
+impl Related<super::event_edition_records::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::EventEditionRecords.def()
+    }
+}
+
+impl Related<super::maps::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Maps.def()
+    }
+}
+
+impl Related<super::players::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Players.def()
+    }
+}
+
+impl ActiveModelBehavior for ActiveModel {}
+
+#[derive(Debug, Clone)]
+pub struct RankedRecord {
+    pub rank: i32,
+    pub record: Model,
+}

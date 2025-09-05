@@ -1,10 +1,9 @@
 use actix_web::{Responder, Scope, web};
 use chrono::TimeZone;
 use records_lib::Database;
-use tracing_actix_web::RequestId;
 
 use crate::{
-    RecordsResponse, Res,
+    RecordsResult, Res,
     auth::{ApiAvailable, MPAuthGuard},
 };
 
@@ -40,41 +39,22 @@ type StaggeredBody<B> = web::Json<Staggered<B>>;
 async fn staggered_finished(
     _: ApiAvailable,
     mode_version: Option<crate::ModeVersion>,
-    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     body: StaggeredBody<pf::HasFinishedBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let time = body.get_time();
-    player::finished_at_with_pool(
-        db.0,
-        req_id,
-        mode_version.map(|x| x.0),
-        login,
-        body.0.body,
-        time,
-    )
-    .await
+    player::finished_at_with_pool(db.0, mode_version.map(|x| x.0), login, body.0.body, time).await
 }
 
 #[inline(always)]
 async fn staggered_edition_finished(
-    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     path: web::Path<(String, u32)>,
     body: StaggeredBody<pf::HasFinishedBody>,
     mode_version: crate::ModeVersion,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let time = body.get_time();
-    event::edition_finished_at(
-        login,
-        req_id,
-        db,
-        path,
-        body.0.body,
-        time,
-        Some(mode_version.0),
-    )
-    .await
+    event::edition_finished_at(login, db, path, body.0.body, time, Some(mode_version.0)).await
 }

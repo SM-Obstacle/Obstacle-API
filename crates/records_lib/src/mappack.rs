@@ -3,11 +3,16 @@
 use std::{fmt, time::SystemTime};
 
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
+use entity::{event, event_edition, global_event_records, global_records, players, records};
+use sea_orm::{
+    ColumnTrait as _, ConnectionTrait, EntityTrait as _, FromQueryResult, QueryFilter as _,
+    QueryOrder as _, QuerySelect as _, StreamTrait, TransactionTrait,
+};
 
 use crate::{
-    DatabaseConnection, RedisConnection, TxnDatabaseConnection,
+    RedisConnection,
     error::RecordsResult,
-    models, must,
+    must,
     opt_event::OptEvent,
     ranks::get_rank,
     redis_key::{
@@ -15,7 +20,7 @@ use crate::{
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
-    transaction::{self, ReadOnly},
+    transaction,
 };
 
 #[derive(Default, Clone, Debug)]
@@ -47,10 +52,10 @@ struct MappackScores {
     scores: Vec<PlayerScore>,
 }
 
-#[derive(sqlx::FromRow, Debug)]
+#[derive(FromQueryResult, Debug)]
 struct RecordRow {
-    #[sqlx(flatten)]
-    record: models::Record,
+    #[sea_orm(nested)]
+    record: records::Model,
     player_id2: u32,
 }
 
@@ -69,7 +74,7 @@ struct RankedRecordRow {
 #[derive(Clone, Copy)]
 pub enum AnyMappackId<'a> {
     /// The mappack is related to an event.
-    Event(&'a models::Event, &'a models::EventEdition),
+    Event(&'a event::Model, &'a event_edition::Model),
     /// The mappack is a regular MX mappack.
     Id(&'a str),
 }
@@ -140,32 +145,18 @@ impl AnyMappackId<'_> {
 /// * `redis_conn`: a connection to the Redis database, to store the scores.
 #[cfg_attr(
     feature = "tracing",
-    tracing::instrument(skip(db), fields(mappack = %mappack.mappack_id()), err)
+    tracing::instrument(skip(conn, redis_conn), fields(mappack = %mappack.mappack_id()), err)
 )]
-pub async fn update_mappack(
-    db: &mut DatabaseConnection<'_>,
+pub async fn update_mappack<C: TransactionTrait + Sync>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     mappack: AnyMappackId<'_>,
     event: OptEvent<'_>,
 ) -> RecordsResult<usize> {
     // Calculate the scores
-    let scores = crate::assert_future_send(transaction::within(
-        db.mysql_conn,
-        ReadOnly,
-        async |conn, guard| {
-            calc_scores(
-                &mut TxnDatabaseConnection::new(
-                    guard,
-                    DatabaseConnection {
-                        mysql_conn: conn,
-                        redis_conn: db.redis_conn,
-                    },
-                ),
-                mappack,
-                event,
-            )
-            .await
-        },
-    ))
+    let scores = crate::assert_future_send(transaction::within(conn, async |txn| {
+        calc_scores(txn, redis_conn, mappack, event).await
+    }))
     .await?;
 
     // Early return if the mappack has expired
@@ -176,14 +167,13 @@ pub async fn update_mappack(
     let total_scores = scores.scores.len();
 
     // Then save them to the Redis database for cache-handling
-    save(mappack, scores, db.redis_conn).await?;
+    save(mappack, scores, redis_conn).await?;
 
     // And we save it to the registered mappacks set.
     if mappack.has_ttl() {
         // The mappack has a TTL, so its member will be removed from the set when
         // attempting to retrieve its maps.
-        let _: () = db
-            .redis_conn
+        let _: () = redis_conn
             .sadd(mappacks_key(), mappack.mappack_id())
             .await?;
     }
@@ -342,15 +332,16 @@ async fn save(
 /// Returns an `Option` because the mappack may have expired.
 #[cfg_attr(
     feature = "tracing",
-    tracing::instrument(skip(conn), fields(mappack = %mappack.mappack_id()))
+    tracing::instrument(skip(conn, redis_conn), fields(mappack = %mappack.mappack_id()))
 )]
-async fn calc_scores<M>(
-    conn: &mut TxnDatabaseConnection<'_, M>,
+async fn calc_scores<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     mappack: AnyMappackId<'_>,
     event: OptEvent<'_>,
 ) -> RecordsResult<Option<MappackScores>> {
     let mappack_key = mappack_key(mappack);
-    let mappack_uids: Vec<String> = conn.conn.redis_conn.smembers(&mappack_key).await?;
+    let mappack_uids: Vec<String> = redis_conn.smembers(&mappack_key).await?;
 
     let mut maps = Vec::with_capacity(mappack_uids.len().max(5));
 
@@ -359,9 +350,7 @@ async fn calc_scores<M>(
         // or that its TTL has expired. So we remove its entry in the registered mappacks set.
         // The other keys related to this mappack were set with a TTL so they should
         // be deleted too.
-        let _: i32 = conn
-            .conn
-            .redis_conn
+        let _: i32 = redis_conn
             .srem(mappacks_key(), mappack.mappack_id())
             .await?;
         return Ok(None);
@@ -369,7 +358,7 @@ async fn calc_scores<M>(
         let mut out = Vec::with_capacity(mappack_uids.len());
 
         for map_uid in &mappack_uids {
-            let map = must::have_map(conn.conn.mysql_conn, map_uid).await?;
+            let map = must::have_map(conn, map_uid).await?;
             maps.push(MappackMap {
                 map_id: map.game_id.clone(),
                 last_rank: 0,
@@ -383,23 +372,32 @@ async fn calc_scores<M>(
     let mut scores = Vec::<PlayerScore>::with_capacity(mappack.len());
 
     for (i, map) in mappack.iter().enumerate() {
-        let builder = event.sql_frag_builder();
-
-        let mut query = sqlx::QueryBuilder::new(
-            "SELECT r.*, p.id as player_id2, p.login as player_login, p.name as player_name
-            FROM ",
-        );
-        builder
-            .push_event_view_name(&mut query, "r")
-            .push(" INNER JOIN players p ON p.id = r.record_player_id WHERE map_id = ")
-            .push_bind(map.id)
-            .push(" ");
-        let query = builder
-            .push_event_filter(&mut query, "r")
-            .push(" order by time asc")
-            .build_query_as::<RecordRow>();
-
-        let res = query.fetch_all(&mut **conn.conn.mysql_conn).await?;
+        let res: Vec<RecordRow> = match event.event {
+            Some((ev, ed)) => global_event_records::Entity::find()
+                .inner_join(players::Entity)
+                .filter(
+                    global_event_records::Column::MapId
+                        .eq(map.id)
+                        .and(global_event_records::Column::EventId.eq(ev.id))
+                        .and(global_event_records::Column::EditionId.eq(ed.id)),
+                )
+                .order_by_asc(global_event_records::Column::Time)
+                .column_as(players::Column::Id, "player_id2")
+                .column_as(players::Column::Login, "player_login")
+                .column_as(players::Column::Name, "player_name")
+                .into_model()
+                .all(conn),
+            None => global_records::Entity::find()
+                .inner_join(players::Entity)
+                .filter(global_records::Column::MapId.eq(map.id))
+                .order_by_asc(global_records::Column::Time)
+                .column_as(players::Column::Id, "player_id2")
+                .column_as(players::Column::Login, "player_login")
+                .column_as(players::Column::Name, "player_name")
+                .into_model()
+                .all(conn),
+        }
+        .await?;
 
         let mut records = Vec::with_capacity(res.len());
 
@@ -418,6 +416,7 @@ async fn calc_scores<M>(
             let record = RankedRecordRow {
                 rank: get_rank(
                     conn,
+                    redis_conn,
                     map.id,
                     record.record.record_player_id,
                     record.record.time,

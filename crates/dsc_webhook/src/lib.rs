@@ -1,4 +1,10 @@
+#[cfg(feature = "actix-web")]
+mod format_req_head;
+
 use serde::Serialize;
+
+#[cfg(feature = "actix-web")]
+pub use format_req_head::*;
 
 #[derive(Serialize)]
 pub struct WebhookBodyEmbedField {

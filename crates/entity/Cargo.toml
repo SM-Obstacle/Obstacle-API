@@ -1,0 +1,16 @@
+[package]
+name = "entity"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { workspace = true }
+sea-orm = { workspace = true }
+thiserror = { workspace = true }
+async-graphql = { workspace = true }
+nom = { workspace = true }
+
+[features]
+default = []
+mysql = ["sea-orm/sqlx-mysql"]
+postgres = ["sea-orm/sqlx-postgres"]

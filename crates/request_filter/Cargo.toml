@@ -11,4 +11,4 @@ tracing = { workspace = true }
 pin-project-lite = { workspace = true }
 tokio = { workspace = true }
 nom = { workspace = true }
-dsc_webhook = { path = "../dsc_webhook" }
+dsc_webhook = { path = "../dsc_webhook", features = ["actix-web"] }

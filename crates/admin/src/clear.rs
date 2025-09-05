@@ -1,8 +1,7 @@
 use deadpool_redis::redis::AsyncCommands;
-use records_lib::{
-    Database, DatabaseConnection, acquire, mappack::AnyMappackId, models, must,
-    redis_key::mappack_key,
-};
+use entity::{event, event_edition, event_edition_maps};
+use records_lib::{Database, RedisConnection, mappack::AnyMappackId, must, redis_key::mappack_key};
+use sea_orm::{ColumnTrait as _, ConnectionTrait, EntityTrait as _, QueryFilter as _};
 
 #[derive(clap::Args)]
 pub struct ClearCommand {
@@ -10,21 +9,24 @@ pub struct ClearCommand {
     event_edition: u32,
 }
 
-#[tracing::instrument(skip(db))]
-pub async fn clear_content(
-    db: &mut DatabaseConnection<'_>,
-    event: &models::Event,
-    edition: &models::EventEdition,
+#[tracing::instrument(skip(conn, redis_conn))]
+pub async fn clear_content<C: ConnectionTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
+    event: &event::Model,
+    edition: &event_edition::Model,
 ) -> anyhow::Result<()> {
-    let _: () = db
-        .redis_conn
+    let _: () = redis_conn
         .del(mappack_key(AnyMappackId::Event(event, edition)))
         .await?;
 
-    sqlx::query("delete from event_edition_maps where event_id = ? and edition_id = ?")
-        .bind(event.id)
-        .bind(edition.id)
-        .execute(&mut **db.mysql_conn)
+    event_edition_maps::Entity::delete_many()
+        .filter(
+            event_edition_maps::Column::EventId
+                .eq(event.id)
+                .and(event_edition_maps::Column::EditionId.eq(edition.id)),
+        )
+        .exec(conn)
         .await?;
 
     Ok(())
@@ -37,12 +39,12 @@ pub async fn clear(
         event_edition,
     }: ClearCommand,
 ) -> anyhow::Result<()> {
-    let mut conn = acquire!(db?);
+    let mut redis_conn = db.redis_pool.get().await?;
 
     let (event, edition) =
-        must::have_event_edition(conn.mysql_conn, &event_handle, event_edition).await?;
+        must::have_event_edition(&db.sql_conn, &event_handle, event_edition).await?;
 
-    clear_content(&mut conn, &event, &edition).await?;
+    clear_content(&db.sql_conn, &mut redis_conn, &event, &edition).await?;
 
     Ok(())
 }

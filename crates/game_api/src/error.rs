@@ -1,7 +1,8 @@
 use std::fmt;
 
-use actix_web::HttpResponse;
-use records_lib::{models, NullableInteger};
+use actix_web::{HttpResponse, http::StatusCode};
+use entity::banishments;
+use sea_orm::DbErr;
 use tokio::sync::mpsc::error::SendError;
 use tracing_actix_web::RequestId;
 
@@ -14,78 +15,60 @@ pub struct AccessTokenErr {
 }
 
 #[derive(thiserror::Error, Debug)]
-#[repr(i32)] // i32 to be used with clients that don't support unsigned integers
 #[rustfmt::skip]
 pub enum RecordsErrorKind {
-    // Caution: when creating a new error, you must ensure its code isn't
-    // in conflict with another one in `records_lib::RecordsError`.
-
     // --------
     // --- Internal server errors
     // --------
 
     #[error(transparent)]
-    IOError(#[from] std::io::Error) = 101,
-
-    // ...Errors from records_lib
-
+    IOError(#[from] std::io::Error),
     #[error("unknown error: {0}")]
-    Unknown(String) = 105,
+    Unknown(String),
     #[error("server is in maintenance since {0}")]
-    Maintenance(chrono::NaiveDateTime) = 106,
+    Maintenance(chrono::NaiveDateTime),
     #[error("unknown api status: `{0}` named `{1}`")]
-    UnknownStatus(u8, String) = 107,
-
-    // ...Errors from records_lib
+    UnknownStatus(u8, String),
 
     // --------
     // --- Authentication errors
     // --------
 
     #[error("unauthorized")]
-    Unauthorized = 201,
+    Unauthorized,
     #[error("forbidden")]
-    Forbidden = 202,
+    Forbidden,
     #[error("missing the /player/get_token request")]
-    MissingGetTokenReq = 203,
+    MissingGetTokenReq,
     #[error("the state has already been received by the server")]
-    StateAlreadyReceived(chrono::DateTime<chrono::Utc>) = 204,
-    #[error("banned player {0}")]
-    BannedPlayer(models::Banishment) = 205,
+    StateAlreadyReceived(chrono::DateTime<chrono::Utc>),
+    #[error("banned player")]
+    BannedPlayer(banishments::Model),
     #[error("error on sending request to MP services: {0:?}")]
-    AccessTokenErr(AccessTokenErr) = 206,
+    AccessTokenErr(AccessTokenErr),
     #[error("invalid ManiaPlanet code on /player/give_token request")]
-    InvalidMPCode = 207,
+    InvalidMPCode,
     #[error("timeout exceeded")]
-    Timeout(std::time::Duration) = 208,
+    Timeout(std::time::Duration),
 
     // --------
     // --- Logical errors
     // --------
 
     #[error("not found")]
-    EndpointNotFound = 301,
-
-    // ...Error from records_lib
-
+    EndpointNotFound,
     #[error("player not banned: `{0}`")]
-    PlayerNotBanned(String) = 303,
-
-    // ...Error from records_lib
-
+    PlayerNotBanned(String),
     #[error("unknown role with id `{0}` and name `{1}`")]
-    UnknownRole(u8, String) = 305,
+    UnknownRole(u8, String),
     #[error("unknown rating kind with id `{0}` and name `{1}`")]
-    UnknownRatingKind(u8, String) = 307,
+    UnknownRatingKind(u8, String),
     #[error("no rating found to update for player with login: `{0}` and map with uid: `{1}`")]
-    NoRatingFound(String, String) = 308,
+    NoRatingFound(String, String),
     #[error("invalid rates (too many, or repeated rate)")]
-    InvalidRates = 309,
-
-    // ...Errors from records_lib
-
+    InvalidRates,
     #[error("invalid times")]
-    InvalidTimes = 313,
+    InvalidTimes,
     #[error("map pack id should be an integer, got `{0}`")]
     InvalidMappackId(String),
     #[error("event `{0}` {1} has expired")]
@@ -95,13 +78,83 @@ pub enum RecordsErrorKind {
     Lib(#[from] records_lib::error::RecordsError),
 }
 
+#[derive(serde::Serialize)]
+pub struct RecordsErrorKindResponse {
+    pub r#type: i32,
+    pub message: String,
+}
+
+impl actix_web::ResponseError for RecordsErrorKind {
+    fn error_response(&self) -> HttpResponse<actix_web::body::BoxBody> {
+        let (r#type, status_code) = self.get_err_type_and_status_code();
+        let mut res = HttpResponse::build(status_code);
+
+        let message = self.to_string();
+        res.extensions_mut().insert(Some(RecordsErrorKindResponse {
+            r#type,
+            message: message.clone(),
+        }));
+
+        res.json(RecordsErrorKindResponse { r#type, message })
+    }
+}
+
+#[macro_export]
+macro_rules! internal {
+    ($($t:tt)*) => {{
+        $crate::RecordsErrorKind::Lib($crate::__private::internal!($($t)*))
+    }};
+}
+
 impl RecordsErrorKind {
-    pub fn get_type(&self) -> i32 {
+    pub fn get_err_type_and_status_code(&self) -> (i32, StatusCode) {
+        use RecordsErrorKind as E;
+        use StatusCode as S;
+        use records_lib::error::RecordsError as LE;
+
         match self {
-            Self::Lib(err) => err.get_code(),
-            // SAFETY: Self is repr(i32).
-            other => unsafe { *(other as *const Self as *const _) },
+            E::IOError(_) => (101, S::INTERNAL_SERVER_ERROR),
+            E::Lib(LE::MySql(_)) => (102, S::INTERNAL_SERVER_ERROR),
+            E::Lib(LE::Redis(_)) => (103, S::INTERNAL_SERVER_ERROR),
+            E::Lib(LE::ExternalRequest(_)) => (104, S::INTERNAL_SERVER_ERROR),
+            E::Unknown(_) => (105, S::INTERNAL_SERVER_ERROR),
+            E::Maintenance(_) => (106, S::INTERNAL_SERVER_ERROR),
+            E::UnknownStatus(_, _) => (107, S::INTERNAL_SERVER_ERROR),
+            E::Lib(LE::PoolError(_)) => (108, S::INTERNAL_SERVER_ERROR),
+            E::Lib(LE::Internal(_)) => (109, S::INTERNAL_SERVER_ERROR),
+            E::Lib(LE::DbError(_)) => (110, S::INTERNAL_SERVER_ERROR),
+            E::Lib(LE::MaskedInternal) => (111, S::INTERNAL_SERVER_ERROR),
+
+            E::Unauthorized => (201, S::UNAUTHORIZED),
+            E::Forbidden => (202, S::FORBIDDEN),
+            E::MissingGetTokenReq => (203, S::BAD_REQUEST),
+            E::StateAlreadyReceived(_) => (204, S::BAD_REQUEST),
+            E::BannedPlayer(_) => (205, S::FORBIDDEN),
+            E::AccessTokenErr(_) => (206, S::BAD_REQUEST),
+            E::InvalidMPCode => (207, S::BAD_REQUEST),
+            E::Timeout(_) => (208, S::REQUEST_TIMEOUT),
+
+            E::EndpointNotFound => (301, S::NOT_FOUND),
+            E::Lib(LE::PlayerNotFound(_)) => (302, S::BAD_REQUEST),
+            E::PlayerNotBanned(_) => (303, S::BAD_REQUEST),
+            E::Lib(LE::MapNotFound(_)) => (304, S::BAD_REQUEST),
+            E::UnknownRole(_, _) => (305, S::INTERNAL_SERVER_ERROR),
+            E::UnknownRatingKind(_, _) => (307, S::INTERNAL_SERVER_ERROR),
+            E::NoRatingFound(_, _) => (308, S::BAD_REQUEST),
+            E::InvalidRates => (309, S::BAD_REQUEST),
+            E::Lib(LE::EventNotFound(_)) => (310, S::BAD_REQUEST),
+            E::Lib(LE::EventEditionNotFound(_, _)) => (311, S::BAD_REQUEST),
+            E::Lib(LE::MapNotInEventEdition(_, _, _)) => (312, S::BAD_REQUEST),
+            E::InvalidTimes => (313, S::BAD_REQUEST),
+            E::InvalidMappackId(_) => (314, S::BAD_REQUEST),
+            E::EventHasExpired(_, _) => (315, S::BAD_REQUEST),
         }
+    }
+}
+
+impl From<DbErr> for RecordsErrorKind {
+    fn from(value: DbErr) -> Self {
+        Self::Lib(value.into())
     }
 }
 
@@ -118,31 +171,32 @@ impl<T> From<SendError<T>> for RecordsErrorKind {
 }
 
 #[derive(Debug)]
-pub struct RecordsError {
+pub struct TracedError {
+    pub status_code: Option<StatusCode>,
+    pub r#type: Option<i32>,
     pub request_id: RequestId,
-    pub kind: RecordsErrorKind,
+    pub error: actix_web::Error,
 }
 
-impl fmt::Display for RecordsError {
+impl fmt::Display for TracedError {
     #[inline(always)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.kind, f)
+        fmt::Display::fmt(&self.error, f)
     }
 }
 
-impl std::error::Error for RecordsError {
+impl std::error::Error for TracedError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.kind)
+        Some(&self.error)
     }
 }
 
-impl RecordsError {
-    fn to_err_res(&self) -> ErrorResponse {
-        let message = self.to_string();
+impl TracedError {
+    fn to_err_res(&self, r#type: i32) -> ErrorResponse {
         ErrorResponse {
             request_id: self.request_id.to_string(),
-            r#type: self.kind.get_type(),
-            message,
+            r#type,
+            message: self.error.to_string(),
         }
     }
 }
@@ -154,107 +208,18 @@ pub struct ErrorResponse {
     pub message: String,
 }
 
-impl actix_web::ResponseError for RecordsError {
-    #[rustfmt::skip]
+impl actix_web::ResponseError for TracedError {
     fn error_response(&self) -> HttpResponse {
-        use records_lib::error::RecordsError as LR;
-        use RecordsErrorKind as R;
+        let r#type = self.r#type.unwrap_or(105);
+        let status_code = self
+            .status_code
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
-        match &self.kind {
-            // --- Internal server errors
-
-            R::IOError(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
-            R::Unknown(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
-            R::Maintenance(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
-            R::UnknownStatus(..) => HttpResponse::InternalServerError().json(self.to_err_res()),
-
-            // --- Authentication errors
-
-            R::Unauthorized => HttpResponse::Unauthorized().json(self.to_err_res()),
-            R::Forbidden => HttpResponse::Forbidden().json(self.to_err_res()),
-            R::MissingGetTokenReq => HttpResponse::BadRequest().json(self.to_err_res()),
-            R::StateAlreadyReceived(_) => HttpResponse::BadRequest().json(self.to_err_res()),
-            R::BannedPlayer(ban) => {
-                #[derive(serde::Serialize)]
-                struct Ban<'a> {
-                    #[serde(flatten)]
-                    ban: &'a models::Banishment,
-                    duration: NullableInteger,
-                }
-
-                #[derive(serde::Serialize)]
-                struct BannedPlayerResponse<'a> {
-                    message: String,
-                    ban: Ban<'a>,
-                }
-                HttpResponse::Forbidden().json(BannedPlayerResponse {
-                    message: ban.to_string(),
-                    ban: Ban {
-                        ban,
-                        duration: NullableInteger(ban.duration.map(|x| x as _)),
-                    },
-                })
-            }
-            R::AccessTokenErr(_) => HttpResponse::BadRequest().json(self.to_err_res()),
-            R::InvalidMPCode => HttpResponse::BadRequest().json(self.to_err_res()),
-            R::Timeout(_) => HttpResponse::RequestTimeout().json(self.to_err_res()),
-
-            // --- Logical errors
-
-            R::EndpointNotFound => HttpResponse::NotFound().json(self.to_err_res()),
-            R::PlayerNotBanned(_) => HttpResponse::BadRequest().json(self.to_err_res()),
-            R::UnknownRole(..) => HttpResponse::InternalServerError().json(self.to_err_res()),
-            R::UnknownRatingKind(..) => HttpResponse::InternalServerError().json(self.to_err_res()),
-            R::NoRatingFound(..) => HttpResponse::BadRequest().json(self.to_err_res()),
-            R::InvalidRates => HttpResponse::BadRequest().json(self.to_err_res()),
-            R::InvalidTimes => HttpResponse::BadRequest().json(self.to_err_res()),
-            R::InvalidMappackId(_) => HttpResponse::BadRequest().json(self.to_err_res()),
-            R::EventHasExpired(..) => HttpResponse::BadRequest().json(self.to_err_res()),
-
-            // --- From the library
-
-            R::Lib(e) => match e {
-                // --- Internal server errors
-
-                LR::MySql(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
-                LR::Redis(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
-                LR::ExternalRequest(_) => {
-                    HttpResponse::InternalServerError().json(self.to_err_res())
-                }
-                LR::PoolError(_) => HttpResponse::InternalServerError().json(self.to_err_res()),
-                LR::Internal => HttpResponse::InternalServerError().json(self.to_err_res()),
-
-                // --- Logical errors
-
-                LR::PlayerNotFound(_) => HttpResponse::BadRequest().json(self.to_err_res()),
-                LR::MapNotFound(_) => HttpResponse::BadRequest().json(self.to_err_res()),
-                LR::EventNotFound(_) => HttpResponse::BadRequest().json(self.to_err_res()),
-                LR::EventEditionNotFound(..) => HttpResponse::BadRequest().json(self.to_err_res()),
-                LR::MapNotInEventEdition(..) => HttpResponse::BadRequest().json(self.to_err_res()),
-            },
-        }
+        HttpResponse::build(status_code).json(self.to_err_res(r#type))
     }
 }
 
 pub type RecordsResult<T> = Result<T, RecordsErrorKind>;
-
-pub type RecordsResponse<T> = Result<T, RecordsError>;
-
-pub trait FitRequestId<T, E> {
-    fn fit(self, request_id: RequestId) -> RecordsResponse<T>;
-}
-
-impl<T, E> FitRequestId<T, E> for Result<T, E>
-where
-    RecordsErrorKind: From<E>,
-{
-    fn fit(self, request_id: RequestId) -> RecordsResponse<T> {
-        self.map_err(|e| RecordsError {
-            request_id,
-            kind: e.into(),
-        })
-    }
-}
 
 /// Converts a `Result<T, E>` in which `E` is convertible to [`records_lib::error::RecordsError`]
 /// into a [`RecordsResult<T>`].

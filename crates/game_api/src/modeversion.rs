@@ -1,16 +1,17 @@
 use std::{
     fmt,
-    future::{ready, Ready},
+    future::{Ready, ready},
 };
 
-use actix_web::{dev::Payload, FromRequest, HttpRequest, HttpResponse, ResponseError};
+use actix_web::{FromRequest, HttpRequest, HttpResponse, ResponseError, dev::Payload};
+use entity::types;
 
 const OBS_MODE_VERS_HEADER: &str = "ObstacleModeVersion";
 
 #[derive(thiserror::Error, Debug)]
 pub enum ModeVersionExtractErr {
     #[error("invalid `{OBS_MODE_VERS_HEADER} header: {0}")]
-    ParseErr(records_lib::ModeVersionParseErr),
+    ParseErr(types::ModeVersionParseErr),
     #[error("missing `{OBS_MODE_VERS_HEADER}` header")]
     MissingHeader,
     #[error("invalid `{OBS_MODE_VERS_HEADER}` header encoding: {0}")]
@@ -24,7 +25,7 @@ impl ResponseError for ModeVersionExtractErr {
     }
 }
 
-pub struct ModeVersion(pub records_lib::ModeVersion);
+pub struct ModeVersion(pub types::ModeVersion);
 
 impl fmt::Display for ModeVersion {
     #[inline]
