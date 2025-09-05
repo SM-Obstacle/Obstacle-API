@@ -312,6 +312,7 @@ pub async fn get_rank<C: ConnectionTrait + StreamTrait>(
                 other.filter(|t| *t < time)
             }
         };
+        
 
         match get_rank_impl(redis_conn, &key, time).await? {
             Some(r) => {
@@ -330,7 +331,6 @@ pub async fn get_rank<C: ConnectionTrait + StreamTrait>(
 
 /// Returns an error and prints a clear message of the leaderboards differences between
 /// MariaDB and Redis.
-// TODO: use a discord webhook?
 #[cold]
 async fn get_rank_failed<C: ConnectionTrait>(
     conn: &C,
@@ -341,55 +341,23 @@ async fn get_rank_failed<C: ConnectionTrait>(
     #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] time: i32,
     #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] tested_time: Option<i32>,
 ) -> RecordsResult<RecordsError> {
-    use std::fmt::Write as _;
-
-    fn num_digits<N>(n: N) -> usize
-    where
-        f64: From<N>,
-    {
-        (f64::from(n).log10() + 1.) as _
-    }
-
     let key = &map_key(map_id, event);
     let redis_lb: Vec<i64> = redis_conn.zrange_withscores(key, 0, -1).await?;
-
     let mariadb_lb = get_mariadb_lb_query(map_id, event).all(conn).await?;
 
     let lb = redis_lb
-        .chunks_exact(2)
-        .map(|chunk| (chunk[0] as u32, chunk[1] as i32))
-        .zip_longest(mariadb_lb)
-        .collect::<Vec<_>>();
-
-    let width = lb
+        .as_chunks()
+        .0
         .iter()
-        .map(|e| match e {
-            EitherOrBoth::Both((rpid, rtime), lb_line) => {
-                num_digits(*rpid)
-                    + num_digits(*rtime)
-                    + num_digits(lb_line.record_player_id)
-                    + num_digits(lb_line.time)
-            }
-            EitherOrBoth::Left((rpid, rtime)) => num_digits(*rpid) + num_digits(*rtime),
-            EitherOrBoth::Right(lb_line) => {
-                num_digits(lb_line.record_player_id) + num_digits(lb_line.time)
-            }
-        })
-        .max()
-        .unwrap_or_default()
-        .max("player".len() * 2 + "time".len() * 2 + 1);
-    let w4 = width / 4;
+        .map(|[player_id, score]| (*player_id as u32, *score as i32))
+        .zip_longest(mariadb_lb);
 
-    let mut msg = format!(
-        "{:w2$} || {:w2$}\n{empty:-<w$}\n{player:w4$} | {time:w4$} || {player:w4$} | {time:w4$}\n",
-        "redis",
-        "mariadb",
-        player = "player",
-        time = "time",
-        w2 = width / 2 + 3,
-        w = width + 10,
-        empty = "",
-    );
+    let mut table = prettytable::Table::init(vec![prettytable::row![
+        "Redis player",
+        "Redis time",
+        "SQL player",
+        "SQL time",
+    ]]);
 
     for row in lb {
         match row {
@@ -400,52 +368,38 @@ async fn get_rank_failed<C: ConnectionTrait>(
                     time: mtime,
                 },
             ) => {
-                writeln!(
-                    msg,
-                    "{c}{rpid:w4$} | {rtime:w4$} || {mpid:w4$} | {mtime:w4$}{c_end}",
-                    c = if rpid != mpid || rtime != mtime {
-                        "\x1b[93m"
-                    } else if player_id == rpid && player_id == mpid {
-                        "\x1b[34m"
-                    } else {
-                        ""
-                    },
-                    c_end = if rpid != mpid
-                        || rtime != mtime
-                        || (player_id == rpid && player_id == mpid)
-                    {
-                        "\x1b[0m"
-                    } else {
-                        ""
-                    },
-                )
-                .unwrap();
+                let color = if rpid != mpid || rtime != mtime {
+                    // Conflict
+                    "Fy"
+                } else if player_id == rpid && player_id == mpid {
+                    // Currently selected player
+                    "Fb"
+                } else {
+                    ""
+                };
+
+                table.add_row(prettytable::Row::new(vec![
+                    prettytable::Cell::from(&rpid).style_spec(color),
+                    prettytable::Cell::from(&rtime).style_spec(color),
+                    prettytable::Cell::from(&mpid).style_spec(color),
+                    prettytable::Cell::from(&mtime).style_spec(color),
+                ]));
             }
             EitherOrBoth::Left((rpid, rtime)) => {
-                writeln!(
-                    msg,
-                    "\x1b[93m{rpid:w4$} | {rtime:w4$} || {empty:w4$} | {empty:w4$}\x1b[0m",
-                    empty = ""
-                )
-                .unwrap();
+                table.add_row(prettytable::row![Fy => rpid, rtime, "", ""]);
             }
             EitherOrBoth::Right(DbLeaderboardItem {
                 record_player_id: mpid,
                 time: mtime,
             }) => {
-                writeln!(
-                    msg,
-                    "\x1b[93m{empty:w4$} | {empty:w4$} || {mpid:w4$} | {mtime:w4$}\x1b[0m",
-                    empty = ""
-                )
-                .unwrap();
+                table.add_row(prettytable::row![Fy => "", "", mpid, mtime]);
             }
         }
     }
 
     #[cfg(feature = "tracing")]
     tracing::error!(
-        "missing player rank ({player_id} on map {map_id} with time {time}); tested time: {tested_time:?}\n{msg}"
+        "missing player rank ({player_id} on map {map_id} with time {time}); tested time: {tested_time:?}\n{table}"
     );
 
     Ok(RecordsError::Internal(
