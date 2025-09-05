@@ -181,7 +181,7 @@ async fn count_records_map<C: ConnectionTrait>(
 }
 
 /// Checks if the Redis leaderboard for the map with the provided ID has a different count
-/// than in the database, and reupdates the Redis leaderboard completely if so.
+/// than in the database, and regenerates the Redis leaderboard completely if so.
 ///
 /// This is a check to avoid differences between the MariaDB and the Redis leaderboards.
 ///
