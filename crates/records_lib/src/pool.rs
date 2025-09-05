@@ -122,7 +122,7 @@ impl Database {
     }
 }
 
-// For some reasons, sea_orm::DbConn doesn't implement Clone
+// For some reason, sea_orm::DbConn doesn't implement Clone
 impl Clone for Database {
     fn clone(&self) -> Self {
         Self {
