@@ -10,7 +10,6 @@
 #![cfg_attr(nightly, feature(doc_cfg))]
 
 mod env;
-mod modeversion;
 mod mptypes;
 
 pub mod error;
@@ -18,7 +17,6 @@ pub mod event;
 pub mod leaderboard;
 pub mod map;
 pub mod mappack;
-pub mod models;
 pub mod must;
 pub mod opt_event;
 pub mod player;
@@ -40,7 +38,6 @@ pub type RedisConnection = deadpool_redis::Connection;
 use std::future::Future;
 
 pub use env::*;
-pub use modeversion::*;
 pub use mptypes::*;
 pub use pool::Database;
 use rand::Rng as _;

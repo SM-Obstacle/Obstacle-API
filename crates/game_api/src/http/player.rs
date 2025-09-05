@@ -5,10 +5,10 @@ use actix_web::{
     body::BoxBody,
     web::{self, Json},
 };
-use entity::{banishments, current_bans, maps, players, records, role};
+use entity::{banishments, current_bans, maps, players, records, role, types};
 use futures::TryStreamExt;
 use records_lib::{
-    Database, ModeVersion, RedisConnection, event, must, opt_event::OptEvent, player, transaction,
+    Database, RedisConnection, event, must, opt_event::OptEvent, player, transaction,
 };
 use reqwest::Client;
 use sea_orm::{
@@ -250,7 +250,7 @@ async fn finished_impl<C: ConnectionTrait + StreamTrait>(
 
 pub async fn finished_at_with_pool(
     db: Database,
-    mode_version: Option<ModeVersion>,
+    mode_version: Option<types::ModeVersion>,
     login: String,
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
@@ -263,7 +263,7 @@ pub async fn finished_at_with_pool(
 pub async fn finished_at<C: TransactionTrait + ConnectionTrait>(
     conn: &C,
     redis_conn: &mut RedisConnection,
-    mode_version: Option<ModeVersion>,
+    mode_version: Option<types::ModeVersion>,
     login: String,
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,

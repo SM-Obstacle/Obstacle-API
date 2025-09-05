@@ -6,7 +6,8 @@ use actix_web::{
 };
 use entity::{
     event_edition, event_edition_maps, event_edition_records, global_event_records, global_records,
-    in_game_event_edition_params, maps, players, records, types::InGameAlignment,
+    in_game_event_edition_params, maps, players, records,
+    types::{self, InGameAlignment},
 };
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -891,7 +892,7 @@ pub async fn edition_finished_at(
     path: Path<(String, u32)>,
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
-    mode_version: Option<records_lib::ModeVersion>,
+    mode_version: Option<types::ModeVersion>,
 ) -> RecordsResult<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
 

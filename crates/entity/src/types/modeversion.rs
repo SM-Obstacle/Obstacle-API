@@ -1,9 +1,14 @@
-use std::{fmt, str::FromStr};
+use core::fmt;
+use std::str::FromStr;
 
 use nom::{
     Parser as _,
     bytes::complete::{tag, take_while1},
     combinator::{map, map_res},
+};
+use sea_orm::{
+    ColIdx, ColumnType, DbErr, QueryResult, TryGetError, TryGetable,
+    sea_query::{ArrayType, Nullable, ValueType, ValueTypeErr},
 };
 
 /// The error emitted by the parse of the [`ModeVersion`] type.
@@ -20,31 +25,64 @@ pub struct ModeVersion {
     pub minor: u8,
     /// The PATCH part.
     pub patch: u8,
+}
 
-    /// The total length of the string of the version.
-    ///
-    /// This is used to encode the version in a column in the database.
-    len: u8,
+impl From<ModeVersion> for sea_orm::Value {
+    fn from(value: ModeVersion) -> Self {
+        sea_orm::Value::String(Some(Box::new(value.to_string())))
+    }
+}
+
+impl TryGetable for ModeVersion {
+    fn try_get_by<I: ColIdx>(res: &QueryResult, index: I) -> Result<Self, TryGetError> {
+        let string = <String as TryGetable>::try_get_by(res, index)?;
+        let parsed = string.parse().map_err(|e| {
+            TryGetError::DbErr(DbErr::Type(format!(
+                "error when parsing column for mode version: {e}"
+            )))
+        })?;
+
+        Ok(parsed)
+    }
+}
+
+impl ValueType for ModeVersion {
+    fn try_from(v: sea_orm::Value) -> Result<Self, ValueTypeErr> {
+        let string = <String as ValueType>::try_from(v)?;
+        let parsed = string.parse().map_err(|_| ValueTypeErr)?;
+        Ok(parsed)
+    }
+
+    fn type_name() -> String {
+        "ModeVersion".to_owned()
+    }
+
+    #[inline]
+    fn array_type() -> ArrayType {
+        <String as ValueType>::array_type()
+    }
+
+    #[inline]
+    fn column_type() -> ColumnType {
+        <String as ValueType>::column_type()
+    }
+}
+
+impl Nullable for ModeVersion {
+    #[inline]
+    fn null() -> sea_orm::Value {
+        <String as Nullable>::null()
+    }
 }
 
 impl ModeVersion {
     /// Returns a mode version from the major, minor, and patch parts.
+    #[inline]
     pub fn new(major: u8, minor: u8, patch: u8) -> Self {
-        // We cap the length to 3 because the total length can't exceed 11 = 9 + 2 (the dots).
-        #[inline]
-        fn part_len(x: u8) -> u8 {
-            match x {
-                0..=9 => 1,
-                10..=99 => 2,
-                _ => 3,
-            }
-        }
-
         Self {
             major,
             minor,
             patch,
-            len: part_len(major) + part_len(minor) + part_len(patch) + 2,
         }
     }
 }
@@ -59,32 +97,6 @@ impl fmt::Debug for ModeVersion {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
-    }
-}
-
-impl<'a> sqlx::Encode<'a, sqlx::MySql> for ModeVersion {
-    fn encode_by_ref(
-        &self,
-        buf: &mut <sqlx::MySql as sqlx::Database>::ArgumentBuffer<'a>,
-    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        use std::io::Write as _;
-
-        buf.push(self.len);
-        write!(buf, "{self}")?;
-
-        Ok(sqlx::encode::IsNull::No)
-    }
-}
-
-impl sqlx::Type<sqlx::MySql> for ModeVersion {
-    #[inline(always)]
-    fn type_info() -> <sqlx::MySql as sqlx::Database>::TypeInfo {
-        <str as sqlx::Type<sqlx::MySql>>::type_info()
-    }
-
-    #[inline(always)]
-    fn compatible(ty: &<sqlx::MySql as sqlx::Database>::TypeInfo) -> bool {
-        <str as sqlx::Type<sqlx::MySql>>::compatible(ty)
     }
 }
 
@@ -123,7 +135,7 @@ impl FromStr for ModeVersion {
 
 #[cfg(test)]
 mod tests {
-    use crate::ModeVersion;
+    use super::ModeVersion;
 
     #[test]
     fn parse_2_7_4() {

@@ -1,6 +1,6 @@
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
-use entity::{checkpoint_times, event_edition_records, maps, records};
+use entity::{checkpoint_times, event_edition_records, maps, records, types};
 use records_lib::{NullableInteger, RedisConnection, opt_event::OptEvent, ranks};
 use sea_orm::{
     ActiveValue::Set, ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter as _, QueryOrder,
@@ -40,7 +40,7 @@ struct SendQueryParam<'a> {
     body: &'a InsertRecordParams,
     event_record_id: Option<u32>,
     at: chrono::NaiveDateTime,
-    mode_version: Option<records_lib::ModeVersion>,
+    mode_version: Option<types::ModeVersion>,
 }
 
 async fn send_query<C: ConnectionTrait>(
@@ -62,7 +62,7 @@ async fn send_query<C: ConnectionTrait>(
         record_date: Set(at),
         flags: body.flags.map(Set).unwrap_or_default(),
         event_record_id: Set(event_record_id),
-        modeversion: Set(mode_version.as_ref().map(ToString::to_string)),
+        modeversion: Set(mode_version),
         ..Default::default()
     };
 
@@ -89,7 +89,7 @@ pub struct ExpandedInsertRecordParams<'a> {
     pub body: &'a InsertRecordParams,
     pub at: chrono::NaiveDateTime,
     pub event: OptEvent<'a>,
-    pub mode_version: Option<records_lib::ModeVersion>,
+    pub mode_version: Option<types::ModeVersion>,
 }
 
 pub(super) async fn insert_record<C: ConnectionTrait + StreamTrait>(

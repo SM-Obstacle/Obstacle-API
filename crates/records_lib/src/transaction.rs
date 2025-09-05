@@ -6,8 +6,8 @@ use sea_orm::{DatabaseTransaction, DbErr, TransactionTrait};
 ///
 /// ## Arguments
 ///
-/// * `mysql_conn`: the connection to the database, which is forwarded to the provided function.
-/// * `mode`: the transaction mode, it can be [`ReadOnly`] or [`ReadWrite`] for example.
+/// * `conn`: the connection to the database, which is forwarded to the provided function
+///   as a transaction.
 /// * `f`: the function itself.
 ///
 /// If you get some weird errors, try wrapping the call using the
