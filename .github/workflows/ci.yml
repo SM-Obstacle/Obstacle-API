@@ -43,7 +43,7 @@ jobs:
           sudo mariadb -D obs_records < db/init_db.sql;
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.86.0
+        uses: dtolnay/rust-toolchain@1.89.0
 
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
