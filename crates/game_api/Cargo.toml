@@ -45,7 +45,7 @@ migration = { path = "../migration" }
 entity = { path = "../entity" }
 
 [dev-dependencies]
-records-lib = { path = "../records_lib", features = ["test"] }
+records-lib = { path = "../records_lib" }
 serde_json = { workspace = true }
 
 [features]
@@ -55,3 +55,4 @@ request_filter = ["dep:pin-project-lite", "dep:request_filter"]
 auth = []
 mysql = ["records-lib/mysql"]
 postgres = ["records-lib/postgres"]
+test = ["records-lib/test"]
