@@ -338,8 +338,8 @@ async fn get_rank_failed<C: ConnectionTrait>(
     player_id: u32,
     map_id: u32,
     event: OptEvent<'_>,
-    time: i32,
-    tested_time: Option<i32>,
+    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] time: i32,
+    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] tested_time: Option<i32>,
 ) -> RecordsResult<RecordsError> {
     use std::fmt::Write as _;
 
@@ -447,11 +447,6 @@ async fn get_rank_failed<C: ConnectionTrait>(
     tracing::error!(
         "missing player rank ({player_id} on map {map_id} with time {time}); tested time: {tested_time:?}\n{msg}"
     );
-    #[cfg(not(feature = "tracing"))]
-    {
-        // Avoid the unused_variables warning
-        let (_, _) = (time, tested_time);
-    }
 
     Ok(RecordsError::Internal)
 }
