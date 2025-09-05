@@ -7,7 +7,7 @@ use actix_web::{
     App, Error,
     body::MessageBody,
     dev::{Service, ServiceResponse},
-    test,
+    middleware, test,
 };
 use anyhow::Context;
 use futures::FutureExt;
@@ -39,7 +39,8 @@ pub async fn get_app(
 ) -> impl Service<Request, Response = ServiceResponse<impl MessageBody>, Error = Error> {
     test::init_service(
         App::new()
-            .wrap(TracingLogger::<configure::CustomRootSpanBuilder>::new())
+            .wrap(middleware::from_fn(configure::fit_request_id))
+            .wrap(TracingLogger::<configure::RootSpanBuilder>::new())
             .configure(|cfg| configure::configure(cfg, db.clone())),
     )
     .await

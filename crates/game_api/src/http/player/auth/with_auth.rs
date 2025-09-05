@@ -4,11 +4,9 @@ use records_lib::Database;
 use reqwest::{Client, StatusCode};
 use tokio::time::timeout;
 use tracing::Level;
-use tracing_actix_web::RequestId;
 
 use crate::{
-    AccessTokenErr, FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult,
-    RecordsResultExt as _, Res,
+    AccessTokenErr, RecordsErrorKind, RecordsResult, RecordsResultExt as _, Res,
     auth::{self, ApiAvailable, Message, TIMEOUT, WEB_TOKEN_SESS_KEY, WebToken},
     utils::json,
 };
@@ -89,17 +87,13 @@ pub struct GetTokenBody {
 
 pub async fn get_token(
     _: ApiAvailable,
-    req_id: RequestId,
     db: Res<Database>,
     Res(client): Res<Client>,
     state: web::Data<crate::AuthState>,
     web::Json(body): web::Json<GetTokenBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     // retrieve access_token from browser redirection
-    let (tx, rx) = state
-        .connect_with_browser(body.state.clone())
-        .await
-        .fit(req_id)?;
+    let (tx, rx) = state.connect_with_browser(body.state.clone()).await?;
     let code = match timeout(TIMEOUT, rx).await {
         Ok(Ok(Message::MPCode(access_token))) => access_token,
         _ => {
@@ -109,7 +103,7 @@ pub async fn get_token(
                 body.state.clone()
             );
             state.remove_state(body.state).await;
-            return Err(RecordsErrorKind::Timeout(TIMEOUT)).fit(req_id);
+            return Err(RecordsErrorKind::Timeout(TIMEOUT));
         }
     };
 
@@ -120,23 +114,20 @@ pub async fn get_token(
         Ok(true) => (),
         Ok(false) => {
             tx.send(Message::InvalidMPCode).expect(err_msg);
-            return Err(RecordsErrorKind::InvalidMPCode).fit(req_id);
+            return Err(RecordsErrorKind::InvalidMPCode);
         }
         Err(RecordsErrorKind::AccessTokenErr(err)) => {
             tx.send(Message::AccessTokenErr(err.clone()))
                 .expect(err_msg);
-            return Err(RecordsErrorKind::AccessTokenErr(err)).fit(req_id);
+            return Err(RecordsErrorKind::AccessTokenErr(err));
         }
-        err => {
-            let _ = err.fit(req_id)?;
-        }
+        Err(e) => return Err(e),
     }
 
-    let mut redis_conn = db.redis_pool.get().await.with_api_err().fit(req_id)?;
+    let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
 
-    let (mp_token, web_token) = auth::gen_token::gen_token_for(&mut redis_conn, &body.login)
-        .await
-        .fit(req_id)?;
+    let (mp_token, web_token) =
+        auth::gen_token::gen_token_for(&mut redis_conn, &body.login).await?;
     tx.send(Message::Ok(WebToken {
         login: body.login,
         token: web_token,
@@ -153,15 +144,11 @@ pub struct GiveTokenBody {
 }
 
 pub async fn post_give_token(
-    req_id: RequestId,
     session: Session,
     state: web::Data<crate::AuthState>,
     web::Json(body): web::Json<GiveTokenBody>,
-) -> RecordsResponse<impl Responder> {
-    let web_token = state
-        .browser_connected_for(body.state, body.code)
-        .await
-        .fit(req_id)?;
+) -> RecordsResult<impl Responder> {
+    let web_token = state.browser_connected_for(body.state, body.code).await?;
 
     session
         .insert(WEB_TOKEN_SESS_KEY, web_token)

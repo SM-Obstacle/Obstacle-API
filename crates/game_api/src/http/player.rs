@@ -19,10 +19,9 @@ use sea_orm::{
     sea_query::ExprTrait as _,
 };
 use serde::{Deserialize, Serialize};
-use tracing_actix_web::RequestId;
 
 use crate::{
-    FitRequestId as _, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
+    RecordsErrorKind, RecordsResult, RecordsResultExt, Res,
     auth::{ApiAvailable, AuthHeader, MPAuthGuard, privilege},
     utils::{self, ExtractDbConn, json},
 };
@@ -104,16 +103,15 @@ pub async fn get_or_insert<C: ConnectionTrait>(
 
 pub async fn update(
     _: ApiAvailable,
-    req_id: RequestId,
     db: Res<Database>,
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<PlayerInfoNetBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     if body.login != login {
-        return Err(RecordsErrorKind::Unauthorized).fit(req_id);
+        return Err(RecordsErrorKind::Unauthorized);
     }
 
-    let mut redis_conn = db.redis_pool.get().await.with_api_err().fit(req_id)?;
+    let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
 
     let auth_result = crate::auth::check_auth_for(
         &db.sql_conn,
@@ -125,14 +123,14 @@ pub async fn update(
     .await;
 
     match auth_result {
-        Ok(id) => update_player(&db.sql_conn, id, body).await.fit(req_id)?,
+        Ok(id) => update_player(&db.sql_conn, id, body).await?,
         // At this point, if Redis has registered a token with the login, it means that
         // the player is not yet added to the Obstacle database but effectively
         // has a ManiaPlanet account
         Err(RecordsErrorKind::Lib(records_lib::error::RecordsError::PlayerNotFound(_))) => {
-            let _ = insert_player(&db.sql_conn, &body).await.fit(req_id)?;
+            let _ = insert_player(&db.sql_conn, &body).await?;
         }
-        Err(e) => return Err(e).fit(req_id),
+        Err(e) => return Err(e),
     }
 
     Ok(HttpResponse::Ok().finish())
@@ -251,39 +249,25 @@ async fn finished_impl<C: ConnectionTrait + StreamTrait>(
 
 pub async fn finished_at_with_pool(
     db: Database,
-    req_id: RequestId,
     mode_version: Option<ModeVersion>,
     login: String,
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
-) -> RecordsResponse<impl Responder> {
-    let mut redis_conn = db.redis_pool.get().await.with_api_err().fit(req_id)?;
-    let res = finished_at(
-        &db.sql_conn,
-        &mut redis_conn,
-        req_id,
-        mode_version,
-        login,
-        body,
-        at,
-    )
-    .await?;
+) -> RecordsResult<impl Responder> {
+    let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
+    let res = finished_at(&db.sql_conn, &mut redis_conn, mode_version, login, body, at).await?;
     Ok(res)
 }
 
 pub async fn finished_at<C: TransactionTrait + ConnectionTrait>(
     conn: &C,
     redis_conn: &mut RedisConnection,
-    req_id: RequestId,
     mode_version: Option<ModeVersion>,
     login: String,
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
-) -> RecordsResponse<impl Responder<Body = BoxBody> + use<C>> {
-    let map = must::have_map(conn, &body.map_uid)
-        .await
-        .with_api_err()
-        .fit(req_id)?;
+) -> RecordsResult<impl Responder<Body = BoxBody> + use<C>> {
+    let map = must::have_map(conn, &body.map_uid).await.with_api_err()?;
 
     let res: pf::FinishedOutput = transaction::within(conn, async |txn| {
         let params = ExpandedInsertRecordParams {
@@ -295,8 +279,7 @@ pub async fn finished_at<C: TransactionTrait + ConnectionTrait>(
 
         finished_impl(txn, redis_conn, params, &login, &map).await
     })
-    .await
-    .fit(req_id)?;
+    .await?;
 
     json(res.res)
 }
@@ -305,14 +288,12 @@ pub async fn finished_at<C: TransactionTrait + ConnectionTrait>(
 async fn finished(
     _: ApiAvailable,
     mode_version: Option<crate::ModeVersion>,
-    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     body: pf::PlayerFinishedBody,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     finished_at_with_pool(
         db.0,
-        req_id,
         mode_version.map(|x| x.0),
         login,
         body.0,
@@ -323,27 +304,17 @@ async fn finished(
 
 async fn pb(
     _: ApiAvailable,
-    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     ExtractDbConn(conn): ExtractDbConn,
     web::Query(body): pb::PbReq,
-) -> RecordsResponse<impl Responder> {
-    let map = must::have_map(&conn, &body.map_uid)
-        .await
-        .with_api_err()
-        .fit(req_id)?;
+) -> RecordsResult<impl Responder> {
+    let map = must::have_map(&conn, &body.map_uid).await.with_api_err()?;
 
     let mut editions = event::get_editions_which_contain(&conn, map.id)
         .await
-        .with_api_err()
-        .fit(req_id)?;
-    let edition = editions.try_next().await.with_api_err().fit(req_id)?;
-    let single_edition = editions
-        .try_next()
-        .await
-        .with_api_err()
-        .fit(req_id)?
-        .is_none();
+        .with_api_err()?;
+    let edition = editions.try_next().await.with_api_err()?;
+    let single_edition = editions.try_next().await.with_api_err()?.is_none();
 
     drop(editions);
 
@@ -353,8 +324,7 @@ async fn pb(
         Some((event_id, edition_id, _)) if single_edition => {
             let (event, edition) = must::have_event_edition_from_ids(&conn, event_id, edition_id)
                 .await
-                .with_api_err()
-                .fit(req_id)?;
+                .with_api_err()?;
             pb::pb(
                 &conn,
                 &login,
@@ -364,8 +334,7 @@ async fn pb(
             .await
         }
         _ => pb::pb(&conn, &login, &body.map_uid, Default::default()).await,
-    }
-    .fit(req_id)?;
+    }?;
 
     utils::json(res)
 }
@@ -382,14 +351,11 @@ struct TimesResponseItem {
 }
 
 async fn times(
-    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<TimesBody>,
-) -> RecordsResponse<impl Responder> {
-    let player = records_lib::must::have_player(&conn, &login)
-        .await
-        .fit(req_id)?;
+) -> RecordsResult<impl Responder> {
+    let player = records_lib::must::have_player(&conn, &login).await?;
 
     let result = maps::Entity::find()
         .reverse_join(records::Entity)
@@ -405,8 +371,7 @@ async fn times(
         .into_model::<TimesResponseItem>()
         .all(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     json(result)
 }
@@ -427,10 +392,9 @@ struct InfoResponse {
 }
 
 pub async fn info(
-    req_id: RequestId,
     ExtractDbConn(conn): ExtractDbConn,
     web::Query(body): web::Query<InfoBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let info = players::Entity::find()
         .filter(players::Column::Login.eq(&body.login))
         .inner_join(role::Entity)
@@ -446,14 +410,12 @@ pub async fn info(
         .into_model::<InfoResponse>()
         .one(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     let Some(info) = info else {
         return Err(RecordsErrorKind::from(
             records_lib::error::RecordsError::PlayerNotFound(body.login),
-        ))
-        .fit(req_id);
+        ));
     };
 
     json(info)
@@ -471,11 +433,10 @@ struct ReportErrorBody {
 }
 
 async fn report_error(
-    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     Res(client): Res<Client>,
     Json(body): Json<ReportErrorBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let mut fields = vec![
         WebhookBodyEmbedField {
             name: "Map UID".to_owned(),
@@ -545,8 +506,7 @@ async fn report_error(
         })
         .send()
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     Ok(HttpResponse::Ok().finish())
 }
@@ -565,11 +525,7 @@ struct ACBody {
     ac_version: String,
 }
 
-async fn ac(
-    req_id: RequestId,
-    Res(client): Res<Client>,
-    Json(body): Json<ACBody>,
-) -> RecordsResponse<impl Responder> {
+async fn ac(Res(client): Res<Client>, Json(body): Json<ACBody>) -> RecordsResult<impl Responder> {
     client
         .post(&crate::env().wh_ac_url)
         .json(&WebhookBody {
@@ -618,8 +574,7 @@ async fn ac(
         })
         .send()
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     Ok(HttpResponse::Ok().finish())
 }

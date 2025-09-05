@@ -12,7 +12,6 @@
 mod env;
 mod modeversion;
 mod mptypes;
-pub mod pool;
 
 pub mod error;
 pub mod event;
@@ -23,6 +22,7 @@ pub mod models;
 pub mod must;
 pub mod opt_event;
 pub mod player;
+pub mod pool;
 pub mod ranks;
 pub mod redis_key;
 pub mod time;

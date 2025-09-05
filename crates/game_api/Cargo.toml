@@ -22,6 +22,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 actix-web = { workspace = true }
 actix-cors = { workspace = true }
+actix-http = "3.11.0"
 async-graphql-actix-web = { workspace = true }
 tracing-actix-web = { workspace = true }
 reqwest = { workspace = true }
@@ -38,13 +39,12 @@ mkenv = { workspace = true }
 nom = { workspace = true }
 pin-project-lite = { version = "0.2.16", optional = true }
 request_filter = { path = "../request_filter", optional = true }
-dsc_webhook = { path = "../dsc_webhook" }
+dsc_webhook = { path = "../dsc_webhook", features = ["actix-web"] }
 sea-orm = { workspace = true }
 migration = { path = "../migration" }
 entity = { path = "../entity" }
 
 [dev-dependencies]
-actix-http = "3.11.0"
 records-lib = { path = "../records_lib", features = ["test"] }
 serde_json = { workspace = true }
 

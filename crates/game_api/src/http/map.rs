@@ -1,5 +1,5 @@
 use crate::{
-    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt, Res,
+    RecordsErrorKind, RecordsResult, RecordsResultExt, Res,
     auth::{self, ApiAvailable, AuthHeader, MPAuthGuard, privilege},
     utils::{ExtractDbConn, any_repeated, json},
 };
@@ -18,7 +18,6 @@ use sea_orm::{
     sea_query::{Func, Query},
 };
 use serde::{Deserialize, Serialize};
-use tracing_actix_web::RequestId;
 
 use super::player::{self, PlayerInfoNetBody};
 
@@ -43,13 +42,10 @@ struct UpdateMapBody {
 
 async fn insert(
     _: ApiAvailable,
-    req_id: RequestId,
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<UpdateMapBody>,
-) -> RecordsResponse<impl Responder> {
-    let map = records_lib::map::get_map_from_uid(&conn, &body.map_uid)
-        .await
-        .fit(req_id)?;
+) -> RecordsResult<impl Responder> {
+    let map = records_lib::map::get_map_from_uid(&conn, &body.map_uid).await?;
 
     if let Some(map) = map
         && map.cps_number.is_none()
@@ -58,15 +54,9 @@ async fn insert(
             cps_number: Set(Some(body.cps_number)),
             ..From::from(map)
         };
-        maps::Entity::update(map)
-            .exec(&conn)
-            .await
-            .with_api_err()
-            .fit(req_id)?;
+        maps::Entity::update(map).exec(&conn).await.with_api_err()?;
     } else {
-        let player = player::get_or_insert(&conn, &body.author)
-            .await
-            .fit(req_id)?;
+        let player = player::get_or_insert(&conn, &body.author).await?;
 
         let new_map = maps::ActiveModel {
             game_id: Set(body.map_uid),
@@ -79,8 +69,7 @@ async fn insert(
         maps::Entity::insert(new_map)
             .exec(&conn)
             .await
-            .with_api_err()
-            .fit(req_id)?;
+            .with_api_err()?;
     }
 
     Ok(HttpResponse::Ok().finish())
@@ -112,19 +101,12 @@ struct PlayerRatingResponse {
 }
 
 pub async fn player_rating(
-    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<PlayerRatingBody>,
-) -> RecordsResponse<impl Responder> {
-    let player_id = records_lib::must::have_player(&conn, &login)
-        .await
-        .fit(req_id)?
-        .id;
-    let map_id = records_lib::must::have_map(&conn, &body.map_uid)
-        .await
-        .fit(req_id)?
-        .id;
+) -> RecordsResult<impl Responder> {
+    let player_id = records_lib::must::have_player(&conn, &login).await?.id;
+    let map_id = records_lib::must::have_map(&conn, &body.map_uid).await?.id;
 
     let rating = match rating::Entity::find()
         .filter(
@@ -137,8 +119,7 @@ pub async fn player_rating(
         .into_tuple()
         .one(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?
+        .with_api_err()?
     {
         Some(rating_date) => {
             let ratings = player_rating::Entity::find()
@@ -153,8 +134,7 @@ pub async fn player_rating(
                 .into_model()
                 .all(&conn)
                 .await
-                .with_api_err()
-                .fit(req_id)?;
+                .with_api_err()?;
 
             Some(PlayerRating {
                 rating_date,
@@ -172,8 +152,7 @@ pub async fn player_rating(
         .into_tuple()
         .one(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?
+        .with_api_err()?
         .unwrap_or_else(|| panic!("Map {map_id} should exist in database"));
 
     json(PlayerRatingResponse {
@@ -204,17 +183,12 @@ struct RatingsResponse {
 }
 
 pub async fn ratings(
-    req_id: RequestId,
     db: Res<Database>,
     AuthHeader { login, token }: AuthHeader,
     Json(body): Json<RatingsBody>,
-) -> RecordsResponse<impl Responder> {
-    let player = records_lib::must::have_player(&db.sql_conn, &login)
-        .await
-        .fit(req_id)?;
-    let map = records_lib::must::have_map(&db.sql_conn, &body.map_id)
-        .await
-        .fit(req_id)?;
+) -> RecordsResult<impl Responder> {
+    let player = records_lib::must::have_player(&db.sql_conn, &login).await?;
+    let map = records_lib::must::have_map(&db.sql_conn, &body.map_id).await?;
 
     let (role, author_login) = if map.player_id == player.id {
         (privilege::PLAYER, login.clone())
@@ -225,13 +199,12 @@ pub async fn ratings(
             .into_tuple()
             .one(&db.sql_conn)
             .await
-            .with_api_err()
-            .fit(req_id)?
+            .with_api_err()?
             .unwrap_or_else(|| panic!("Player {} should be in database", map.player_id));
         (privilege::ADMIN, login)
     };
 
-    let mut redis_conn = db.redis_pool.get().await.with_api_err().fit(req_id)?;
+    let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
 
     auth::check_auth_for(
         &db.sql_conn,
@@ -240,15 +213,13 @@ pub async fn ratings(
         Some(token.as_str()),
         role,
     )
-    .await
-    .fit(req_id)?;
+    .await?;
 
     let players_ratings = rating::Entity::find()
         .filter(rating::Column::MapId.eq(map.id))
         .stream(&db.sql_conn)
         .await
-        .with_api_err()
-        .fit(req_id)?
+        .with_api_err()?
         .map(|rating| async {
             let rating = rating.with_api_err()?;
 
@@ -285,7 +256,7 @@ pub async fn ratings(
         .collect::<Vec<_>>()
         .await;
 
-    let players_ratings = try_join_all(players_ratings).await.fit(req_id)?;
+    let players_ratings = try_join_all(players_ratings).await?;
 
     json(RatingsResponse {
         map_name: map.name,
@@ -307,10 +278,9 @@ struct RatingResponse {
 }
 
 pub async fn rating(
-    req_id: RequestId,
     ExtractDbConn(conn): ExtractDbConn,
     web::Query(body): web::Query<RatingBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let info = maps::Entity::find()
         .inner_join(players::Entity)
         .filter(maps::Column::GameId.eq(&body.map_uid))
@@ -320,14 +290,12 @@ pub async fn rating(
         .into_tuple()
         .one(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     let Some((map_name, author_login)) = info else {
         return Err(RecordsErrorKind::from(
             records_lib::error::RecordsError::MapNotFound(body.map_uid),
-        ))
-        .fit(req_id);
+        ));
     };
 
     let ratings = player_rating::Entity::find()
@@ -343,8 +311,7 @@ pub async fn rating(
         .into_model()
         .all(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     json(RatingResponse {
         map_name,
@@ -381,27 +348,22 @@ struct RateResponse {
 }
 
 pub async fn rate(
-    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard,
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<RateBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let players::Model {
         id: player_id,
         login: player_login,
         ..
-    } = records_lib::must::have_player(&conn, &login)
-        .await
-        .fit(req_id)?;
+    } = records_lib::must::have_player(&conn, &login).await?;
 
     let maps::Model {
         id: map_id,
         name: map_name,
         player_id: author_id,
         ..
-    } = records_lib::must::have_map(&conn, &body.map_id)
-        .await
-        .fit(req_id)?;
+    } = records_lib::must::have_map(&conn, &body.map_id).await?;
 
     let author_login = players::Entity::find_by_id(author_id)
         .select_only()
@@ -409,18 +371,16 @@ pub async fn rate(
         .into_tuple()
         .one(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?
+        .with_api_err()?
         .unwrap_or_else(|| panic!("Player {author_id} should be in database"));
 
     let rate_count = rating_kind::Entity::find()
         .count(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     if body.ratings.len() as u64 > rate_count || any_repeated(&body.ratings) {
-        return Err(RecordsErrorKind::InvalidRates).fit(req_id);
+        return Err(RecordsErrorKind::InvalidRates);
     }
 
     if body.ratings.is_empty() {
@@ -435,11 +395,10 @@ pub async fn rate(
             .into_tuple()
             .one(&conn)
             .await
-            .with_api_err()
-            .fit(req_id)?;
+            .with_api_err()?;
 
         let Some(rating_date) = rating_date else {
-            return Err(RecordsErrorKind::NoRatingFound(login, body.map_id)).fit(req_id);
+            return Err(RecordsErrorKind::NoRatingFound(login, body.map_id));
         };
 
         json(RateResponse {
@@ -461,8 +420,7 @@ pub async fn rate(
                 )
                 .count(&conn)
                 .await
-                .with_api_err()
-                .fit(req_id)?;
+                .with_api_err()?;
 
             if count > 0 {
                 let mut update = Query::update();
@@ -475,7 +433,7 @@ pub async fn rate(
                             .and(rating::Column::PlayerId.eq(player_id)),
                     );
                 let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
-                conn.execute(stmt).await.with_api_err().fit(req_id)?;
+                conn.execute(stmt).await.with_api_err()?;
 
                 rating::Entity::find()
                     .filter(
@@ -488,8 +446,7 @@ pub async fn rate(
                     .into_tuple()
                     .one(&conn)
                     .await
-                    .with_api_err()
-                    .fit(req_id)?
+                    .with_api_err()?
                     .unwrap_or_else(|| {
                         panic!("Rating of player {player_id} on {map_id} should exist in database")
                     })
@@ -503,8 +460,7 @@ pub async fn rate(
                 let rating = rating::Entity::insert(new_rating)
                     .exec_with_returning(&conn)
                     .await
-                    .with_api_err()
-                    .fit(req_id)?;
+                    .with_api_err()?;
 
                 rating.rating_date
             }
@@ -522,8 +478,7 @@ pub async fn rate(
                 )
                 .count(&conn)
                 .await
-                .with_api_err()
-                .fit(req_id)?;
+                .with_api_err()?;
 
             if count > 0 {
                 let mut update = Query::update();
@@ -537,7 +492,7 @@ pub async fn rate(
                             .and(player_rating::Column::Kind.eq(rate.kind)),
                     );
                 let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
-                conn.execute(stmt).await.with_api_err().fit(req_id)?;
+                conn.execute(stmt).await.with_api_err()?;
             } else {
                 let new_player_rating = player_rating::ActiveModel {
                     player_id: Set(player_id),
@@ -549,8 +504,7 @@ pub async fn rate(
                 player_rating::Entity::insert(new_player_rating)
                     .exec(&conn)
                     .await
-                    .with_api_err()
-                    .fit(req_id)?;
+                    .with_api_err()?;
             }
 
             let rating = player_rating::Entity::find()
@@ -562,8 +516,7 @@ pub async fn rate(
                 .into_model()
                 .one(&conn)
                 .await
-                .with_api_err()
-                .fit(req_id)?
+                .with_api_err()?
                 .unwrap_or_else(|| panic!("Player rating of {player_id} on {map_id} and rating kind {} should exist in database", rate.kind));
 
             ratings.push(rating);
@@ -592,11 +545,10 @@ struct ResetRatingsResponse {
 }
 
 pub async fn reset_ratings(
-    req_id: RequestId,
     MPAuthGuard { login }: MPAuthGuard<{ privilege::ADMIN }>,
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<ResetRatingsBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let info = maps::Entity::find()
         .filter(maps::Column::GameId.eq(&body.map_id))
         .inner_join(players::Entity)
@@ -606,14 +558,12 @@ pub async fn reset_ratings(
         .into_tuple()
         .one(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     let Some((map_id, map_name, author_login)) = info else {
         return Err(RecordsErrorKind::from(
             records_lib::error::RecordsError::MapNotFound(body.map_id),
-        ))
-        .fit(req_id);
+        ));
     };
 
     let map_id: u32 = map_id;
@@ -622,15 +572,13 @@ pub async fn reset_ratings(
         .filter(player_rating::Column::MapId.eq(map_id))
         .exec(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     rating::Entity::delete_many()
         .filter(rating::Column::MapId.eq(map_id))
         .exec(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     json(ResetRatingsResponse {
         admin_login: login,

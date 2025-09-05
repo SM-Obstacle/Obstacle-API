@@ -8,12 +8,17 @@ pub async fn check_auth_for<C: ConnectionTrait>(
     _redis_conn: &mut RedisConnection,
     login: &str,
     _token: Option<&str>,
-    _required: privilege::Flags,
+    required: privilege::Flags,
 ) -> RecordsResult<u32> {
     let player = records_lib::must::have_player(conn, login).await?;
 
-    match player::check_banned(conn, player.id).await? {
-        Some(ban) => Err(RecordsErrorKind::BannedPlayer(ban)),
-        None => Ok(player.id),
+    if let Some(ban) = player::check_banned(conn, player.id).await? {
+        return Err(RecordsErrorKind::BannedPlayer(ban));
+    }
+
+    if player.role & required == required {
+        Ok(player.id)
+    } else {
+        Err(RecordsErrorKind::Unauthorized)
     }
 }

@@ -12,10 +12,9 @@ use sea_orm::{
     sea_query::{ExprTrait, Func, Query},
 };
 use serde::{Deserialize, Serialize};
-use tracing_actix_web::RequestId;
 
 use crate::{
-    FitRequestId, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt,
+    RecordsErrorKind, RecordsResult, RecordsResultExt,
     auth::{MPAuthGuard, privilege},
     utils::{ExtractDbConn, json},
 };
@@ -37,17 +36,16 @@ pub struct DelNoteBody {
 
 pub async fn del_note(
     _: MPAuthGuard<{ privilege::ADMIN }>,
-    req_id: RequestId,
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<DelNoteBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let mut update = Query::update();
     let update = update
         .table(players::Entity)
         .value(players::Column::AdminsNote, None::<String>)
         .and_where(players::Column::Login.eq(body.player_login));
     let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
-    conn.execute(stmt).await.with_api_err().fit(req_id)?;
+    conn.execute(stmt).await.with_api_err()?;
 
     Ok(HttpResponse::Ok().finish())
 }
@@ -66,17 +64,15 @@ struct SetRoleResponse {
 
 pub async fn set_role(
     _: MPAuthGuard<{ privilege::ADMIN }>,
-    req_id: RequestId,
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<SetRoleBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     players::Entity::update_many()
         .filter(players::Column::Login.eq(&body.player_login))
         .col_expr(players::Column::Role, Expr::val(body.role).into())
         .exec(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     let role = role::Entity::find_by_id(body.role)
         .select_only()
@@ -84,8 +80,7 @@ pub async fn set_role(
         .into_tuple()
         .one(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?
+        .with_api_err()?
         .unwrap_or_else(|| panic!("Role with ID {} should exist in database", body.role));
 
     json(SetRoleResponse {
@@ -126,13 +121,11 @@ struct BanishmentsResponse {
 
 pub async fn banishments(
     _: MPAuthGuard<{ privilege::ADMIN }>,
-    req_id: RequestId,
     ExtractDbConn(conn): ExtractDbConn,
     web::Query(body): web::Query<BanishmentsBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let player_id = records_lib::must::have_player(&conn, &body.player_login)
-        .await
-        .fit(req_id)?
+        .await?
         .id;
 
     let banishments = banishments::Entity::find()
@@ -174,8 +167,7 @@ pub async fn banishments(
         .into_model::<BanishmentInner>()
         .stream(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?
+        .with_api_err()?
         .map_ok(|ban| Banishment {
             was_reprieved: ban.was_reprieved != 0,
             is_current: ban.is_current != 0,
@@ -183,8 +175,7 @@ pub async fn banishments(
         })
         .try_collect()
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     json(BanishmentsResponse {
         player_login: body.player_login,
@@ -207,25 +198,18 @@ struct BanResponse {
 
 pub async fn ban(
     MPAuthGuard { login }: MPAuthGuard<{ privilege::ADMIN }>,
-    req_id: RequestId,
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<BanBody>,
-) -> RecordsResponse<impl Responder> {
-    let player = records_lib::must::have_player(&conn, &body.player_login)
-        .await
-        .fit(req_id)?;
+) -> RecordsResult<impl Responder> {
+    let player = records_lib::must::have_player(&conn, &body.player_login).await?;
 
-    let admin_id = records_lib::must::have_player(&conn, &login)
-        .await
-        .fit(req_id)?
-        .id;
+    let admin_id = records_lib::must::have_player(&conn, &login).await?.id;
 
     let was_reprieved = banishments::Entity::find()
         .filter(banishments::Column::PlayerId.eq(player.id))
         .one(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?
+        .with_api_err()?
         .is_some();
 
     let new_ban = banishments::ActiveModel {
@@ -241,8 +225,7 @@ pub async fn ban(
     let ban_id = banishments::Entity::insert(new_ban)
         .exec(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?
+        .with_api_err()?
         .last_insert_id;
 
     let ban = banishments::Entity::find_by_id(ban_id)
@@ -264,8 +247,7 @@ pub async fn ban(
         .into_model::<BanishmentInner>()
         .one(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?
+        .with_api_err()?
         .expect("Ban is supposed to be in database");
 
     json(BanResponse {
@@ -333,17 +315,15 @@ struct UnbanResponse {
 
 pub async fn unban(
     _: MPAuthGuard<{ privilege::ADMIN }>,
-    req_id: RequestId,
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<UnbanBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let player_id = records_lib::must::have_player(&conn, &body.player_login)
-        .await
-        .fit(req_id)?
+        .await?
         .id;
 
-    let Some(ban) = get_ban_of(&conn, player_id).await.fit(req_id)? else {
-        return Err(RecordsErrorKind::PlayerNotBanned(body.player_login)).fit(req_id);
+    let Some(ban) = get_ban_of(&conn, player_id).await? else {
+        return Err(RecordsErrorKind::PlayerNotBanned(body.player_login));
     };
 
     let mut query = Query::update();
@@ -357,7 +337,7 @@ pub async fn unban(
 
     let query = StatementBuilder::build(&*query, &conn.get_database_backend());
 
-    conn.execute(query).await.with_api_err().fit(req_id)?;
+    conn.execute(query).await.with_api_err()?;
 
     json(UnbanResponse {
         player_login: body.player_login,
@@ -378,13 +358,11 @@ struct PlayerNoteResponse {
 
 pub async fn player_note(
     _: MPAuthGuard<{ privilege::ADMIN }>,
-    req_id: RequestId,
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<PlayerNoteBody>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let admins_note = records_lib::must::have_player(&conn, &body.player_login)
-        .await
-        .fit(req_id)?
+        .await?
         .admins_note;
 
     json(PlayerNoteResponse {

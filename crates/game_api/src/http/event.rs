@@ -25,11 +25,9 @@ use sea_orm::{
     sea_query::{Asterisk, Func, Query},
 };
 use serde::Serialize;
-use tracing_actix_web::RequestId;
 
 use crate::{
-    FitRequestId, ModeVersion, RecordsErrorKind, RecordsResponse, RecordsResult, RecordsResultExt,
-    Res,
+    ModeVersion, RecordsErrorKind, RecordsResult, RecordsResultExt, Res,
     auth::MPAuthGuard,
     utils::{self, ExtractDbConn, json},
 };
@@ -320,28 +318,24 @@ struct EventListQuery {
 }
 
 async fn event_list(
-    req_id: RequestId,
     ExtractDbConn(conn): ExtractDbConn,
     web::Query(EventListQuery { include_expired }): web::Query<EventListQuery>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let out = event::event_list(&conn, !include_expired)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     json(out)
 }
 
 async fn event_editions(
     ExtractDbConn(conn): ExtractDbConn,
-    req_id: RequestId,
     event_handle: Path<String>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let event_handle = event_handle.into_inner();
 
     let id = records_lib::must::have_event_handle(&conn, &event_handle)
-        .await
-        .fit(req_id)?
+        .await?
         .id;
 
     let res = event_edition::Entity::find()
@@ -369,8 +363,7 @@ async fn event_editions(
         .into_model::<RawEventHandleResponse>()
         .all(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     json(
         res.into_iter()
@@ -401,32 +394,26 @@ struct AuthorWithPlayerTime {
 async fn edition(
     auth: Option<MPAuthGuard>,
     ExtractDbConn(conn): ExtractDbConn,
-    req_id: RequestId,
     path: Path<(String, u32)>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
 
-    let (event, edition) = records_lib::must::have_event_edition(&conn, &event_handle, edition_id)
-        .await
-        .fit(req_id)?;
+    let (event, edition) =
+        records_lib::must::have_event_edition(&conn, &event_handle, edition_id).await?;
 
     // The edition is not yet released
     if chrono::Utc::now() < edition.start_date.and_utc() {
-        return Err(RecordsError::EventEditionNotFound(event_handle, edition_id))
-            .with_api_err()
-            .fit(req_id);
+        return Err(RecordsError::EventEditionNotFound(event_handle, edition_id)).with_api_err();
     }
 
     let maps = get_maps_by_edition_id(&conn, event.id, edition_id)
-        .await
-        .fit(req_id)?
+        .await?
         .into_iter()
         .chunk_by(|m| m.category_id);
     let maps = maps.into_iter();
 
-    let mut input_categories = event::get_categories_by_edition_id(&conn, event.id, edition.id)
-        .await
-        .fit(req_id)?;
+    let mut input_categories =
+        event::get_categories_by_edition_id(&conn, event.id, edition.id).await?;
 
     let original_maps = event_edition_maps::Entity::find()
         .join(
@@ -448,8 +435,7 @@ async fn edition(
         .into_model::<RawOriginalMap>()
         .all(&conn)
         .await
-        .with_api_err()
-        .fit(req_id)?;
+        .with_api_err()?;
 
     let original_maps = original_maps
         .into_iter()
@@ -483,8 +469,7 @@ async fn edition(
                 .into_model()
                 .one(&conn)
                 .await
-                .with_api_err()
-                .fit(req_id)?
+                .with_api_err()?
                 .expect("Main map author must exist");
 
             let AuthorWithPlayerTime {
@@ -511,8 +496,7 @@ async fn edition(
                     .into_tuple::<Option<i32>>()
                     .one(&conn)
                     .await
-                    .with_api_err()
-                    .fit(req_id)?
+                    .with_api_err()?
                     .flatten()
                     .into();
 
@@ -627,12 +611,10 @@ async fn edition(
                 let next_opponent = conn
                     .query_one(next_opponent_query)
                     .await
-                    .with_api_err()
-                    .fit(req_id)?
+                    .with_api_err()?
                     .map(|result| NextOpponent::from_query_result(&result, ""))
                     .transpose()
-                    .with_api_err()
-                    .fit(req_id)?;
+                    .with_api_err()?;
 
                 AuthorWithPlayerTime {
                     main_author,
@@ -649,8 +631,7 @@ async fn edition(
 
             let medal_times = event::get_medal_times_of(&conn, event.id, edition.id, map.id)
                 .await
-                .with_api_err()
-                .fit(req_id)?;
+                .with_api_err()?;
 
             let original_map = original_map_id
                 .and_then(|id| original_maps.get(&id))
@@ -707,8 +688,7 @@ async fn edition(
 
     let ingame_params = edition
         .get_ingame_params(&conn)
-        .await
-        .fit(req_id)?
+        .await?
         .map(EventEditionInGameParams::from)
         .unwrap_or_default();
 
@@ -721,13 +701,11 @@ async fn edition(
         id: edition.id,
         authors: event::get_admins_of(&conn, event.id, edition.id)
             .await
-            .with_api_err()
-            .fit(req_id)?
+            .with_api_err()?
             .map_ok(|p| p.name)
             .try_collect()
             .await
-            .with_api_err()
-            .fit(req_id)?,
+            .with_api_err()?,
         name: edition.name,
         subtitle: edition.subtitle.unwrap_or_default(),
         start_date: edition.start_date.and_utc().timestamp() as _,
@@ -799,12 +777,11 @@ impl EventEditionTraitExt for event_edition::Model {
 }
 
 async fn edition_overview(
-    req_id: RequestId,
     db: Res<Database>,
     path: Path<(String, u32)>,
     query: overview::OverviewReq,
-) -> RecordsResponse<impl Responder> {
-    let mut redis_conn = db.0.redis_pool.get().await.with_api_err().fit(req_id)?;
+) -> RecordsResult<impl Responder> {
+    let mut redis_conn = db.0.redis_pool.get().await.with_api_err()?;
 
     let (event, edition) = path.into_inner();
 
@@ -815,11 +792,10 @@ async fn edition_overview(
         edition,
     )
     .await
-    .with_api_err()
-    .fit(req_id)?;
+    .with_api_err()?;
 
     if edition.has_expired() {
-        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
+        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id));
     }
 
     let res = overview::overview(
@@ -829,8 +805,7 @@ async fn edition_overview(
         &map,
         OptEvent::new(&event, &edition),
     )
-    .await
-    .fit(req_id)?;
+    .await?;
 
     utils::json(res)
 }
@@ -838,15 +813,13 @@ async fn edition_overview(
 #[inline(always)]
 async fn edition_finished(
     MPAuthGuard { login }: MPAuthGuard,
-    req_id: RequestId,
     db: Res<Database>,
     path: Path<(String, u32)>,
     body: pf::PlayerFinishedBody,
     mode_version: Option<ModeVersion>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     edition_finished_at(
         login,
-        req_id,
         db,
         path,
         body.0,
@@ -913,13 +886,12 @@ async fn edition_finished_impl<C: ConnectionTrait + StreamTrait>(
 
 pub async fn edition_finished_at(
     login: String,
-    req_id: RequestId,
     db: Res<Database>,
     path: Path<(String, u32)>,
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
     mode_version: Option<records_lib::ModeVersion>,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
 
     // We first check that the event and its edition exist
@@ -937,17 +909,15 @@ pub async fn edition_finished_at(
         &event_handle,
         edition_id,
     )
-    .await
-    .fit(req_id)?;
+    .await?;
 
-    let mut redis_conn = db.0.redis_pool.get().await.with_api_err().fit(req_id)?;
+    let mut redis_conn = db.0.redis_pool.get().await.with_api_err()?;
 
     // The edition is transparent, so we save the record for the map directly.
     if edition.is_transparent != 0 {
         let res = super::player::finished_at(
             &db.sql_conn,
             &mut redis_conn,
-            req_id,
             mode_version,
             login,
             body,
@@ -960,7 +930,7 @@ pub async fn edition_finished_at(
     if edition.has_expired()
         && !(edition.start_date <= at && edition.expire_date().filter(|date| at > *date).is_none())
     {
-        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
+        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id));
     }
 
     let res: pf::FinishedOutput = transaction::within(&db.sql_conn, async |txn| {
@@ -980,8 +950,7 @@ pub async fn edition_finished_at(
 
         edition_finished_impl(txn, &mut redis_conn, params).await
     })
-    .await
-    .fit(req_id)?;
+    .await?;
 
     json(res.res).map(utils::Either::Right)
 }
@@ -1006,11 +975,10 @@ pub async fn insert_event_record<C: ConnectionTrait>(
 
 async fn edition_pb(
     MPAuthGuard { login }: MPAuthGuard,
-    req_id: RequestId,
     path: Path<(String, u32)>,
     ExtractDbConn(conn): ExtractDbConn,
     body: pb::PbReq,
-) -> RecordsResponse<impl Responder> {
+) -> RecordsResult<impl Responder> {
     let (event_handle, edition_id) = path.into_inner();
 
     let (event, edition, EventMap { map, .. }) = records_lib::must::have_event_edition_with_map(
@@ -1019,16 +987,13 @@ async fn edition_pb(
         &event_handle,
         edition_id,
     )
-    .await
-    .fit(req_id)?;
+    .await?;
 
     if edition.has_expired() {
-        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id)).fit(req_id);
+        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id));
     }
 
-    let res = pb::pb(&conn, &login, &map.game_id, OptEvent::new(&event, &edition))
-        .await
-        .fit(req_id)?;
+    let res = pb::pb(&conn, &login, &map.game_id, OptEvent::new(&event, &edition)).await?;
 
     utils::json(res)
 }

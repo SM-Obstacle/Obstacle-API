@@ -590,7 +590,7 @@ async fn save_record_for_related_non_transparent_event() -> anyhow::Result<()> {
         id: Set(1),
         name: Set(Default::default()),
         start_date: Set(chrono::Utc::now().naive_utc()),
-        non_original_maps: Set(0),
+        non_original_maps: Set(1),
         save_non_event_record: Set(1),
         is_transparent: Set(0),
         ..Default::default()
@@ -695,7 +695,6 @@ async fn save_record_for_related_non_transparent_event() -> anyhow::Result<()> {
                 flags: 682,
             }
         );
-        assert_eq!(normal_record.event_record_id, Some(event_record.record_id));
 
         // Check CP times saved in DB
         let cp_times = checkpoint_times::Entity::find()

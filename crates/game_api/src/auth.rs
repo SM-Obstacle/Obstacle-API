@@ -58,7 +58,7 @@ use records_lib::RedisPool;
 
 use crate::RecordsResultExt as _;
 use crate::utils::{ApiStatus, get_api_status};
-use crate::{AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, must};
+use crate::{AccessTokenErr, must};
 use crate::{RecordsErrorKind, RecordsResult};
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
@@ -74,7 +74,6 @@ use tokio::sync::Mutex;
 use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio::time::timeout;
 use tracing::Level;
-use tracing_actix_web::RequestId;
 
 #[allow(dead_code)] // Allow unused flags
 pub mod privilege {
@@ -268,32 +267,28 @@ pub struct MPAuthGuard<const ROLE: privilege::Flags = { privilege::PLAYER }> {
 }
 
 impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
-    type Error = RecordsError;
+    type Error = RecordsErrorKind;
 
-    type Future = Pin<Box<dyn Future<Output = RecordsResponse<Self>>>>;
+    type Future = Pin<Box<dyn Future<Output = RecordsResult<Self>>>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
         async fn check<const ROLE: privilege::Flags>(
-            request_id: RequestId,
             conn: DbConn,
             redis_pool: RedisPool,
             login: Option<String>,
             token: Option<String>,
-        ) -> RecordsResponse<MPAuthGuard<ROLE>> {
+        ) -> RecordsResult<MPAuthGuard<ROLE>> {
             let Some(login) = login else {
-                return Err(RecordsErrorKind::Unauthorized).fit(request_id);
+                return Err(RecordsErrorKind::Unauthorized);
             };
 
-            let mut redis_conn = redis_pool.get().await.with_api_err().fit(request_id)?;
+            let mut redis_conn = redis_pool.get().await.with_api_err()?;
 
-            check::check_auth_for(&conn, &mut redis_conn, &login, token.as_deref(), ROLE)
-                .await
-                .fit(request_id)?;
+            check::check_auth_for(&conn, &mut redis_conn, &login, token.as_deref(), ROLE).await?;
 
             Ok(MPAuthGuard { login })
         }
 
-        let req_id = must::have_request_id(req);
         let ExtAuthHeaders {
             player_login,
             authorization,
@@ -301,7 +296,6 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
 
         // FIXME: by extracting sql and redis pools separately, we're cloning each of them twice.
         Box::pin(check(
-            req_id,
             must::have_dbconn(req),
             must::have_redis_pool(req),
             player_login,
@@ -318,32 +312,24 @@ pub struct AuthHeader {
 }
 
 impl FromRequest for AuthHeader {
-    type Error = RecordsError;
+    type Error = RecordsErrorKind;
 
-    type Future = Ready<RecordsResponse<Self>>;
+    type Future = Ready<RecordsResult<Self>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let request_id = must::have_request_id(req);
-
         let ExtAuthHeaders {
             player_login,
             authorization,
         } = ext_auth_headers(req);
 
         let Some(login) = player_login else {
-            return ready(Err(RecordsError {
-                request_id,
-                kind: RecordsErrorKind::Unauthorized,
-            }));
+            return ready(Err(RecordsErrorKind::Unauthorized));
         };
 
         #[cfg(auth)]
         {
             let Some(token) = authorization else {
-                return ready(Err(RecordsError {
-                    request_id,
-                    kind: RecordsErrorKind::Unauthorized,
-                }));
+                return ready(Err(RecordsErrorKind::Unauthorized));
             };
 
             ready(Ok(Self { login, token }))
@@ -365,25 +351,24 @@ impl FromRequest for AuthHeader {
 pub struct ApiAvailable;
 
 impl FromRequest for ApiAvailable {
-    type Error = RecordsError;
+    type Error = RecordsErrorKind;
 
-    type Future = Pin<Box<dyn Future<Output = RecordsResponse<Self>>>>;
+    type Future = Pin<Box<dyn Future<Output = RecordsResult<Self>>>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        async fn check_status(conn: DbConn, req_id: RequestId) -> RecordsResponse<ApiAvailable> {
-            match get_api_status(&conn).await.fit(req_id)? {
+        async fn check_status(conn: DbConn) -> RecordsResult<ApiAvailable> {
+            match get_api_status(&conn).await? {
                 ApiStatus {
                     at,
                     kind: types::ApiStatusKind::Maintenance,
-                } => Err(RecordsErrorKind::Maintenance(at)).fit(req_id),
+                } => Err(RecordsErrorKind::Maintenance(at)),
                 _ => Ok(ApiAvailable),
             }
         }
 
-        let req_id = must::have_request_id(req);
         let conn = must::have_dbconn(req);
 
-        Box::pin(check_status(conn, req_id))
+        Box::pin(check_status(conn))
     }
 }
 

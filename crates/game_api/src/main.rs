@@ -12,6 +12,7 @@ use actix_session::{
 use actix_web::{
     App, HttpServer,
     cookie::{Key, time::Duration as CookieDuration},
+    middleware,
 };
 use anyhow::Context;
 use game_api_lib::configure;
@@ -30,10 +31,13 @@ async fn main() -> anyhow::Result<()> {
     request_filter::init_wh_url(env.used_once.wh_invalid_req_url)
         .unwrap_or_else(|_| panic!("Invalid request WH URL isn't supposed to be set twice"));
 
-    let db =
-        Database::from_db_url(env.db_env.db_url.db_url, env.db_env.redis_url.redis_url).await?;
+    let db = Database::from_db_url(env.db_env.db_url.db_url, env.db_env.redis_url.redis_url)
+        .await
+        .context("Cannot initialize database connection")?;
 
-    migration::Migrator::up(&db.sql_conn, None).await?;
+    migration::Migrator::up(&db.sql_conn, None)
+        .await
+        .context("Cannot migrate")?;
 
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::CLOSE)
@@ -42,7 +46,9 @@ async fn main() -> anyhow::Result<()> {
                 .with_default_directive(LevelFilter::INFO.into())
                 .from_env_lossy(),
         )
-        .init();
+        .try_init()
+        .map_err(anyhow::Error::msg)
+        .context("Cannot initialize trace subscriber")?;
 
     let max_connections = {
         #[allow(unreachable_patterns)]
@@ -81,7 +87,9 @@ async fn main() -> anyhow::Result<()> {
 
         App::new()
             .wrap(cors)
-            .wrap(TracingLogger::<configure::CustomRootSpanBuilder>::new())
+            .wrap(middleware::from_fn(configure::mask_internal_errors))
+            .wrap(middleware::from_fn(configure::fit_request_id))
+            .wrap(TracingLogger::<configure::RootSpanBuilder>::new())
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), sess_key.clone())
                     .cookie_secure(cfg!(not(debug_assertions)))
@@ -94,10 +102,10 @@ async fn main() -> anyhow::Result<()> {
             .configure(|cfg| configure::configure(cfg, db.clone()))
     })
     .bind(("0.0.0.0", game_api_lib::env().port))
-    .context("Cannot bind 0.0.0.0 address")?
+    .context("Cannot bind address")?
     .run()
     .await
-    .context("Cannot create actix-web server")?;
+    .context("Cannot run web server")?;
 
     Ok(())
 }
