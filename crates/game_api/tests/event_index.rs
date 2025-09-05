@@ -1,5 +1,6 @@
 use std::{array, iter, time::Duration};
 
+use actix_http::StatusCode;
 use actix_web::test;
 use anyhow::Context;
 use chrono::SubsecRound;
@@ -7,6 +8,7 @@ use entity::{
     event, event_category, event_edition, event_edition_categories, event_edition_maps,
     event_edition_records, maps, players, records,
 };
+use game_api_lib::TracedError;
 use sea_orm::{ActiveValue::Set, EntityTrait};
 
 mod base;
@@ -776,15 +778,14 @@ async fn event_edition_one_map_not_yet_released() -> anyhow::Result<()> {
             .uri("/event/event_handle/2")
             .to_request();
 
-        let res = test::call_service(&app, req).await;
-        let status = res.status();
-        let body = test::read_body(res).await;
-        let expected_err =
-            base::try_from_slice::<base::ErrorResponse>(&body).context("/event/event_handle/2")?;
-
-        assert_eq!(status, 400);
+        let res = test::try_call_service(&app, req).await;
+        let err = res.err().expect("Request should return error");
+        let traced_err = err
+            .as_error::<TracedError>()
+            .expect("Returned error should be a traced error");
+        assert_eq!(traced_err.status_code, Some(StatusCode::BAD_REQUEST));
         // Event edition not found
-        assert_eq!(expected_err.r#type, 311);
+        assert_eq!(traced_err.r#type, Some(311));
 
         anyhow::Ok(())
     })

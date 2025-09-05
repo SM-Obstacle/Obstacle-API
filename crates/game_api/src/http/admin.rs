@@ -249,7 +249,7 @@ pub async fn ban(
         .one(&conn)
         .await
         .with_api_err()?
-        .expect("Ban is supposed to be in database");
+        .ok_or_else(|| internal!("Ban is supposed to be in database"))?;
 
     json(BanResponse {
         player_login: body.player_login,

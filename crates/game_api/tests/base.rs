@@ -17,6 +17,7 @@ use sea_orm::{ConnectionTrait, DbConn};
 use tracing_actix_web::TracingLogger;
 
 use game_api_lib::{configure, init_env};
+use tracing_subscriber::fmt::TestWriter;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct ErrorResponse {
@@ -30,6 +31,10 @@ pub fn get_env() -> anyhow::Result<game_api_lib::InitEnvOut> {
         Err(err) if !err.not_found() => return Err(err).context("retrieving .env files"),
         _ => (),
     }
+
+    let _ = tracing_subscriber::fmt()
+        .with_writer(TestWriter::new())
+        .try_init();
 
     init_env()
 }

@@ -1,9 +1,11 @@
 use std::time::Duration;
 
+use actix_http::StatusCode;
 use actix_web::test;
 use entity::{
     event, event_edition, event_edition_maps, global_event_records, global_records, maps, players,
 };
+use game_api_lib::TracedError;
 use sea_orm::{ActiveValue::Set, ColumnTrait as _, EntityTrait, QueryFilter as _};
 
 use crate::player_finished_base::{Record, Request, Response};
@@ -494,16 +496,15 @@ async fn event_finish_non_transitive_save() -> anyhow::Result<()> {
             })
             .to_request();
 
-        let res = test::call_service(&app, req).await;
-        let status = res.status();
+        let res = test::try_call_service(&app, req).await;
+        let err = res.err().expect("Response should be error");
+        let err = err
+            .as_error::<TracedError>()
+            .expect("Response should be a traced error");
 
-        let body = test::read_body(res).await;
-        let expected_err = base::try_from_slice::<base::ErrorResponse>(&body)?;
-
-        // Check response
-        assert_eq!(status, 400);
+        assert_eq!(err.status_code, Some(StatusCode::BAD_REQUEST));
         // Original map isn't counted as being part of the edition
-        assert_eq!(expected_err.r#type, 312);
+        assert_eq!(err.r#type, Some(312));
 
         // Check record saved in DB
         let event_record = global_event_records::Entity::find()

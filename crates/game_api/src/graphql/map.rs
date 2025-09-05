@@ -24,6 +24,8 @@ use sea_orm::{
     sea_query::{Asterisk, ExprTrait, Func, Query},
 };
 
+use crate::internal;
+
 use super::{
     SortState,
     event::EventEdition,
@@ -237,7 +239,7 @@ impl Map {
                 map: map_loader
                     .load_one(edition.map_id)
                     .await?
-                    .expect("unknown map id"),
+                    .ok_or_else(|| internal!("unknown map id: {}", edition.map_id))?,
                 // We want to redirect to the event map page if the edition saves any records
                 // on its maps, doesn't have any original map like campaign, or if the map
                 // isn't the original one.

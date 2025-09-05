@@ -578,7 +578,7 @@ impl EventEditionMap<'_> {
                 map_loader
                     .load_one(id)
                     .await?
-                    .expect("unknown original_map_id"),
+                    .ok_or_else(|| internal!("unknown original_map_id: {id}"))?,
             ),
             _ => None,
         };

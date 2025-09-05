@@ -2,6 +2,7 @@ mod base;
 
 use actix_http::StatusCode;
 use actix_web::test;
+use game_api_lib::TracedError;
 use records_lib::Database;
 use sea_orm::DbBackend;
 
@@ -12,15 +13,14 @@ async fn test_not_found() -> anyhow::Result<()> {
     let app = base::get_app(db).await;
     let req = test::TestRequest::get().uri("/").to_request();
 
-    let resp = test::call_service(&app, req).await;
-    let status_code = resp.status();
-
-    let body = test::read_body(resp).await;
-    let error: base::ErrorResponse = serde_json::from_slice(&body)?;
-
-    assert_eq!(status_code, StatusCode::NOT_FOUND);
-    assert_eq!(error.r#type, 301);
-    assert_eq!(error.message, "not found");
+    let resp = test::try_call_service(&app, req).await;
+    let err = resp.err().expect("Response should be error");
+    let err = err
+        .as_error::<TracedError>()
+        .expect("Response should be a traced error");
+    assert_eq!(err.status_code, Some(StatusCode::NOT_FOUND));
+    // Not found error type
+    assert_eq!(err.r#type, Some(301));
 
     Ok(())
 }

@@ -24,6 +24,7 @@ use tracing_actix_web::RequestId;
 use crate::auth::{WEB_TOKEN_SESS_KEY, WebToken};
 use crate::graphql::map::MapLoader;
 use crate::graphql::player::PlayerLoader;
+use crate::{RecordsResult, internal};
 
 use self::event::{Event, EventCategoryLoader, EventEdition, EventLoader};
 use self::map::Map;
@@ -307,10 +308,10 @@ async fn index_graphql(
     session: Session,
     schema: Data<Schema>,
     GraphQLRequest(request): GraphQLRequest,
-) -> impl Responder {
+) -> RecordsResult<impl Responder> {
     let web_token = session
         .get::<WebToken>(WEB_TOKEN_SESS_KEY)
-        .expect("unable to retrieve web token");
+        .map_err(|e| internal!("unable to retrieve web token: {e}"))?;
 
     let request = {
         if let Some(web_token) = web_token {
@@ -329,7 +330,7 @@ async fn index_graphql(
         ex.set("request_id", Value::String(request_id.to_string()));
     }
 
-    web::Json(result)
+    Ok(web::Json(result))
 }
 
 async fn index_playground() -> impl Responder {

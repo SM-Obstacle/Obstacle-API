@@ -1,4 +1,4 @@
-use crate::{RecordsResult, RecordsResultExt};
+use crate::{RecordsResult, RecordsResultExt, internal};
 use actix_web::web::Query;
 use entity::{event_edition_records, maps, records};
 use records_lib::leaderboard::{self, Row};
@@ -90,7 +90,7 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
                 .one(conn)
                 .await
                 .with_api_err()?
-                .expect("Query should return at least one row");
+                .ok_or_else(|| internal!("Query should return at least one row"))?;
 
             match min_time {
                 Some(time) => {

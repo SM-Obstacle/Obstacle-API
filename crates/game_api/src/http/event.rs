@@ -29,6 +29,7 @@ use serde::Serialize;
 use crate::{
     ModeVersion, RecordsErrorKind, RecordsResult, RecordsResultExt, Res,
     auth::MPAuthGuard,
+    internal,
     utils::{self, ExtractDbConn, json},
 };
 
@@ -470,7 +471,7 @@ async fn edition(
                 .one(&conn)
                 .await
                 .with_api_err()?
-                .expect("Main map author must exist");
+                .ok_or_else(|| internal!("Main map author must exist"))?;
 
             let AuthorWithPlayerTime {
                 main_author,

@@ -8,6 +8,7 @@ use tracing::Level;
 use crate::{
     AccessTokenErr, RecordsErrorKind, RecordsResult, RecordsResultExt as _, Res,
     auth::{self, ApiAvailable, Message, TIMEOUT, WEB_TOKEN_SESS_KEY, WebToken},
+    internal,
     utils::json,
 };
 
@@ -113,12 +114,13 @@ pub async fn get_token(
     match test_access_token(&client, &body.login, &code, &body.redirect_uri).await {
         Ok(true) => (),
         Ok(false) => {
-            tx.send(Message::InvalidMPCode).expect(err_msg);
+            tx.send(Message::InvalidMPCode)
+                .map_err(|_| internal!("{err_msg}"))?;
             return Err(RecordsErrorKind::InvalidMPCode);
         }
         Err(RecordsErrorKind::AccessTokenErr(err)) => {
             tx.send(Message::AccessTokenErr(err.clone()))
-                .expect(err_msg);
+                .map_err(|_| internal!("{err_msg}"))?;
             return Err(RecordsErrorKind::AccessTokenErr(err));
         }
         Err(e) => return Err(e),
@@ -132,7 +134,7 @@ pub async fn get_token(
         login: body.login,
         token: web_token,
     }))
-    .expect(err_msg);
+    .map_err(|_| internal!("{err_msg}"))?;
 
     json(super::GetTokenResponse { token: mp_token })
 }
@@ -152,7 +154,7 @@ pub async fn post_give_token(
 
     session
         .insert(WEB_TOKEN_SESS_KEY, web_token)
-        .expect("unable to insert session web token");
+        .map_err(|err| internal!("unable to insert session web token: {err}"))?;
 
     Ok(HttpResponse::Ok().finish())
 }

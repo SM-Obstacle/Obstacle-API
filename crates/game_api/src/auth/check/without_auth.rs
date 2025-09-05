@@ -1,7 +1,10 @@
+use entity::role;
 use records_lib::RedisConnection;
-use sea_orm::ConnectionTrait;
+use sea_orm::{ConnectionTrait, EntityTrait, QuerySelect};
 
-use crate::{RecordsErrorKind, RecordsResult, auth::privilege, http::player};
+use crate::{
+    RecordsErrorKind, RecordsResult, RecordsResultExt, auth::privilege, http::player, internal,
+};
 
 pub async fn check_auth_for<C: ConnectionTrait>(
     conn: &C,
@@ -16,7 +19,16 @@ pub async fn check_auth_for<C: ConnectionTrait>(
         return Err(RecordsErrorKind::BannedPlayer(ban));
     }
 
-    if player.role & required == required {
+    let privileges: privilege::Flags = role::Entity::find_by_id(player.role)
+        .select_only()
+        .column(role::Column::Privileges)
+        .into_tuple()
+        .one(conn)
+        .await
+        .with_api_err()?
+        .ok_or_else(|| internal!("Role {} should exist", player.role))?;
+
+    if privileges & required == required {
         Ok(player.id)
     } else {
         Err(RecordsErrorKind::Unauthorized)
