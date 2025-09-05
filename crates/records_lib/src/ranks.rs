@@ -87,7 +87,7 @@ use tokio::sync::{Mutex, Semaphore};
 /// If many tasks wrap their procedure for the same ID, it is guaranteed that only one of them
 /// will execute at a time, implying the other tasks to wait before executing the next one.
 ///
-/// Therefore, this function might await asynchronously, with a timeout of 10 seconds.
+/// Therefore, this function may await for up to 10 seconds.
 pub async fn lock_within<F, Fut, R>(map_id: u32, f: F) -> R
 where
     F: FnOnce() -> Fut,
