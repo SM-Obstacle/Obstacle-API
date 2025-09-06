@@ -14,7 +14,7 @@ use records_lib::{
     Database, RedisConnection,
     opt_event::OptEvent,
     ranks::{get_rank, update_leaderboard},
-    redis_key::alone_map_key,
+    redis_key::map_key,
     transaction,
 };
 use sea_orm::{
@@ -54,7 +54,7 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
     rank_sort_by: Option<SortState>,
     date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<Vec<RankedRecord>> {
-    let key = alone_map_key(map_id);
+    let key = map_key(map_id, event);
 
     update_leaderboard(conn, redis_conn, map_id, event).await?;
 

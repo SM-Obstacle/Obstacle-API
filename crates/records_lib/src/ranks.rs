@@ -63,12 +63,13 @@ use crate::{
     redis_key::{MapKey, map_key},
 };
 use deadpool_redis::redis::{self, AsyncCommands};
-use entity::{event_edition_records, records};
+use entity::{event_edition, event_edition_records, records};
 use futures::TryStreamExt;
 use itertools::{EitherOrBoth, Itertools};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, EntityTrait, Order, PaginatorTrait, QueryFilter as _,
-    QueryOrder, QuerySelect, QueryTrait, SelectModel, Selector, StreamTrait, sea_query::expr,
+    ColumnTrait as _, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter as _, QueryOrder,
+    QuerySelect, RelationTrait as _, SelectModel, Selector, StreamTrait, prelude::Expr,
+    sea_query::expr,
 };
 
 use std::{
@@ -219,22 +220,38 @@ fn get_mariadb_lb_query(
     map_id: u32,
     event: OptEvent<'_>,
 ) -> Selector<SelectModel<DbLeaderboardItem>> {
-    records::Entity::find()
+    let query = records::Entity::find()
         .filter(records::Column::MapId.eq(map_id))
         .group_by(records::Column::RecordPlayerId)
-        .order_by(records::Column::Time, Order::Asc)
-        .order_by(records::Column::RecordPlayerId, Order::Asc)
-        .apply_if(event.event, |builder, (ev, ed)| {
-            builder.reverse_join(event_edition_records::Entity).filter(
-                event_edition_records::Column::EventId
-                    .eq(ev.id)
-                    .and(event_edition_records::Column::EditionId.eq(ed.id)),
-            )
-        })
+        .order_by_asc(Expr::col("time"))
+        .order_by_asc(records::Column::RecordPlayerId)
         .select_only()
         .column(records::Column::RecordPlayerId)
-        .column_as(expr::Expr::col(records::Column::Time).min(), "time")
-        .into_model()
+        .column_as(expr::Expr::col(records::Column::Time).min(), "time");
+
+    let query = match event.event {
+        Some((ev, ed)) => query.reverse_join(event_edition_records::Entity).filter(
+            event_edition_records::Column::EventId
+                .eq(ev.id)
+                .and(event_edition_records::Column::EditionId.eq(ed.id)),
+        ),
+        None => query
+            .join_rev(
+                sea_orm::JoinType::LeftJoin,
+                event_edition_records::Relation::Records.def(),
+            )
+            .join(
+                sea_orm::JoinType::LeftJoin,
+                event_edition_records::Relation::EventEdition.def(),
+            )
+            .filter(
+                event_edition::Column::Id
+                    .is_null()
+                    .or(event_edition::Column::NonOriginalMaps.ne(0)),
+            ),
+    };
+
+    query.into_model()
 }
 
 async fn force_update_locked<C: ConnectionTrait + StreamTrait>(
@@ -312,7 +329,6 @@ pub async fn get_rank<C: ConnectionTrait + StreamTrait>(
                 other.filter(|t| *t < time)
             }
         };
-        
 
         match get_rank_impl(redis_conn, &key, time).await? {
             Some(r) => {
@@ -362,16 +378,16 @@ async fn get_rank_failed<C: ConnectionTrait>(
     for row in lb {
         match row {
             EitherOrBoth::Both(
-                (rpid, rtime),
+                (redis_player_id, redis_time),
                 DbLeaderboardItem {
-                    record_player_id: mpid,
-                    time: mtime,
+                    record_player_id: sql_player_id,
+                    time: sql_time,
                 },
             ) => {
-                let color = if rpid != mpid || rtime != mtime {
+                let color = if redis_player_id != sql_player_id || redis_time != sql_time {
                     // Conflict
                     "Fy"
-                } else if player_id == rpid && player_id == mpid {
+                } else if player_id == redis_player_id && player_id == sql_player_id {
                     // Currently selected player
                     "Fb"
                 } else {
@@ -379,27 +395,27 @@ async fn get_rank_failed<C: ConnectionTrait>(
                 };
 
                 table.add_row(prettytable::Row::new(vec![
-                    prettytable::Cell::from(&rpid).style_spec(color),
-                    prettytable::Cell::from(&rtime).style_spec(color),
-                    prettytable::Cell::from(&mpid).style_spec(color),
-                    prettytable::Cell::from(&mtime).style_spec(color),
+                    prettytable::Cell::from(&redis_player_id).style_spec(color),
+                    prettytable::Cell::from(&redis_time).style_spec(color),
+                    prettytable::Cell::from(&sql_player_id).style_spec(color),
+                    prettytable::Cell::from(&sql_time).style_spec(color),
                 ]));
             }
-            EitherOrBoth::Left((rpid, rtime)) => {
-                table.add_row(prettytable::row![Fy => rpid, rtime, "", ""]);
+            EitherOrBoth::Left((redis_player_id, redis_time)) => {
+                table.add_row(prettytable::row![Fy => redis_player_id, redis_time, "", ""]);
             }
             EitherOrBoth::Right(DbLeaderboardItem {
-                record_player_id: mpid,
-                time: mtime,
+                record_player_id: sql_player_id,
+                time: sql_time,
             }) => {
-                table.add_row(prettytable::row![Fy => "", "", mpid, mtime]);
+                table.add_row(prettytable::row![Fy => "", "", sql_player_id, sql_time]);
             }
         }
     }
 
     #[cfg(feature = "tracing")]
     tracing::error!(
-        "missing player rank ({player_id} on map {map_id} with time {time}); tested time: {tested_time:?}\n{table}"
+        "missing player rank ({player_id} on map {map_id} ({key}) with time {time}); tested time: {tested_time:?}\n{table}"
     );
 
     Ok(RecordsError::Internal(

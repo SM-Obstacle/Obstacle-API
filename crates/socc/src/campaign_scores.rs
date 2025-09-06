@@ -1,4 +1,4 @@
-use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::redis::{self, AsyncCommands};
 use records_lib::{
     Database, RedisConnection, event,
     mappack::{self, AnyMappackId},
@@ -34,11 +34,16 @@ where
 
             let mappack = AnyMappackId::Event(&event.event, &edition);
 
-            let _: () = redis_conn.del(mappack_key(mappack)).await?;
+            let mut pipe = redis::pipe();
+            let pipe = pipe.atomic();
+
+            pipe.del(mappack_key(mappack));
 
             for map in event::event_edition_maps(conn, event.event.id, edition.id).await? {
-                let _: () = redis_conn.sadd(mappack_key(mappack), map.game_id).await?;
+                pipe.sadd(mappack_key(mappack), map.game_id);
             }
+
+            pipe.exec_async(redis_conn).await?;
 
             update_mappack(
                 conn,
@@ -69,6 +74,8 @@ pub async fn update(db: Database) -> anyhow::Result<()> {
         )
         .await?;
     }
+
+    tracing::info!("End");
 
     Ok(())
 }

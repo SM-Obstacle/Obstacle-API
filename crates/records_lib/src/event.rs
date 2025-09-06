@@ -127,9 +127,9 @@ pub async fn event_edition_maps<C: ConnectionTrait>(
     edition_id: u32,
 ) -> RecordsResult<Vec<maps::Model>> {
     let result = maps::Entity::find()
-        .join(
+        .join_rev(
             sea_orm::JoinType::InnerJoin,
-            event_edition_maps::Relation::OriginalMaps.def(),
+            event_edition_maps::Relation::Maps.def(),
         )
         .filter(
             event_edition_maps::Column::EventId

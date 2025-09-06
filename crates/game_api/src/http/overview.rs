@@ -1,15 +1,14 @@
-use crate::{RecordsResult, RecordsResultExt, internal};
-use actix_web::web::Query;
-use entity::{event_edition_records, maps, records};
+use crate::{RecordsResult, RecordsResultExt};
+use actix_web::web;
+use entity::{global_event_records, global_records, maps, records};
 use records_lib::leaderboard::{self, Row};
 use records_lib::opt_event::OptEvent;
 use records_lib::ranks::update_leaderboard;
 use records_lib::{RedisConnection, ranks};
 use records_lib::{player, transaction};
-use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, QueryTrait,
-    StreamTrait, TransactionTrait,
-};
+use sea_orm::prelude::Expr;
+use sea_orm::sea_query::Query;
+use sea_orm::{ConnectionTrait, StatementBuilder, StreamTrait, TransactionTrait};
 
 #[derive(serde::Deserialize)]
 pub struct OverviewQuery {
@@ -19,7 +18,7 @@ pub struct OverviewQuery {
     pub(crate) map_uid: String,
 }
 
-pub type OverviewReq = Query<OverviewQuery>;
+pub type OverviewReq = web::Query<OverviewQuery>;
 
 async fn extend_range<C: ConnectionTrait + StreamTrait>(
     conn: &C,
@@ -71,26 +70,40 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
 
     let player_rank = match player {
         Some(ref p) => {
-            let min_time = records::Entity::find()
-                .filter(
-                    records::Column::RecordPlayerId
+            let mut query = Query::select();
+            query
+                .and_where(
+                    Expr::col(("r", records::Column::RecordPlayerId))
                         .eq(p.id)
-                        .and(records::Column::MapId.eq(map.id)),
+                        .and(Expr::col(("r", records::Column::MapId)).eq(map.id)),
                 )
-                .apply_if(event.event, |query, (ev, ed)| {
-                    query.inner_join(event_edition_records::Entity).filter(
-                        event_edition_records::Column::EventId
+                .expr(Expr::col(("r", records::Column::Time)));
+
+            match event.event {
+                Some((ev, ed)) => {
+                    query.from_as(global_event_records::Entity, "r").and_where(
+                        Expr::col(("r", global_event_records::Column::EventId))
                             .eq(ev.id)
-                            .and(event_edition_records::Column::EditionId.eq(ed.id)),
-                    )
-                })
-                .select_only()
-                .column_as(records::Column::Time.min(), "min_time")
-                .into_tuple()
-                .one(conn)
+                            .and(
+                                Expr::col(("r", global_event_records::Column::EditionId)).eq(ed.id),
+                            ),
+                    );
+                }
+                None => {
+                    query.from_as(global_records::Entity, "r");
+                }
+            }
+
+            let stmt = StatementBuilder::build(&query, &conn.get_database_backend());
+            let min_time = conn
+                .query_one(stmt)
                 .await
-                .with_api_err()?
-                .ok_or_else(|| internal!("Query should return at least one row"))?;
+                .and_then(|result_opt| {
+                    result_opt
+                        .map(|result| result.try_get_by_index::<i32>(0))
+                        .transpose()
+                })
+                .with_api_err()?;
 
             match min_time {
                 Some(time) => {

@@ -5,14 +5,15 @@ use std::{fmt, time::SystemTime};
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
 use entity::{event, event_edition, global_event_records, global_records, players, records};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, EntityTrait as _, FromQueryResult, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, StreamTrait, TransactionTrait,
+    ConnectionTrait, FromQueryResult, Order, StatementBuilder, StreamTrait, TransactionTrait,
+    prelude::Expr,
+    sea_query::{Asterisk, Query},
 };
 
 use crate::{
     RedisConnection,
     error::RecordsResult,
-    must,
+    internal, must,
     opt_event::OptEvent,
     ranks::get_rank,
     redis_key::{
@@ -137,12 +138,6 @@ impl AnyMappackId<'_> {
 
 /// Calculates the scores of the players on the provided mappack, and save the results
 /// on the Redis database.
-///
-/// ## Parameters
-///
-/// * `mappack`: the mappack.
-/// * `mysql_conn`: a connection to the MySQL/MariaDB database, to fetch the records.
-/// * `redis_conn`: a connection to the Redis database, to store the scores.
 #[cfg_attr(
     feature = "tracing",
     tracing::instrument(skip(conn, redis_conn), fields(mappack = %mappack.mappack_id()), err)
@@ -310,11 +305,12 @@ async fn save(
     }
 
     // Set the time of the update
-    if let Ok(time) = SystemTime::UNIX_EPOCH.elapsed() {
-        let _: () = redis_conn
-            .set(mappack_time_key(mappack), time.as_secs())
-            .await?;
-    }
+    let update_time = SystemTime::UNIX_EPOCH
+        .elapsed()
+        .map_err(|e| internal!("couldn't update time of mappack: {e}"))?;
+    let _: () = redis_conn
+        .set(mappack_time_key(mappack), update_time.as_secs())
+        .await?;
 
     // Update the expiration time of the global keys
     if let Some(ttl) = mappack.get_ttl() {
@@ -372,32 +368,42 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
     let mut scores = Vec::<PlayerScore>::with_capacity(mappack.len());
 
     for (i, map) in mappack.iter().enumerate() {
-        let res: Vec<RecordRow> = match event.event {
-            Some((ev, ed)) => global_event_records::Entity::find()
-                .inner_join(players::Entity)
-                .filter(
-                    global_event_records::Column::MapId
-                        .eq(map.id)
-                        .and(global_event_records::Column::EventId.eq(ev.id))
-                        .and(global_event_records::Column::EditionId.eq(ed.id)),
-                )
-                .order_by_asc(global_event_records::Column::Time)
-                .column_as(players::Column::Id, "player_id2")
-                .column_as(players::Column::Login, "player_login")
-                .column_as(players::Column::Name, "player_name")
-                .into_model()
-                .all(conn),
-            None => global_records::Entity::find()
-                .inner_join(players::Entity)
-                .filter(global_records::Column::MapId.eq(map.id))
-                .order_by_asc(global_records::Column::Time)
-                .column_as(players::Column::Id, "player_id2")
-                .column_as(players::Column::Login, "player_login")
-                .column_as(players::Column::Name, "player_name")
-                .into_model()
-                .all(conn),
+        let mut query = Query::select();
+        query
+            .expr(Expr::col(("r", Asterisk)))
+            .expr_as(Expr::col(players::Column::Id), "player_id2")
+            .expr_as(Expr::col(players::Column::Login), "player_login")
+            .expr_as(Expr::col(players::Column::Name), "player_name")
+            .join_as(
+                sea_orm::JoinType::InnerJoin,
+                players::Entity,
+                "p",
+                Expr::col(("p", players::Column::Id))
+                    .eq(Expr::col(("r", records::Column::RecordPlayerId))),
+            )
+            .and_where(Expr::col(("r", records::Column::MapId)).eq(map.id))
+            .order_by_expr(Expr::col(("r", records::Column::Time)).into(), Order::Asc);
+
+        match event.event {
+            Some((ev, ed)) => {
+                query.from_as(global_event_records::Entity, "r").and_where(
+                    Expr::col(("r", global_event_records::Column::EventId))
+                        .eq(ev.id)
+                        .and(Expr::col(("r", global_event_records::Column::EditionId)).eq(ed.id)),
+                );
+            }
+            None => {
+                query.from_as(global_records::Entity, "r");
+            }
         }
-        .await?;
+
+        let stmt = StatementBuilder::build(&query, &conn.get_database_backend());
+        let res = conn
+            .query_all(stmt)
+            .await?
+            .into_iter()
+            .map(|result| RecordRow::from_query_result(&result, ""))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut records = Vec::with_capacity(res.len());
 

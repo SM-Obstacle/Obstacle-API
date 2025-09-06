@@ -11,7 +11,7 @@ use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, DbErr, EntityTrait, FromQueryResult, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, RelationTrait as _, StatementBuilder,
     prelude::Expr,
-    sea_query::{ExprTrait as _, Func, Query},
+    sea_query::{ExprTrait as _, Func, IntoCondition, Query},
 };
 
 use records_lib::{
@@ -20,7 +20,7 @@ use records_lib::{
     mappack::AnyMappackId,
     must,
     opt_event::OptEvent,
-    redis_key::{mappack_map_last_rank, mappack_player_ranks_key},
+    redis_key::{mappack_map_last_rank, mappack_player_ranks_key, mappack_time_key},
 };
 
 use crate::{RecordsResult, RecordsResultExt, http::event::HasExpireTime as _, internal};
@@ -374,12 +374,16 @@ impl EventEditionPlayerCategorizedRank<'_> {
             .join(
                 sea_orm::JoinType::InnerJoin,
                 maps::Entity,
-                Expr::col(maps::Column::Id).eq(Expr::col(("r", records::Column::MapId))),
+                Expr::col((maps::Entity, maps::Column::Id))
+                    .eq(Expr::col(("r", records::Column::MapId))),
             )
             .join(
                 sea_orm::JoinType::InnerJoin,
                 event_edition_maps::Entity,
-                Expr::col(maps::Column::Id).equals(event_edition_maps::Column::MapId),
+                Expr::col((maps::Entity, maps::Column::Id)).eq(Expr::col((
+                    event_edition_maps::Entity,
+                    event_edition_maps::Column::MapId,
+                ))),
             )
             .and_where(
                 event_edition_maps::Column::EventId
@@ -398,16 +402,19 @@ impl EventEditionPlayerCategorizedRank<'_> {
                 .join(
                     sea_orm::JoinType::InnerJoin,
                     event_category::Entity,
-                    Expr::col(event_category::Column::Id)
+                    Expr::col((event_category::Entity, event_category::Column::Id))
                         .eq(Expr::col(event_edition_maps::Column::CategoryId)),
                 )
-                .and_where(event_category::Column::Id.eq(self.category.id));
+                .and_where(
+                    Expr::col((event_category::Entity, event_category::Column::Id))
+                        .eq(self.category.id),
+                );
         }
 
         if self.player.edition.inner.is_transparent != 0 {
-            select.from(global_records::Entity);
+            select.from_as(global_records::Entity, "r");
         } else {
-            select.from(global_event_records::Entity);
+            select.from_as(global_event_records::Entity, "r");
         }
 
         let stmt = StatementBuilder::build(&*select, &conn.get_database_backend());
@@ -508,12 +515,24 @@ impl EventEditionPlayer<'_> {
     ) -> async_graphql::Result<Vec<EventEditionMapExt<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
+        let player_id = self.player.id;
+
         let mut unfinished_maps = maps::Entity::find()
-            .join(
+            .join_rev(
                 sea_orm::JoinType::InnerJoin,
                 event_edition_maps::Relation::Maps.def(),
             )
-            .left_join(records::Entity)
+            .join(
+                sea_orm::JoinType::LeftJoin,
+                maps::Relation::Records
+                    .def()
+                    .on_condition(move |_left, right| {
+                        Expr::col((right, records::Column::RecordPlayerId))
+                            .eq(player_id)
+                            .into_condition()
+                    })
+                    .condition_type(sea_orm::sea_query::ConditionType::All),
+            )
             .join(
                 sea_orm::JoinType::LeftJoin,
                 records::Relation::EventEditionRecords.def(),
@@ -522,7 +541,7 @@ impl EventEditionPlayer<'_> {
                 event_edition_maps::Column::EventId
                     .eq(self.edition.inner.event_id)
                     .and(event_edition_maps::Column::EditionId.eq(self.edition.inner.id))
-                    .and(records::Column::RecordPlayerId.eq(self.player.id)),
+                    .and(records::Column::RecordId.is_null()),
             )
             .stream(conn)
             .await?;
@@ -624,13 +643,20 @@ impl EventEdition<'_> {
         self.inner.id
     }
 
-    async fn mappack(&self) -> Option<Mappack> {
-        Some(Mappack {
-            mappack_id: AnyMappackId::Event(&self.event.inner, &self.inner)
-                .mappack_id()
-                .to_string(),
+    async fn mappack(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<Mappack>> {
+        let redis_pool = ctx.data_unchecked::<RedisPool>();
+        let mut redis_conn = redis_pool.get().await?;
+
+        let mappack_id = AnyMappackId::Event(&self.event.inner, &self.inner);
+        let last_update_time: Option<i64> = redis_conn.get(mappack_time_key(mappack_id)).await?;
+
+        Ok(last_update_time.map(|_| Mappack {
+            mappack_id: mappack_id.mappack_id().to_string(),
             event_has_expired: self.inner.has_expired(),
-        })
+        }))
     }
 
     async fn admins(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<Player>> {
