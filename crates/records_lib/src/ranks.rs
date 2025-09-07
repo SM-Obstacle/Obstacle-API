@@ -63,13 +63,14 @@ use crate::{
     redis_key::{MapKey, map_key},
 };
 use deadpool_redis::redis::{self, AsyncCommands};
-use entity::{event_edition, event_edition_records, records};
-use futures::TryStreamExt;
+use entity::{event_edition_records, global_event_records, global_records, records};
+use futures::{StreamExt, TryStreamExt};
 use itertools::{EitherOrBoth, Itertools};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter as _, QueryOrder,
-    QuerySelect, RelationTrait as _, SelectModel, Selector, StreamTrait, prelude::Expr,
-    sea_query::expr,
+    ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, Order, PaginatorTrait,
+    QueryFilter as _, QuerySelect, StreamTrait,
+    prelude::Expr,
+    sea_query::{Query, SelectStatement},
 };
 
 use std::{
@@ -216,42 +217,32 @@ struct DbLeaderboardItem {
     time: i32,
 }
 
-fn get_mariadb_lb_query(
-    map_id: u32,
-    event: OptEvent<'_>,
-) -> Selector<SelectModel<DbLeaderboardItem>> {
-    let query = records::Entity::find()
-        .filter(records::Column::MapId.eq(map_id))
-        .group_by(records::Column::RecordPlayerId)
-        .order_by_asc(Expr::col("time"))
-        .order_by_asc(records::Column::RecordPlayerId)
-        .select_only()
-        .column(records::Column::RecordPlayerId)
-        .column_as(expr::Expr::col(records::Column::Time).min(), "time");
+fn get_mariadb_lb_query(map_id: u32, event: OptEvent<'_>) -> SelectStatement {
+    let mut query = Query::select();
+    query
+        .order_by_expr(Expr::col(("r", records::Column::Time)).into(), Order::Asc)
+        .order_by_expr(
+            Expr::col(("r", records::Column::RecordPlayerId)).into(),
+            Order::Asc,
+        )
+        .expr(Expr::col(("r", records::Column::RecordPlayerId)))
+        .expr(Expr::col(("r", records::Column::Time)))
+        .and_where(Expr::col(("r", records::Column::MapId)).eq(map_id));
 
-    let query = match event.event {
-        Some((ev, ed)) => query.reverse_join(event_edition_records::Entity).filter(
-            event_edition_records::Column::EventId
-                .eq(ev.id)
-                .and(event_edition_records::Column::EditionId.eq(ed.id)),
-        ),
-        None => query
-            .join_rev(
-                sea_orm::JoinType::LeftJoin,
-                event_edition_records::Relation::Records.def(),
-            )
-            .join(
-                sea_orm::JoinType::LeftJoin,
-                event_edition_records::Relation::EventEdition.def(),
-            )
-            .filter(
-                event_edition::Column::Id
-                    .is_null()
-                    .or(event_edition::Column::NonOriginalMaps.ne(0)),
-            ),
-    };
+    match event.event {
+        Some((ev, ed)) => {
+            query.from_as(global_event_records::Entity, "r").and_where(
+                Expr::col(("r", global_event_records::Column::EventId))
+                    .eq(ev.id)
+                    .and(Expr::col(("r", global_event_records::Column::EditionId)).eq(ed.id)),
+            );
+        }
+        None => {
+            query.from_as(global_records::Entity, "r");
+        }
+    }
 
-    query.into_model()
+    query
 }
 
 async fn force_update_locked<C: ConnectionTrait + StreamTrait>(
@@ -267,9 +258,13 @@ async fn force_update_locked<C: ConnectionTrait + StreamTrait>(
 
     pipe.del(&key);
 
-    get_mariadb_lb_query(map_id, event)
-        .stream(conn)
+    let stmt = conn
+        .get_database_backend()
+        .build(&get_mariadb_lb_query(map_id, event));
+
+    conn.stream(stmt)
         .await?
+        .map(|res| res.and_then(|result| DbLeaderboardItem::from_query_result(&result, "")))
         .map_ok(|item| {
             pipe.zadd(&key, item.record_player_id, item.time);
         })
@@ -359,7 +354,15 @@ async fn get_rank_failed<C: ConnectionTrait>(
 ) -> RecordsResult<RecordsError> {
     let key = &map_key(map_id, event);
     let redis_lb: Vec<i64> = redis_conn.zrange_withscores(key, 0, -1).await?;
-    let mariadb_lb = get_mariadb_lb_query(map_id, event).all(conn).await?;
+    let mariadb_lb = conn
+        .get_database_backend()
+        .build(&get_mariadb_lb_query(map_id, event));
+    let mariadb_lb = conn
+        .query_all(mariadb_lb)
+        .await?
+        .into_iter()
+        .map(|result| DbLeaderboardItem::from_query_result(&result, ""))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let lb = redis_lb
         .as_chunks()
