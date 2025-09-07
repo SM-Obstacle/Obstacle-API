@@ -1,13 +1,15 @@
 mod base;
 
-use actix_http::StatusCode;
 use actix_web::test;
-use game_api_lib::TracedError;
-use records_lib::Database;
-use sea_orm::DbBackend;
 
 #[tokio::test]
+#[cfg(feature = "test")]
 async fn test_not_found() -> anyhow::Result<()> {
+    use actix_http::StatusCode;
+    use game_api_lib::TracedError;
+    use records_lib::Database;
+    use sea_orm::DbBackend;
+
     let env = base::get_env()?;
     let db = Database::from_mock_db(DbBackend::MySql, env.db_env.redis_url.redis_url)?;
     let app = base::get_app(db).await;

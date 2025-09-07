@@ -48,14 +48,14 @@ async fn insert(
 ) -> RecordsResult<impl Responder> {
     let map = records_lib::map::get_map_from_uid(&conn, &body.map_uid).await?;
 
-    if let Some(map) = map
-        && map.cps_number.is_none()
-    {
-        let map = maps::ActiveModel {
-            cps_number: Set(Some(body.cps_number)),
-            ..From::from(map)
-        };
-        maps::Entity::update(map).exec(&conn).await.with_api_err()?;
+    if let Some(map) = map {
+        if map.cps_number.is_none() {
+            let map = maps::ActiveModel {
+                cps_number: Set(Some(body.cps_number)),
+                ..From::from(map)
+            };
+            maps::Entity::update(map).exec(&conn).await.with_api_err()?;
+        }
     } else {
         let player = player::get_or_insert(&conn, &body.author).await?;
 

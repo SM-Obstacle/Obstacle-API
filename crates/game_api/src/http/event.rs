@@ -576,7 +576,7 @@ async fn edition(
                             event_edition_maps::Entity,
                             "eem",
                             Expr::col(("gr", global_records::Column::MapId))
-                                .eq(Expr::col(("eem", maps::Column::Id))),
+                                .eq(Expr::col(("eem", event_edition_maps::Column::MapId))),
                         )
                         // TODO: try to remove this join that is similar to the one in the above branch
                         .join_as(
