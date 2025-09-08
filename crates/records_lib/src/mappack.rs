@@ -307,7 +307,7 @@ async fn save(
     // Set the time of the update
     let update_time = SystemTime::UNIX_EPOCH
         .elapsed()
-        .map_err(|e| internal!("couldn't update time of mappack: {e}"))?;
+        .map_err(|e| internal!("Failed to get elapsed time since UNIX_EPOCH for mappack update: {e}"))?;
     let _: () = redis_conn
         .set(mappack_time_key(mappack), update_time.as_secs())
         .await?;
