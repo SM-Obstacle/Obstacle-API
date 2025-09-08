@@ -36,7 +36,7 @@ pub enum RecordsError {
     /// An internal error.
     #[error("internal error: {0}")]
     Internal(String),
-    /// An masked internal error.
+    /// A masked internal error.
     #[error("internal error")]
     MaskedInternal,
     /// An error from the database.
