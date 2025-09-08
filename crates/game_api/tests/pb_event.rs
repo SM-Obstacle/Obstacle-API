@@ -59,7 +59,7 @@ async fn diff_pb_original_map_event_map() -> anyhow::Result<()> {
         record_id: Set(1),
         record_player_id: Set(1),
         map_id: Set(1),
-        time: Set(10000),
+        time: Set(7800),
         flags: Set(682),
         record_date: Set(chrono::Utc::now().naive_utc()),
         respawn_count: Set(7),
@@ -70,14 +70,14 @@ async fn diff_pb_original_map_event_map() -> anyhow::Result<()> {
         record_id: Set(1),
         cp_num: Set(0),
         map_id: Set(1),
-        time: Set(10000),
+        time: Set(7800),
     };
 
     let record_event_version = records::ActiveModel {
         record_id: Set(2),
         record_player_id: Set(1),
         map_id: Set(1),
-        time: Set(7800),
+        time: Set(10000),
         flags: Set(682),
         record_date: Set(chrono::Utc::now().naive_utc()),
         respawn_count: Set(4),
@@ -88,7 +88,7 @@ async fn diff_pb_original_map_event_map() -> anyhow::Result<()> {
         record_id: Set(2),
         cp_num: Set(0),
         map_id: Set(1),
-        time: Set(7800),
+        time: Set(10000),
     };
 
     let edition_record = event_edition_records::ActiveModel {
@@ -133,7 +133,7 @@ async fn diff_pb_original_map_event_map() -> anyhow::Result<()> {
         assert_eq!(body.rs_count, 4);
         itertools::assert_equal(
             body.cps_times.into_iter().map(|cp| cp.time),
-            iter::once(7800),
+            iter::once(10000),
         );
 
         let normal_req = test::TestRequest::get()
@@ -150,7 +150,7 @@ async fn diff_pb_original_map_event_map() -> anyhow::Result<()> {
         assert_eq!(body.rs_count, 7);
         itertools::assert_equal(
             body.cps_times.into_iter().map(|cp| cp.time),
-            iter::once(10000),
+            iter::once(7800),
         );
 
         anyhow::Ok(())
