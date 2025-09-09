@@ -12,11 +12,8 @@ use entity::{maps, player_rating, players, rating, rating_kind};
 use futures::{StreamExt, future::try_join_all};
 use records_lib::Database;
 use sea_orm::{
-    ActiveValue::Set,
-    ColumnTrait as _, ConnectionTrait, EntityTrait as _, FromQueryResult, PaginatorTrait,
-    QueryFilter, QuerySelect, StatementBuilder,
-    prelude::Expr,
-    sea_query::{Func, Query},
+    ActiveValue::Set, ColumnTrait as _, EntityTrait as _, FromQueryResult, PaginatorTrait,
+    QueryFilter, QuerySelect, prelude::Expr, sea_query::Func,
 };
 use serde::{Deserialize, Serialize};
 
@@ -424,35 +421,22 @@ pub async fn rate(
                 .with_api_err()?;
 
             if count > 0 {
-                let mut update = Query::update();
-                let update = update
-                    .table(rating::Entity)
-                    .value(rating::Column::RatingDate, Func::cust("SYSDATE"))
-                    .and_where(
-                        rating::Column::MapId
-                            .eq(map_id)
-                            .and(rating::Column::PlayerId.eq(player_id)),
-                    );
-                let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
-                conn.execute(stmt).await.with_api_err()?;
+                let date = chrono::Utc::now().naive_utc();
 
-                rating::Entity::find()
-                    .filter(
-                        rating::Column::PlayerId
-                            .eq(player_id)
-                            .and(rating::Column::MapId.eq(map_id)),
-                    )
-                    .select_only()
-                    .column(rating::Column::RatingDate)
-                    .into_tuple()
-                    .one(&conn)
-                    .await
-                    .with_api_err()?
-                    .ok_or_else(|| {
-                        internal!(
-                            "Rating of player {player_id} on {map_id} should exist in database"
-                        )
-                    })?
+                rating::Entity::update(rating::ActiveModel {
+                    rating_date: Set(date),
+                    ..Default::default()
+                })
+                .filter(
+                    rating::Column::MapId
+                        .eq(map_id)
+                        .and(rating::Column::PlayerId.eq(player_id)),
+                )
+                .exec(&conn)
+                .await
+                .with_api_err()?;
+
+                date
             } else {
                 let new_rating = rating::ActiveModel {
                     player_id: Set(player_id),
@@ -484,18 +468,19 @@ pub async fn rate(
                 .with_api_err()?;
 
             if count > 0 {
-                let mut update = Query::update();
-                let update = update
-                    .table(player_rating::Entity)
-                    .value(player_rating::Column::Rating, rate.rating)
-                    .and_where(
-                        player_rating::Column::MapId
-                            .eq(map_id)
-                            .and(player_rating::Column::PlayerId.eq(player_id))
-                            .and(player_rating::Column::Kind.eq(rate.kind)),
-                    );
-                let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
-                conn.execute(stmt).await.with_api_err()?;
+                player_rating::Entity::update(player_rating::ActiveModel {
+                    rating: Set(rate.rating),
+                    ..Default::default()
+                })
+                .filter(
+                    player_rating::Column::MapId
+                        .eq(map_id)
+                        .and(player_rating::Column::PlayerId.eq(player_id))
+                        .and(player_rating::Column::Kind.eq(rate.kind)),
+                )
+                .exec(&conn)
+                .await
+                .with_api_err()?;
             } else {
                 let new_player_rating = player_rating::ActiveModel {
                     player_id: Set(player_id),

@@ -40,13 +40,13 @@ pub async fn del_note(
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<DelNoteBody>,
 ) -> RecordsResult<impl Responder> {
-    let mut update = Query::update();
-    let update = update
-        .table(players::Entity)
-        .value(players::Column::AdminsNote, None::<String>)
-        .and_where(players::Column::Login.eq(body.player_login));
-    let stmt = StatementBuilder::build(&*update, &conn.get_database_backend());
-    conn.execute(stmt).await.with_api_err()?;
+    players::Entity::update(players::ActiveModel {
+        admins_note: Set(None),
+        ..Default::default()
+    })
+    .filter(players::Column::Login.eq(body.player_login))
+    .exec(&conn)
+    .await?;
 
     Ok(HttpResponse::Ok().finish())
 }

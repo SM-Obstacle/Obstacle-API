@@ -17,10 +17,7 @@ use records_lib::{
     time::Time,
     transaction,
 };
-use sea_orm::{
-    ActiveValue::Set, ConnectionTrait, EntityTrait, StatementBuilder, TransactionTrait,
-    sea_query::Query,
-};
+use sea_orm::{ActiveValue::Set, ConnectionTrait, EntityTrait, QueryTrait, TransactionTrait};
 
 use crate::clear;
 
@@ -415,6 +412,11 @@ async fn populate_from_csv<C: ConnectionTrait>(
 
     let mx_maps = populate_mx_maps(client, conn, &rows).await?;
 
+    let mut pipe = redis::pipe();
+    let pipe = pipe.atomic();
+
+    let mut maps_to_insert = Vec::with_capacity(rows.len());
+
     for (row, i) in rows {
         let (mx_id, map) = match row.get_id().with_context(|| format!("Parsing row {i}"))? {
             Id::MapUid { map_uid } => (None, must::have_map(conn, map_uid).await?),
@@ -458,51 +460,40 @@ async fn populate_from_csv<C: ConnectionTrait>(
 
         check_medal_times_consistency(i, bronze_time, silver_time, gold_time, author_time);
 
-        let mut replace = Query::insert();
-        let replace = replace
-            .replace()
-            .columns([
-                event_edition_maps::Column::EventId,
-                event_edition_maps::Column::EditionId,
-                event_edition_maps::Column::MapId,
-                event_edition_maps::Column::CategoryId,
-                event_edition_maps::Column::MxId,
-                event_edition_maps::Column::Order,
-                event_edition_maps::Column::OriginalMapId,
-                event_edition_maps::Column::OriginalMxId,
-                event_edition_maps::Column::TransitiveSave,
-                event_edition_maps::Column::BronzeTime,
-                event_edition_maps::Column::SilverTime,
-                event_edition_maps::Column::GoldTime,
-                event_edition_maps::Column::AuthorTime,
-            ])
-            .values_panic([
-                event.id.into(),
-                edition.id.into(),
-                map.id.into(),
-                opt_category_id.into(),
-                mx_id.into(),
-                i.into(),
-                original_map.as_ref().map(|m| m.id).into(),
-                original_mx_id.into(),
-                row.transitive_save
-                    .unwrap_or(default_transitive_save)
-                    .into(),
-                bronze_time.into(),
-                silver_time.into(),
-                gold_time.into(),
-                author_time.into(),
-            ]);
-        let stmt = StatementBuilder::build(&*replace, &conn.get_database_backend());
-        conn.execute(stmt).await?;
+        let new_map = event_edition_maps::ActiveModel {
+            event_id: Set(event.id),
+            edition_id: Set(edition.id),
+            map_id: Set(map.id),
+            category_id: Set(opt_category_id),
+            mx_id: Set(mx_id),
+            order: Set(i as _),
+            original_map_id: Set(original_map.as_ref().map(|m| m.id)),
+            original_mx_id: Set(original_mx_id),
+            transitive_save: Set(Some(
+                if row.transitive_save.unwrap_or(default_transitive_save) {
+                    1
+                } else {
+                    0
+                },
+            )),
+            bronze_time: Set(bronze_time),
+            silver_time: Set(silver_time),
+            gold_time: Set(gold_time),
+            author_time: Set(author_time),
+        };
 
-        let _: () = redis_conn
-            .sadd(
-                mappack_key(AnyMappackId::Event(event, edition)),
-                map.game_id,
-            )
-            .await?;
+        maps_to_insert.push(new_map);
+
+        pipe.sadd(
+            mappack_key(AnyMappackId::Event(event, edition)),
+            map.game_id,
+        );
     }
+
+    let mut insert = event_edition_maps::Entity::insert_many(maps_to_insert);
+    insert.query().replace();
+    insert.exec(conn).await?;
+    let _: () = pipe.exec_async(redis_conn).await?;
 
     Ok(())
 }
@@ -529,6 +520,8 @@ async fn populate_from_mx_id<C: ConnectionTrait>(
 
     tracing::info!("Found {} map(s) in MX mappack with ID {mx_id}", maps.len());
 
+    let mut maps_to_insert = Vec::with_capacity(maps.len());
+
     for map in maps {
         let player = must::have_player(conn, &map.AuthorLogin).await?;
 
@@ -545,29 +538,20 @@ async fn populate_from_mx_id<C: ConnectionTrait>(
             }
         };
 
-        let mut replace = Query::insert();
-        let replace = replace
-            .replace()
-            .into_table(event_edition_maps::Entity)
-            .columns([
-                event_edition_maps::Column::EventId,
-                event_edition_maps::Column::EditionId,
-                event_edition_maps::Column::MapId,
-                event_edition_maps::Column::MxId,
-                event_edition_maps::Column::Order,
-                event_edition_maps::Column::OriginalMapId,
-            ])
-            .values_panic([
-                event.id.into(),
-                edition.id.into(),
-                map_id.into(),
-                map.MapID.into(),
-                0.into(),
-                None::<u32>.into(),
-            ]);
-        let stmt = StatementBuilder::build(&*replace, &conn.get_database_backend());
-        conn.execute(stmt).await?;
+        maps_to_insert.push(event_edition_maps::ActiveModel {
+            event_id: Set(event.id),
+            edition_id: Set(edition.id),
+            map_id: Set(map_id),
+            mx_id: Set(Some(map.MapID)),
+            order: Set(0),
+            original_map_id: Set(None),
+            ..Default::default()
+        });
     }
+
+    let mut insert = event_edition_maps::Entity::insert_many(maps_to_insert);
+    insert.query().replace();
+    insert.exec(conn).await?;
 
     Ok(())
 }
