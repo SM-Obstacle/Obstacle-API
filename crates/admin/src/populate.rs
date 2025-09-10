@@ -237,7 +237,7 @@ async fn run_populate<C: TransactionTrait + ConnectionTrait>(
                 transitive_save,
             } => {
                 populate_from_csv(
-                    conn,
+                    txn,
                     redis_conn,
                     client,
                     (event, edition),
@@ -247,7 +247,7 @@ async fn run_populate<C: TransactionTrait + ConnectionTrait>(
                 .await
             }
             PopulateKind::MxId { mx_id } => {
-                populate_from_mx_id(conn, client, event, edition, mx_id).await
+                populate_from_mx_id(txn, client, event, edition, mx_id).await
             }
         }
     })
@@ -266,7 +266,7 @@ async fn run_populate<C: TransactionTrait + ConnectionTrait>(
             if key_exists {
                 let _: () = redis_conn.rename(&saved_mappack_key, &event_key).await?;
             }
-            tracing::info!("Operation failed, restored old content");
+            tracing::error!("Operation failed, restored old content");
             Err(e)
         }
     }
