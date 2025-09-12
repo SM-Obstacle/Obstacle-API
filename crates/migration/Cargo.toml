@@ -9,10 +9,10 @@ name = "migration"
 path = "src/lib.rs"
 
 [dependencies]
-async-std = { version = "1", features = ["attributes", "tokio1"] }
 sea-orm = { workspace = true, features = ["sqlx", "sqlx-dep"] }
 entity = { path = "../entity" }
 sea-orm-migration = { version = "1.1.0", features = ["runtime-tokio"] }
+tokio = { workspace = true }
 
 [features]
 default = []

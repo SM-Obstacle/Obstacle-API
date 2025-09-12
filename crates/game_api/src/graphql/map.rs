@@ -9,7 +9,6 @@ use entity::{
     event_edition, event_edition_maps, global_event_records, global_records, maps, player_rating,
     records,
 };
-use futures::StreamExt;
 use records_lib::{
     Database, RedisConnection,
     opt_event::OptEvent,
@@ -219,27 +218,31 @@ impl Map {
         let conn = ctx.data_unchecked::<DbConn>();
         let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
 
-        let mut raw_editions = event_edition::Entity::find()
+        let raw_editions = event_edition::Entity::find()
             .reverse_join(event_edition_maps::Entity)
-            .filter(Expr::val(self.inner.id).is_in([
-                Expr::col(event_edition_maps::Column::MapId),
-                Expr::col(event_edition_maps::Column::OriginalMapId),
-            ]))
+            .filter(
+                event_edition_maps::Column::MapId
+                    .eq(self.inner.id)
+                    .or(event_edition_maps::Column::OriginalMapId.eq(self.inner.id)),
+            )
             .order_by_desc(event_edition::Column::StartDate)
             .column(event_edition_maps::Column::MapId)
             .into_model::<RawRelatedEdition>()
-            .stream(conn)
+            .all(conn)
             .await?;
 
-        let mut out = Vec::with_capacity(raw_editions.size_hint().0);
+        let mut out = Vec::with_capacity(raw_editions.len());
 
-        while let Some(raw_edition) = raw_editions.next().await {
-            let edition = raw_edition?;
+        let mut maps = map_loader
+            .load_many(raw_editions.iter().map(|e| e.map_id))
+            .await?;
+
+        for edition in raw_editions {
+            let map = maps
+                .remove(&edition.map_id)
+                .ok_or_else(|| internal!("unknown map id: {}", edition.map_id))?;
             out.push(RelatedEdition {
-                map: map_loader
-                    .load_one(edition.map_id)
-                    .await?
-                    .ok_or_else(|| internal!("unknown map id: {}", edition.map_id))?,
+                map,
                 // We want to redirect to the event map page if the edition saves any records
                 // on its maps, doesn't have any original map like campaign, or if the map
                 // isn't the original one.
@@ -261,6 +264,8 @@ impl Map {
         let conn = ctx.data_unchecked::<DatabaseConnection>();
         let all = player_rating::Entity::find()
             .filter(player_rating::Column::MapId.eq(self.inner.id))
+            .group_by(player_rating::Column::Kind)
+            .order_by_asc(player_rating::Column::Kind)
             .select_only()
             .expr_as(1.cast_as("UNSIGNED"), "player_id")
             .columns([player_rating::Column::MapId, player_rating::Column::Kind])

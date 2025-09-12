@@ -2,6 +2,7 @@ use sea_orm::{DbErr, FromQueryResult, TryGetable};
 
 use crate::rating_kind;
 
+/// The various rating kinds available for a map.
 #[derive(serde::Serialize, PartialEq, Eq, Clone, Copy, Debug, async_graphql::Enum)]
 #[non_exhaustive]
 pub enum RatingKind {

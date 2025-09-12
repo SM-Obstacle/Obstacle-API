@@ -126,6 +126,7 @@ pub async fn player_rating(
                         .eq(player_id)
                         .and(player_rating::Column::MapId.eq(map_id)),
                 )
+                .inner_join(rating_kind::Entity)
                 .select_only()
                 .column(rating_kind::Column::Kind)
                 .column(player_rating::Column::Rating)

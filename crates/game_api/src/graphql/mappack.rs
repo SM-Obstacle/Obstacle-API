@@ -197,14 +197,11 @@ impl MappackPlayer<'_> {
                 -1,
             )
             .await?;
-        let maps_uids = maps_uids.chunks_exact(2);
+        let (maps_uids, _) = maps_uids.as_chunks::<2>();
 
-        let mut out = Vec::with_capacity(maps_uids.size_hint().0);
+        let mut out = Vec::with_capacity(maps_uids.len());
 
-        for chunk in maps_uids {
-            let [game_id, rank] = chunk else {
-                unreachable!("plz stabilize Iterator::array_chunks")
-            };
+        for [game_id, rank] in maps_uids {
             let rank = rank.parse()?;
             let last_rank = redis_conn
                 .get(mappack_map_last_rank(

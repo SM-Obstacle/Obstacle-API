@@ -23,7 +23,7 @@ pub enum Relation {
         on_update = "Restrict",
         on_delete = "SetNull"
     )]
-    Players2,
+    BanAuthor,
     #[sea_orm(
         belongs_to = "super::players::Entity",
         from = "Column::PlayerId",
@@ -31,7 +31,7 @@ pub enum Relation {
         on_update = "Restrict",
         on_delete = "SetNull"
     )]
-    Players1,
+    Player,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

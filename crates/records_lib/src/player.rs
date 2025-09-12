@@ -24,6 +24,7 @@ pub async fn get_time_on_map<C: ConnectionTrait>(
                         .and(global_event_records::Column::EventId.eq(ev.id))
                         .and(global_event_records::Column::EditionId.eq(ed.id)),
                 )
+                .select_only()
                 .column(global_event_records::Column::Time)
                 .into_tuple()
                 .one(conn)
@@ -36,6 +37,7 @@ pub async fn get_time_on_map<C: ConnectionTrait>(
                         .eq(map_id)
                         .and(global_records::Column::RecordPlayerId.eq(player_id)),
                 )
+                .select_only()
                 .column(global_records::Column::Time)
                 .into_tuple()
                 .one(conn)
@@ -62,7 +64,6 @@ pub async fn get_player_from_login<C: ConnectionTrait>(
 ///
 /// The return of this function isn't optional as if an ID is provided, the player most likely
 /// already exists.
-// TODO: remove this useless wrapper
 pub async fn get_player_from_id<C: ConnectionTrait>(
     conn: &C,
     player_id: u32,

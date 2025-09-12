@@ -8,7 +8,12 @@ use records_lib::{RedisConnection, ranks};
 use records_lib::{player, transaction};
 use sea_orm::prelude::Expr;
 use sea_orm::sea_query::Query;
-use sea_orm::{ConnectionTrait, StatementBuilder, StreamTrait, TransactionTrait};
+use sea_orm::{ConnectionTrait, StreamTrait, TransactionTrait};
+
+// -- Compute display ranges
+const TOTAL_ROWS: i32 = 15;
+const NO_RECORD_ROWS: i32 = TOTAL_ROWS - 1;
+const ROWS_MINUS_TOP3: i32 = TOTAL_ROWS - 3;
 
 #[derive(serde::Deserialize)]
 pub struct OverviewQuery {
@@ -64,57 +69,8 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
 
     let mut ranked_records = vec![];
 
-    // -- Compute display ranges
-    const TOTAL_ROWS: i32 = 15;
-    const NO_RECORD_ROWS: i32 = TOTAL_ROWS - 1;
-
     let player_rank = match player {
-        Some(ref p) => {
-            let mut query = Query::select();
-            query
-                .and_where(
-                    Expr::col(("r", records::Column::RecordPlayerId))
-                        .eq(p.id)
-                        .and(Expr::col(("r", records::Column::MapId)).eq(map.id)),
-                )
-                .expr(Expr::col(("r", records::Column::Time)));
-
-            match event.event {
-                Some((ev, ed)) => {
-                    query.from_as(global_event_records::Entity, "r").and_where(
-                        Expr::col(("r", global_event_records::Column::EventId))
-                            .eq(ev.id)
-                            .and(
-                                Expr::col(("r", global_event_records::Column::EditionId)).eq(ed.id),
-                            ),
-                    );
-                }
-                None => {
-                    query.from_as(global_records::Entity, "r");
-                }
-            }
-
-            let stmt = StatementBuilder::build(&query, &conn.get_database_backend());
-            let min_time = conn
-                .query_one(stmt)
-                .await
-                .and_then(|result_opt| {
-                    result_opt
-                        .map(|result| result.try_get_by_index::<i32>(0))
-                        .transpose()
-                })
-                .with_api_err()?;
-
-            match min_time {
-                Some(time) => {
-                    let rank = ranks::get_rank(conn, redis_conn, map.id, p.id, time, event)
-                        .await
-                        .with_api_err()?;
-                    Some(rank)
-                }
-                None => None,
-            }
-        }
+        Some(ref p) => get_rank(conn, redis_conn, map, event, p).await?,
         None => None,
     };
 
@@ -137,7 +93,6 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
             extend_range(conn, redis_conn, &mut ranked_records, (0, 3), map.id, event).await?;
 
             // the rest is centered around the player
-            const ROWS_MINUS_TOP3: i32 = TOTAL_ROWS - 3;
             let range = {
                 let start = player_rank - ROWS_MINUS_TOP3 / 2;
                 let end = player_rank + ROWS_MINUS_TOP3 / 2;
@@ -192,6 +147,59 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
     }
 
     Ok(ranked_records)
+}
+
+async fn get_rank<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut deadpool_redis::Connection,
+    map: &maps::Model,
+    event: OptEvent<'_>,
+    p: &entity::players::Model,
+) -> Result<Option<i32>, crate::RecordsErrorKind> {
+    let mut query = Query::select();
+
+    query
+        .and_where(
+            Expr::col(("r", records::Column::RecordPlayerId))
+                .eq(p.id)
+                .and(Expr::col(("r", records::Column::MapId)).eq(map.id)),
+        )
+        .expr(Expr::col(("r", records::Column::Time)));
+
+    match event.event {
+        Some((ev, ed)) => {
+            query.from_as(global_event_records::Entity, "r").and_where(
+                Expr::col(("r", global_event_records::Column::EventId))
+                    .eq(ev.id)
+                    .and(Expr::col(("r", global_event_records::Column::EditionId)).eq(ed.id)),
+            );
+        }
+        None => {
+            query.from_as(global_records::Entity, "r");
+        }
+    }
+
+    let stmt = conn.get_database_backend().build(&query);
+
+    let min_time = conn
+        .query_one(stmt)
+        .await
+        .and_then(|result_opt| {
+            result_opt
+                .map(|result| result.try_get_by_index::<i32>(0))
+                .transpose()
+        })
+        .with_api_err()?;
+
+    match min_time {
+        Some(time) => {
+            let rank = ranks::get_rank(conn, redis_conn, map.id, p.id, time, event)
+                .await
+                .with_api_err()?;
+            Ok(Some(rank))
+        }
+        None => Ok(None),
+    }
 }
 
 pub async fn overview<C: TransactionTrait>(

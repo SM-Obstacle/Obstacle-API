@@ -68,13 +68,6 @@ pub async fn set_role(
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<SetRoleBody>,
 ) -> RecordsResult<impl Responder> {
-    players::Entity::update_many()
-        .filter(players::Column::Login.eq(&body.player_login))
-        .col_expr(players::Column::Role, Expr::val(body.role).into())
-        .exec(&conn)
-        .await
-        .with_api_err()?;
-
     let role = role::Entity::find_by_id(body.role)
         .select_only()
         .column(role::Column::RoleName)
@@ -83,6 +76,15 @@ pub async fn set_role(
         .await
         .with_api_err()?
         .ok_or_else(|| internal!("Role with ID {} should exist in database", body.role))?;
+
+    players::Entity::update(players::ActiveModel {
+        role: Set(body.role),
+        ..Default::default()
+    })
+    .filter(players::Column::Login.eq(&body.player_login))
+    .exec(&conn)
+    .await
+    .with_api_err()?;
 
     json(SetRoleResponse {
         player_login: body.player_login,
@@ -133,7 +135,7 @@ pub async fn banishments(
         .filter(banishments::Column::PlayerId.eq(player_id))
         .join_as(
             sea_orm::JoinType::InnerJoin,
-            banishments::Relation::Players1.def(),
+            banishments::Relation::Player.def(),
             "ban_author_player",
         )
         .select_only()
@@ -232,7 +234,7 @@ pub async fn ban(
     let ban = banishments::Entity::find_by_id(ban_id)
         .join_as(
             sea_orm::JoinType::InnerJoin,
-            banishments::Relation::Players2.def(),
+            banishments::Relation::BanAuthor.def(),
             "ban_author_player",
         )
         .select_only()
@@ -278,7 +280,7 @@ pub async fn get_ban_of<C: ConnectionTrait>(
         )
         .join_as(
             sea_orm::JoinType::InnerJoin,
-            current_bans::Relation::Players2.def(),
+            current_bans::Relation::BanAuthor.def(),
             "ban_author_player",
         )
         .select_only()

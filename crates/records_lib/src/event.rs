@@ -142,7 +142,6 @@ pub async fn event_edition_maps<C: ConnectionTrait>(
 }
 
 /// Returns the optional event bound to the provided handle.
-// TODO: remove useless wrapper
 pub async fn get_event_by_handle<C: ConnectionTrait>(
     conn: &C,
     handle: &str,
@@ -160,18 +159,12 @@ pub async fn get_event_by_handle<C: ConnectionTrait>(
 ///
 /// * `event_id`: the database ID of the event.
 /// * `edition_id` the ID of the edition bound to this event.
-// TODO: remove useless wrapper
 pub async fn get_edition_by_id<C: ConnectionTrait>(
     conn: &C,
     event_id: u32,
     edition_id: u32,
 ) -> RecordsResult<Option<event_edition::Model>> {
-    let r = event_edition::Entity::find()
-        .filter(
-            event_edition::Column::EventId
-                .eq(event_id)
-                .and(event_edition::Column::Id.eq(edition_id)),
-        )
+    let r = event_edition::Entity::find_by_id((event_id, edition_id))
         .one(conn)
         .await?;
     Ok(r)
@@ -228,24 +221,19 @@ pub async fn get_medal_times_of<C: ConnectionTrait>(
     edition_id: u32,
     map_id: u32,
 ) -> RecordsResult<Option<MedalTimes>> {
-    let (bronze_time, silver_time, gold_time, champion_time) = event_edition_maps::Entity::find()
-        .filter(
-            event_edition_maps::Column::EventId
-                .eq(event_id)
-                .and(event_edition_maps::Column::EditionId.eq(edition_id))
-                .and(event_edition_maps::Column::MapId.eq(map_id)),
-        )
-        .select_only()
-        .columns([
-            event_edition_maps::Column::BronzeTime,
-            event_edition_maps::Column::SilverTime,
-            event_edition_maps::Column::GoldTime,
-            event_edition_maps::Column::AuthorTime,
-        ])
-        .into_tuple()
-        .one(conn)
-        .await?
-        .unwrap_or_default();
+    let (bronze_time, silver_time, gold_time, champion_time) =
+        event_edition_maps::Entity::find_by_id((event_id, edition_id, map_id))
+            .select_only()
+            .columns([
+                event_edition_maps::Column::BronzeTime,
+                event_edition_maps::Column::SilverTime,
+                event_edition_maps::Column::GoldTime,
+                event_edition_maps::Column::AuthorTime,
+            ])
+            .into_tuple()
+            .one(conn)
+            .await?
+            .unwrap_or_default();
 
     let Some(bronze_time) = bronze_time else {
         return Ok(None);

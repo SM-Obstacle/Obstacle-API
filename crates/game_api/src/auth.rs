@@ -54,17 +54,17 @@ pub mod gen_token;
 mod check;
 pub use check::check_auth_for;
 
-use records_lib::RedisPool;
+use records_lib::{Database, RedisPool};
 
-use crate::RecordsResultExt as _;
+use crate::AccessTokenErr;
 use crate::utils::{ApiStatus, get_api_status};
-use crate::{AccessTokenErr, must};
 use crate::{RecordsErrorKind, RecordsResult};
+use crate::{RecordsResultExt as _, internal};
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
 use entity::types;
-use futures::Future;
+use futures::{Future, future};
 use sea_orm::DbConn;
 use serde::{Deserialize, Serialize};
 use std::future::{Ready, ready};
@@ -269,7 +269,10 @@ pub struct MPAuthGuard<const ROLE: privilege::Flags = { privilege::PLAYER }> {
 impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
     type Error = RecordsErrorKind;
 
-    type Future = Pin<Box<dyn Future<Output = RecordsResult<Self>>>>;
+    type Future = future::Either<
+        Pin<Box<dyn Future<Output = RecordsResult<Self>>>>,
+        Ready<RecordsResult<Self>>,
+    >;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
         async fn check<const ROLE: privilege::Flags>(
@@ -294,13 +297,21 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
             authorization,
         } = ext_auth_headers(req);
 
-        // FIXME: by extracting sql and redis pools separately, we're cloning each of them twice.
-        Box::pin(check(
-            must::have_dbconn(req),
-            must::have_redis_pool(req),
+        let db = match req.app_data::<Database>().cloned() {
+            Some(db) => db,
+            None => {
+                return future::Either::Right(ready(Err(internal!(
+                    "Missing Database on request app data"
+                ))));
+            }
+        };
+
+        future::Either::Left(Box::pin(check(
+            db.sql_conn,
+            db.redis_pool,
             player_login,
             authorization,
-        ))
+        )))
     }
 }
 
@@ -353,7 +364,10 @@ pub struct ApiAvailable;
 impl FromRequest for ApiAvailable {
     type Error = RecordsErrorKind;
 
-    type Future = Pin<Box<dyn Future<Output = RecordsResult<Self>>>>;
+    type Future = future::Either<
+        Pin<Box<dyn Future<Output = RecordsResult<Self>>>>,
+        Ready<RecordsResult<Self>>,
+    >;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
         async fn check_status(conn: DbConn) -> RecordsResult<ApiAvailable> {
@@ -366,9 +380,12 @@ impl FromRequest for ApiAvailable {
             }
         }
 
-        let conn = must::have_dbconn(req);
-
-        Box::pin(check_status(conn))
+        match req.app_data::<DbConn>() {
+            Some(conn) => future::Either::Left(Box::pin(check_status(conn.clone()))),
+            None => {
+                future::Either::Right(ready(Err(internal!("Missing DbConn on request app data"))))
+            }
+        }
     }
 }
 

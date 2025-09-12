@@ -15,7 +15,7 @@ use actix_web::web::{JsonConfig, Query};
 use actix_web::{HttpResponse, Scope, web};
 use entity::latestnews_image;
 use records_lib::Database;
-use sea_orm::{EntityTrait, FromQueryResult, QuerySelect};
+use sea_orm::{EntityTrait, QuerySelect};
 use serde::Serialize;
 
 #[cfg(auth)]
@@ -162,26 +162,29 @@ async fn report_error(
     Ok(HttpResponse::Ok().finish())
 }
 
-#[derive(Serialize, FromQueryResult)]
+#[derive(Serialize)]
 struct LatestnewsImageResponse {
     img_url: String,
     link: String,
 }
 
+impl From<latestnews_image::Model> for LatestnewsImageResponse {
+    fn from(value: latestnews_image::Model) -> Self {
+        Self {
+            img_url: value.img_url,
+            link: value.link,
+        }
+    }
+}
+
 async fn latestnews_image(ExtractDbConn(conn): ExtractDbConn) -> RecordsResult<impl Responder> {
     let res = latestnews_image::Entity::find()
         .limit(1)
-        .select_only()
-        .columns([
-            latestnews_image::Column::ImgUrl,
-            latestnews_image::Column::Link,
-        ])
-        .into_model::<LatestnewsImageResponse>()
         .one(&conn)
         .await
         .with_api_err()?
         .ok_or_else(|| internal!("latestnews_image must have at least one row in database"))?;
-    json(res)
+    json(LatestnewsImageResponse::from(res))
 }
 
 #[derive(Serialize)]

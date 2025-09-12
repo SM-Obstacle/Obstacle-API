@@ -213,6 +213,8 @@ pub fn configure(cfg: &mut web::ServiceConfig, db: Database) {
 
     cfg.app_data(web::Data::new(crate::AuthState::default()))
         .app_data(client.clone())
+        .app_data(db.sql_conn.clone())
+        .app_data(db.redis_pool.clone())
         .app_data(db.clone())
         .service(crate::graphql_route(db.clone(), client))
         .service(crate::api_route())

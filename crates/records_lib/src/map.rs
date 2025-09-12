@@ -8,7 +8,6 @@ use sea_orm::{ColumnTrait as _, ConnectionTrait, EntityTrait as _, QueryFilter a
 use crate::{error::RecordsResult, internal};
 
 /// Returns the map bound to the provided ID.
-// TODO: remove useless wrapper
 pub async fn get_map_from_id<C: ConnectionTrait>(
     conn: &C,
     map_id: u32,
@@ -25,7 +24,6 @@ pub async fn get_map_from_id<C: ConnectionTrait>(
 }
 
 /// Returns the optional map from its UID.
-// TODO: remove useless wrapper
 pub async fn get_map_from_uid<C: ConnectionTrait>(
     conn: &C,
     map_uid: &str,

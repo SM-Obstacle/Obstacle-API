@@ -564,6 +564,7 @@ impl EventEditionMap<'_> {
     async fn link_to_original(&self) -> bool {
         !(self.edition.inner.save_non_event_record != 0
             && self.edition.inner.non_original_maps != 0)
+            && self.edition.inner.is_transparent == 0
     }
 
     async fn original_map(
