@@ -54,6 +54,7 @@ pub mod gen_token;
 mod check;
 pub use check::check_auth_for;
 
+use records_lib::pool::clone_dbconn;
 use records_lib::{Database, RedisPool};
 
 use crate::AccessTokenErr;
@@ -381,7 +382,7 @@ impl FromRequest for ApiAvailable {
         }
 
         match req.app_data::<DbConn>() {
-            Some(conn) => future::Either::Left(Box::pin(check_status(conn.clone()))),
+            Some(conn) => future::Either::Left(Box::pin(check_status(clone_dbconn(conn)))),
             None => {
                 future::Either::Right(ready(Err(internal!("Missing DbConn on request app data"))))
             }

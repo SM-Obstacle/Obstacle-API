@@ -122,36 +122,38 @@ impl Database {
     }
 }
 
-// For some reason, sea_orm::DbConn doesn't implement Clone
+/// Allows to clone a [`DbConn`] with or without the "mock" feature.
+pub fn clone_dbconn(conn: &DbConn) -> DbConn {
+    match conn {
+        #[cfg(feature = "mysql")]
+        sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(conn) => {
+            sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(conn.clone())
+        }
+        #[cfg(feature = "test")]
+        sea_orm::DatabaseConnection::MockDatabaseConnection(conn) => {
+            sea_orm::DatabaseConnection::MockDatabaseConnection(conn.clone())
+        }
+        #[cfg(feature = "postgres")]
+        sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(conn) => {
+            sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(conn.clone())
+        }
+        #[cfg(feature = "sqlite")]
+        sea_orm::DatabaseConnection::SqlxSqlitePoolConnection(conn) => {
+            sea_orm::DatabaseConnection::SqlxSqlitePoolConnection(conn.clone())
+        }
+        #[cfg(feature = "sea-orm-proxy")]
+        sea_orm::DatabaseConnection::ProxyDatabaseConnection(conn) => {
+            sea_orm::DatabaseConnection::ProxyDatabaseConnection(conn.clone())
+        }
+        sea_orm::DatabaseConnection::Disconnected => sea_orm::DatabaseConnection::Disconnected,
+    }
+}
+
 impl Clone for Database {
     fn clone(&self) -> Self {
         Self {
             redis_pool: self.redis_pool.clone(),
-            sql_conn: match &self.sql_conn {
-                #[cfg(feature = "mysql")]
-                sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(conn) => {
-                    sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(conn.clone())
-                }
-                #[cfg(feature = "test")]
-                sea_orm::DatabaseConnection::MockDatabaseConnection(conn) => {
-                    sea_orm::DatabaseConnection::MockDatabaseConnection(conn.clone())
-                }
-                #[cfg(feature = "postgres")]
-                sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(conn) => {
-                    sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(conn.clone())
-                }
-                #[cfg(feature = "sqlite")]
-                sea_orm::DatabaseConnection::SqlxSqlitePoolConnection(conn) => {
-                    sea_orm::DatabaseConnection::SqlxSqlitePoolConnection(conn.clone())
-                }
-                #[cfg(feature = "sea-orm-proxy")]
-                sea_orm::DatabaseConnection::ProxyDatabaseConnection(conn) => {
-                    sea_orm::DatabaseConnection::ProxyDatabaseConnection(conn.clone())
-                }
-                sea_orm::DatabaseConnection::Disconnected => {
-                    sea_orm::DatabaseConnection::Disconnected
-                }
-            },
+            sql_conn: clone_dbconn(&self.sql_conn),
         }
     }
 }
