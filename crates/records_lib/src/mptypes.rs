@@ -1,3 +1,4 @@
+use sea_orm::TryGetable;
 use serde::ser::{Serialize, Serializer};
 
 /// The Integer type in ManiaScript.
@@ -25,7 +26,18 @@ impl<const DEFAULT: Integer> From<Option<Integer>> for NullableInteger<DEFAULT> 
     }
 }
 
-impl<'r, DB: sqlx::Database> sqlx::Decode<'r, DB> for NullableInteger
+impl<const DEFAULT: Integer> TryGetable for NullableInteger<DEFAULT> {
+    #[inline]
+    fn try_get_by<I: sea_orm::ColIdx>(
+        res: &sea_orm::QueryResult,
+        index: I,
+    ) -> Result<Self, sea_orm::TryGetError> {
+        <Option<Integer> as TryGetable>::try_get_by(res, index).map(From::from)
+    }
+}
+
+impl<'r, const DEFAULT: Integer, DB: sqlx::Database> sqlx::Decode<'r, DB>
+    for NullableInteger<DEFAULT>
 where
     Option<Integer>: sqlx::Decode<'r, DB>,
 {
@@ -37,7 +49,7 @@ where
     }
 }
 
-impl<DB: sqlx::Database> sqlx::Type<DB> for NullableInteger
+impl<const DEFAULT: Integer, DB: sqlx::Database> sqlx::Type<DB> for NullableInteger<DEFAULT>
 where
     Option<Integer>: sqlx::Type<DB>,
 {
@@ -74,6 +86,16 @@ pub struct NullableReal(pub Option<Real>);
 impl From<Option<Real>> for NullableReal {
     fn from(f: Option<Real>) -> Self {
         Self(f)
+    }
+}
+
+impl TryGetable for NullableReal {
+    #[inline]
+    fn try_get_by<I: sea_orm::ColIdx>(
+        res: &sea_orm::QueryResult,
+        index: I,
+    ) -> Result<Self, sea_orm::TryGetError> {
+        <Option<Real> as TryGetable>::try_get_by(res, index).map(From::from)
     }
 }
 
@@ -126,6 +148,16 @@ pub struct NullableText(pub Option<Text>);
 impl From<Option<Text>> for NullableText {
     fn from(t: Option<Text>) -> Self {
         Self(t)
+    }
+}
+
+impl TryGetable for NullableText {
+    #[inline]
+    fn try_get_by<I: sea_orm::ColIdx>(
+        res: &sea_orm::QueryResult,
+        index: I,
+    ) -> Result<Self, sea_orm::TryGetError> {
+        <Option<Text> as TryGetable>::try_get_by(res, index).map(From::from)
     }
 }
 

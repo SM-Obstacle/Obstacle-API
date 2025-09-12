@@ -48,19 +48,26 @@
 //! See <https://github.com/maniaplanet/documentation/blob/master/13.web-services/01.oauth2/docs.md#auth-code-flow-or-explicit-flow-or-server-side-flow>
 //! for more information.
 
+#[cfg(auth)]
+pub mod gen_token;
+
+mod check;
+pub use check::check_auth_for;
+
+use records_lib::pool::clone_dbconn;
+use records_lib::{Database, RedisPool};
+
+use crate::AccessTokenErr;
+use crate::utils::{ApiStatus, get_api_status};
+use crate::{RecordsErrorKind, RecordsResult};
+use crate::{RecordsResultExt as _, internal};
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
 use chrono::{DateTime, Utc};
-#[cfg(auth)]
-use deadpool_redis::redis::AsyncCommands;
-use futures::Future;
-use records_lib::models::ApiStatusKind;
-#[cfg(auth)]
-use records_lib::redis_key::{mp_token_key, web_token_key};
-use records_lib::{Database, acquire};
+use entity::types;
+use futures::{Future, future};
+use sea_orm::DbConn;
 use serde::{Deserialize, Serialize};
-#[cfg(auth)]
-use sha256::digest;
 use std::future::{Ready, ready};
 use std::pin::Pin;
 use std::{collections::HashMap, time::Duration};
@@ -68,17 +75,8 @@ use tokio::sync::Mutex;
 use tokio::sync::oneshot::{self, Receiver, Sender};
 use tokio::time::timeout;
 use tracing::Level;
-use tracing_actix_web::RequestId;
 
-use crate::utils::{ApiStatus, get_api_status};
-use crate::{
-    AccessTokenErr, FitRequestId, RecordsError, RecordsResponse, RecordsResultExt, Res, must,
-};
-use crate::{RecordsErrorKind, RecordsResult, http::player};
-#[cfg(auth)]
-use records_lib::gen_random_str;
-
-#[allow(unused)]
+#[allow(dead_code)] // Allow unused flags
 pub mod privilege {
     pub type Flags = u8;
 
@@ -247,106 +245,12 @@ impl AuthState {
     }
 }
 
-/// Generates a ManiaPlanet and Website token for the player with the provided login.
-///
-/// The player might not yet exist in the database.
-/// It returns a couple of (ManiaPlanet token ; Website token).
-///
-/// The tokens are stored in the Redis database.
-#[cfg(auth)]
-pub async fn gen_token_for(db: &Database, login: &str) -> RecordsResult<(String, String)> {
-    let mp_token = gen_random_str(256);
-    let web_token = gen_random_str(32);
-
-    let mut connection = db.redis_pool.get().await.with_api_err()?;
-    let mp_key = mp_token_key(login);
-    let web_key = web_token_key(login);
-
-    let ex = crate::env().auth_token_ttl as _;
-
-    let mp_token_hash = digest(&*mp_token);
-    let web_token_hash = digest(&*web_token);
-
-    let _: () = connection
-        .set_ex(mp_key, mp_token_hash, ex)
-        .await
-        .with_api_err()?;
-    let _: () = connection
-        .set_ex(web_key, web_token_hash, ex)
-        .await
-        .with_api_err()?;
-    Ok((mp_token, web_token))
+struct ExtAuthHeaders {
+    player_login: Option<String>,
+    authorization: Option<String>,
 }
 
-/// Checks for a successful authentication for the player with its login and ManiaPlanet token.
-///
-/// # Arguments
-///
-/// * `_: AuthHeader`: the authentication headers retrieved from the HTTP request.
-/// * `required: Role` the required role to be authorized.
-///
-/// # Returns
-///
-/// * If the token is invalid, it returns an `Unauthorized` error
-/// * If it is valid, but the player doesn't exist in the database, it returns a `PlayerNotFound` error
-/// * If the player hasn't the required role, or is banned, it returns a `Forbidden` error
-/// * Otherwise, it returns Ok(())
-pub async fn check_auth_for(
-    db: &Database,
-    login: &str,
-    #[cfg_attr(not(auth), allow(unused_variables))] token: &str,
-    #[cfg_attr(not(auth), allow(unused_variables))] required: privilege::Flags,
-) -> RecordsResult<u32> {
-    let conn = acquire!(db.with_api_err()?);
-
-    let player = records_lib::must::have_player(conn.mysql_conn, login).await?;
-
-    if let Some(ban) = player::check_banned(conn.mysql_conn, player.id).await? {
-        return Err(RecordsErrorKind::BannedPlayer(ban));
-    };
-
-    #[cfg(not(auth))]
-    {
-        Ok(player.id)
-    }
-
-    #[cfg(auth)]
-    {
-        let stored_token: Option<String> = conn
-            .redis_conn
-            .get(mp_token_key(login))
-            .await
-            .with_api_err()?;
-
-        if !matches!(stored_token, Some(t) if t == digest(token)) {
-            return Err(RecordsErrorKind::Unauthorized);
-        }
-
-        let role: privilege::Flags = sqlx::query_scalar(
-            "SELECT r.privileges
-        FROM players p
-        INNER JOIN role r ON r.id = p.role
-        WHERE p.id = ?",
-        )
-        .bind(player.id)
-        .fetch_one(&db.mysql_pool)
-        .await
-        .with_api_err()?;
-
-        if role & required != required {
-            return Err(RecordsErrorKind::Forbidden);
-        }
-
-        Ok(player.id)
-    }
-}
-
-pub struct ExtAuthHeaders {
-    pub player_login: Option<String>,
-    pub authorization: Option<String>,
-}
-
-pub fn ext_auth_headers(req: &HttpRequest) -> ExtAuthHeaders {
+fn ext_auth_headers(req: &HttpRequest) -> ExtAuthHeaders {
     fn ext_header(req: &HttpRequest, header: &str) -> Option<String> {
         req.headers()
             .get(header)
@@ -364,54 +268,51 @@ pub struct MPAuthGuard<const ROLE: privilege::Flags = { privilege::PLAYER }> {
 }
 
 impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
-    type Error = RecordsError;
+    type Error = RecordsErrorKind;
 
-    type Future = Pin<Box<dyn Future<Output = RecordsResponse<Self>>>>;
+    type Future = future::Either<
+        Pin<Box<dyn Future<Output = RecordsResult<Self>>>>,
+        Ready<RecordsResult<Self>>,
+    >;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        #[cfg(auth)]
         async fn check<const ROLE: privilege::Flags>(
-            request_id: RequestId,
-            db: Res<Database>,
+            conn: DbConn,
+            redis_pool: RedisPool,
             login: Option<String>,
             token: Option<String>,
-        ) -> RecordsResponse<MPAuthGuard<ROLE>> {
+        ) -> RecordsResult<MPAuthGuard<ROLE>> {
             let Some(login) = login else {
-                return Err(RecordsErrorKind::Unauthorized).fit(request_id);
+                return Err(RecordsErrorKind::Unauthorized);
             };
 
-            let Some(token) = token else {
-                return Err(RecordsErrorKind::Unauthorized).fit(request_id);
-            };
+            let mut redis_conn = redis_pool.get().await.with_api_err()?;
 
-            check_auth_for(&db, &login, &token, ROLE)
-                .await
-                .fit(request_id)?;
+            check::check_auth_for(&conn, &mut redis_conn, &login, token.as_deref(), ROLE).await?;
 
             Ok(MPAuthGuard { login })
         }
 
-        let req_id = must::have_request_id(req);
+        let ExtAuthHeaders {
+            player_login,
+            authorization,
+        } = ext_auth_headers(req);
 
-        #[cfg(auth)]
-        {
-            let ExtAuthHeaders {
-                player_login,
-                authorization,
-            } = ext_auth_headers(req);
+        let db = match req.app_data::<Database>().cloned() {
+            Some(db) => db,
+            None => {
+                return future::Either::Right(ready(Err(internal!(
+                    "Missing Database on request app data"
+                ))));
+            }
+        };
 
-            let db = must::have_db(req);
-            Box::pin(check(req_id, db, player_login, authorization))
-        }
-
-        #[cfg(not(auth))]
-        Box::pin(ready(
-            ext_auth_headers(req)
-                .player_login
-                .ok_or(RecordsErrorKind::Unauthorized)
-                .fit(req_id)
-                .map(|login| MPAuthGuard { login }),
-        ))
+        future::Either::Left(Box::pin(check(
+            db.sql_conn,
+            db.redis_pool,
+            player_login,
+            authorization,
+        )))
     }
 }
 
@@ -423,32 +324,24 @@ pub struct AuthHeader {
 }
 
 impl FromRequest for AuthHeader {
-    type Error = RecordsError;
+    type Error = RecordsErrorKind;
 
-    type Future = Ready<RecordsResponse<Self>>;
+    type Future = Ready<RecordsResult<Self>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let request_id = must::have_request_id(req);
-
         let ExtAuthHeaders {
             player_login,
             authorization,
         } = ext_auth_headers(req);
 
         let Some(login) = player_login else {
-            return ready(Err(RecordsError {
-                request_id,
-                kind: RecordsErrorKind::Unauthorized,
-            }));
+            return ready(Err(RecordsErrorKind::Unauthorized));
         };
 
         #[cfg(auth)]
         {
             let Some(token) = authorization else {
-                return ready(Err(RecordsError {
-                    request_id,
-                    kind: RecordsErrorKind::Unauthorized,
-                }));
+                return ready(Err(RecordsErrorKind::Unauthorized));
             };
 
             ready(Ok(Self { login, token }))
@@ -457,7 +350,11 @@ impl FromRequest for AuthHeader {
         #[cfg(not(auth))]
         ready(Ok(Self {
             login,
-            token: authorization.unwrap_or_default(),
+            token: {
+                // For security reasons we ignore the header
+                let _ = authorization;
+                Default::default()
+            },
         }))
     }
 }
@@ -466,28 +363,30 @@ impl FromRequest for AuthHeader {
 pub struct ApiAvailable;
 
 impl FromRequest for ApiAvailable {
-    type Error = RecordsError;
+    type Error = RecordsErrorKind;
 
-    type Future = Pin<Box<dyn Future<Output = RecordsResponse<Self>>>>;
+    type Future = future::Either<
+        Pin<Box<dyn Future<Output = RecordsResult<Self>>>>,
+        Ready<RecordsResult<Self>>,
+    >;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        async fn check_status(
-            db: Res<Database>,
-            req_id: RequestId,
-        ) -> RecordsResponse<ApiAvailable> {
-            match get_api_status(&db).await.fit(req_id)? {
+        async fn check_status(conn: DbConn) -> RecordsResult<ApiAvailable> {
+            match get_api_status(&conn).await? {
                 ApiStatus {
                     at,
-                    kind: ApiStatusKind::Maintenance,
-                } => Err(RecordsErrorKind::Maintenance(at)).fit(req_id),
+                    kind: types::ApiStatusKind::Maintenance,
+                } => Err(RecordsErrorKind::Maintenance(at)),
                 _ => Ok(ApiAvailable),
             }
         }
 
-        let req_id = must::have_request_id(req);
-        let db = must::have_db(req);
-
-        Box::pin(check_status(db, req_id))
+        match req.app_data::<DbConn>() {
+            Some(conn) => future::Either::Left(Box::pin(check_status(clone_dbconn(conn)))),
+            None => {
+                future::Either::Right(ready(Err(internal!("Missing DbConn on request app data"))))
+            }
+        }
     }
 }
 

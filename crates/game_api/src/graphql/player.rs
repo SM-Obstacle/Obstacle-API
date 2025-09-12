@@ -1,28 +1,16 @@
 use std::{collections::HashMap, sync::Arc};
 
-use async_graphql::{Enum, ID, connection, dataloader::Loader};
-use records_lib::{
-    Database, DatabaseConnection, TxnDatabaseConnection, acquire,
-    models::{self, Role},
-    opt_event::OptEvent,
-    transaction::{self, ReadOnly},
+use async_graphql::{Enum, ID, dataloader::Loader};
+use entity::{global_records, players, records, role};
+use records_lib::{RedisConnection, RedisPool, opt_event::OptEvent, transaction};
+use sea_orm::{
+    ColumnTrait as _, ConnectionTrait, DbConn, DbErr, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, QuerySelect, StreamTrait,
 };
-use sqlx::{FromRow, MySqlPool, Row, mysql};
 
-use crate::RecordsErrorKind;
+use crate::{RecordsErrorKind, internal};
 
-use super::{
-    SortState,
-    ban::Banishment,
-    get_rank,
-    map::Map,
-    record::RankedRecord,
-    utils::{
-        connections_append_query_string_order, connections_append_query_string_page,
-        connections_bind_query_parameters_order, connections_bind_query_parameters_page,
-        connections_pages_info, decode_id,
-    },
-};
+use super::{SortState, get_rank, record::RankedRecord};
 
 #[derive(Copy, Clone, Eq, PartialEq, Enum)]
 #[repr(u8)]
@@ -32,10 +20,10 @@ enum PlayerRole {
     Admin = 2,
 }
 
-impl TryFrom<Role> for PlayerRole {
+impl TryFrom<role::Model> for PlayerRole {
     type Error = RecordsErrorKind;
 
-    fn try_from(role: Role) -> Result<Self, Self::Error> {
+    fn try_from(role: role::Model) -> Result<Self, Self::Error> {
         if role.id < 3 {
             // SAFETY: enum is repr(u8) and role id is in range
             Ok(unsafe { std::mem::transmute::<u8, PlayerRole>(role.id) })
@@ -45,14 +33,14 @@ impl TryFrom<Role> for PlayerRole {
     }
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, FromQueryResult)]
 pub struct Player {
-    #[sqlx(flatten)]
-    pub inner: models::Player,
+    #[sea_orm(nested)]
+    pub inner: players::Model,
 }
 
-impl From<models::Player> for Player {
-    fn from(inner: models::Player) -> Self {
+impl From<players::Model> for Player {
+    fn from(inner: players::Model) -> Self {
         Self { inner }
     }
 }
@@ -75,84 +63,16 @@ impl Player {
         self.inner.zone_path.as_deref()
     }
 
-    async fn banishments(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<Banishment>> {
-        let db = ctx.data_unchecked::<MySqlPool>();
-        Ok(
-            sqlx::query_as("SELECT * FROM banishments WHERE player_id = ?")
-                .bind(self.inner.id)
-                .fetch_all(db)
-                .await?,
-        )
-    }
-
     async fn role(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<PlayerRole> {
-        let db = ctx.data_unchecked::<MySqlPool>();
+        let conn = ctx.data_unchecked::<DbConn>();
 
-        let r: Role = sqlx::query_as("SELECT * FROM role WHERE id = ?")
-            .bind(self.inner.role)
-            .fetch_one(db)
-            .await?;
+        let r = role::Entity::find_by_id(self.inner.role)
+            .one(conn)
+            .await?
+            .ok_or_else(|| internal!("Role with ID {} must exist in database", self.inner.role))?
+            .try_into()?;
 
-        Ok(r.try_into()?)
-    }
-
-    async fn maps(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-        after: Option<String>,
-        before: Option<String>,
-        first: Option<i32>,
-        last: Option<i32>,
-    ) -> async_graphql::Result<connection::Connection<ID, Map>> {
-        connection::query(
-            after,
-            before,
-            first,
-            last,
-            |after: Option<ID>, before: Option<ID>, first: Option<usize>, last: Option<usize>| async move {
-                let after = decode_id(after.as_ref());
-                let before = decode_id(before.as_ref());
-
-                // Build the query string
-                let mut query = String::from("SELECT m1.* FROM maps m1 WHERE player_id = ? ");
-                connections_append_query_string_page(&mut query, true, after, before);
-                query.push_str(" GROUP BY name HAVING id = (SELECT MAX(id) FROM maps m2 WHERE player_id = ? AND m1.name = m2.name)");
-                connections_append_query_string_order(&mut query, first, last);
-
-                let reversed = first.is_none() && last.is_some();
-
-                // Bind the parameters
-                let mut query = sqlx::query(&query);
-                query = query.bind(self.inner.id);
-                query = connections_bind_query_parameters_page(query, after, before);
-                query = query.bind(self.inner.id);
-                query = connections_bind_query_parameters_order(query, first, last);
-
-                // Execute the query
-                let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-                let mut maps =
-                    query
-                        .map(|x: mysql::MySqlRow| {
-                            let cursor = ID(format!("v0:Map:{}", x.get::<u32, _>(0)));
-                            connection::Edge::new(cursor, models::Map::from_row(&x).unwrap().into())
-                        })
-                        .fetch_all(mysql_pool)
-                        .await?;
-
-                if reversed {
-                    maps.reverse();
-                }
-
-                let (has_previous_page, has_next_page) = connections_pages_info(maps.len(), first, last);
-                let mut connection = connection::Connection::new(has_previous_page, has_next_page);
-                connection.edges.extend(maps);
-                Ok::<_, sqlx::Error>(connection)
-            },
-        )
-        .await
+        Ok(r)
     }
 
     async fn records(
@@ -160,52 +80,43 @@ impl Player {
         ctx: &async_graphql::Context<'_>,
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
-        let db = ctx.data_unchecked::<Database>();
-        let conn = acquire!(db?);
+        let conn = ctx.data_unchecked::<DbConn>();
+        let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
 
-        records_lib::assert_future_send(transaction::within(
-            conn.mysql_conn,
-            ReadOnly,
-            async |mysql_conn, guard| {
-                get_player_records(
-                    &mut TxnDatabaseConnection::new(
-                        guard,
-                        DatabaseConnection {
-                            mysql_conn,
-                            redis_conn: conn.redis_conn,
-                        },
-                    ),
-                    self.inner.id,
-                    Default::default(),
-                    date_sort_by,
-                )
-                .await
-            },
-        ))
+        records_lib::assert_future_send(transaction::within(conn, async |txn| {
+            get_player_records(
+                txn,
+                &mut redis_conn,
+                self.inner.id,
+                Default::default(),
+                date_sort_by,
+            )
+            .await
+        }))
         .await
     }
 }
 
-async fn get_player_records<M>(
-    conn: &mut TxnDatabaseConnection<'_, M>,
+async fn get_player_records<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     player_id: u32,
     event: OptEvent<'_>,
     date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<Vec<RankedRecord>> {
-    let date_sort_by = SortState::sql_order_by(&date_sort_by);
-
     // Query the records with these ids
 
-    let query = format!(
-        "SELECT * FROM global_records r
-            WHERE record_player_id = ?
-            ORDER BY record_date {date_sort_by}
-            LIMIT 100",
-    );
-
-    let records = sqlx::query_as::<_, models::Record>(&query)
-        .bind(player_id)
-        .fetch_all(&mut **conn.conn.mysql_conn)
+    let records = global_records::Entity::find()
+        .filter(global_records::Column::RecordPlayerId.eq(player_id))
+        .order_by(
+            global_records::Column::RecordDate,
+            match date_sort_by {
+                Some(SortState::Reverse) => sea_orm::Order::Asc,
+                _ => sea_orm::Order::Desc,
+            },
+        )
+        .limit(100)
+        .all(conn)
         .await?;
 
     let mut ranked_records = Vec::with_capacity(records.len());
@@ -213,6 +124,7 @@ async fn get_player_records<M>(
     for record in records {
         let rank = get_rank(
             conn,
+            redis_conn,
             record.map_id,
             record.record_player_id,
             record.time,
@@ -220,41 +132,33 @@ async fn get_player_records<M>(
         )
         .await?;
 
-        ranked_records.push(models::RankedRecord { rank, record }.into());
+        ranked_records.push(
+            records::RankedRecord {
+                rank,
+                record: record.into(),
+            }
+            .into(),
+        );
     }
 
     Ok(ranked_records)
 }
 
-pub struct PlayerLoader(pub MySqlPool);
+pub struct PlayerLoader(pub DbConn);
 
 impl Loader<u32> for PlayerLoader {
     type Value = Player;
-    type Error = Arc<sqlx::Error>;
+    type Error = Arc<DbErr>;
 
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
-        let query = format!(
-            "SELECT * FROM players WHERE id IN ({})",
-            keys.iter()
-                .map(|_| "?".to_string())
-                .collect::<Vec<String>>()
-                .join(",")
-        );
-
-        let mut query = sqlx::query(&query);
-
-        for key in keys {
-            query = query.bind(key);
-        }
-
-        Ok(query
-            .map(|row: mysql::MySqlRow| {
-                let player = Player::from_row(&row).unwrap();
-                (player.inner.id, player)
-            })
-            .fetch_all(&self.0)
+        let hashmap = players::Entity::find()
+            .filter(players::Column::Id.is_in(keys.iter().copied()))
+            .all(&self.0)
             .await?
             .into_iter()
-            .collect())
+            .map(|player| (player.id, player.into()))
+            .collect();
+
+        Ok(hashmap)
     }
 }

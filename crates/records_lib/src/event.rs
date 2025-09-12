@@ -1,8 +1,18 @@
 //! This module contains anything related to ShootMania Obstacle events in this library.
 
+use entity::{
+    event, event_category, event_edition, event_edition_admins, event_edition_categories,
+    event_edition_maps, maps, players,
+};
 use futures::{Stream, TryStreamExt as _};
+use sea_orm::{
+    ColumnTrait as _, ConnectionTrait, DbErr, EntityTrait, FromQueryResult, Order, QueryFilter,
+    QueryOrder, QuerySelect, QueryTrait, RelationTrait as _, StreamTrait,
+    prelude::Expr,
+    sea_query::{Asterisk, ExprTrait as _, Func, IntoCondition, Query},
+};
 
-use crate::{error::RecordsResult, models};
+use crate::error::RecordsResult;
 
 /// Represents an item in the event list.
 ///
@@ -15,15 +25,15 @@ pub struct EventListItem {
     pub last_edition_id: i64,
     /// The concrete event model.
     #[serde(skip_serializing)]
-    pub event: models::Event,
+    pub event: event::Model,
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(FromQueryResult)]
 struct RawSqlEventListItem {
     handle: String,
     last_edition_id: u32,
-    #[sqlx(flatten)]
-    event: models::Event,
+    #[sea_orm(nested)]
+    event: event::Model,
 }
 
 impl From<RawSqlEventListItem> for EventListItem {
@@ -37,26 +47,46 @@ impl From<RawSqlEventListItem> for EventListItem {
 }
 
 /// Returns the list of events from the database.
-pub async fn event_list(
-    conn: &mut sqlx::MySqlConnection,
+///
+/// Note: This function intentionally excludes events that do not have any associated maps.
+/// Only events with at least one map are listed, as events without maps are not relevant
+/// for listing in this context.
+pub async fn event_list<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
     ignore_expired: bool,
 ) -> RecordsResult<Vec<EventListItem>> {
-    let mut query = sqlx::QueryBuilder::new(
-        "select ev.handle as handle, max(ee.id) as last_edition_id, ev.*
-        from event ev
-        inner join event_edition ee on ev.id = ee.event_id
-        inner join event_edition_maps eem on ee.id = eem.edition_id and ee.event_id = eem.event_id
-        where ee.start_date < sysdate()",
-    );
-
-    if ignore_expired {
-        query.push(" and (ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate())");
-    }
-
-    query
-        .push(" group by ev.id, ev.handle order by ev.id")
-        .build_query_as::<RawSqlEventListItem>()
-        .fetch(conn)
+    event::Entity::find()
+        .reverse_join(event_edition::Entity)
+        .join(
+            sea_orm::JoinType::InnerJoin,
+            event_edition::Entity::belongs_to(event_edition_maps::Entity)
+                .from((event_edition::Column::EventId, event_edition::Column::Id))
+                .to((
+                    event_edition_maps::Column::EventId,
+                    event_edition_maps::Column::EditionId,
+                ))
+                .into(),
+        )
+        .filter(Expr::col(event_edition::Column::StartDate).lt(Func::cust("SYSDATE")))
+        .group_by(event::Column::Id)
+        .group_by(event::Column::Handle)
+        .order_by(event::Column::Id, Order::Asc)
+        .column_as(event::Column::Handle, "handle")
+        .column_as(event_edition::Column::Id.max(), "last_edition_id")
+        .apply_if(ignore_expired.then_some(()), |query, _| {
+            query.filter(
+                event_edition::Column::Ttl
+                    .is_null()
+                    .or(Func::cust("TIMESTAMPADD")
+                        .arg(Expr::custom_keyword("SECOND"))
+                        .arg(Expr::col(event_edition::Column::Ttl))
+                        .arg(Expr::col(event_edition::Column::StartDate))
+                        .gt(Func::cust("SYSDATE"))),
+            )
+        })
+        .into_model::<RawSqlEventListItem>()
+        .stream(conn)
+        .await?
         .map_ok(From::from)
         .map_err(From::from)
         .try_collect()
@@ -64,48 +94,61 @@ pub async fn event_list(
 }
 
 /// Returns the list of event editions bound to the provided event handle.
-pub async fn event_editions_list(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn event_editions_list<C: ConnectionTrait>(
+    conn: &C,
     handle: &str,
-) -> RecordsResult<Vec<models::EventEdition>> {
-    let res = sqlx::query_as(
-        "select ee.* from event_edition ee
-        inner join event e on ee.event_id = e.id
-        where e.handle = ? and ee.start_date < sysdate()
-            and (ee.ttl is null or ee.start_date + interval ee.ttl second > sysdate())",
-    )
-    .bind(handle)
-    .fetch_all(conn)
-    .await?;
-    Ok(res)
+) -> RecordsResult<Vec<event_edition::Model>> {
+    let result = event_edition::Entity::find()
+        .inner_join(event::Entity)
+        .filter(
+            event::Column::Handle
+                .eq(handle)
+                .and(Expr::col(event_edition::Column::StartDate).lt(Func::cust("SYSDATE")))
+                .and(
+                    event_edition::Column::Ttl
+                        .is_null()
+                        .or(Func::cust("TIMESTAMPADD")
+                            .arg(Expr::custom_keyword("SECOND"))
+                            .arg(Expr::col(event_edition::Column::Ttl))
+                            .arg(Expr::col(event_edition::Column::StartDate))
+                            .gt(Func::cust("SYSDATE"))),
+                ),
+        )
+        .all(conn)
+        .await?;
+
+    Ok(result)
 }
 
 /// Returns the list of the maps of the provided event edition.
-pub async fn event_edition_maps(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn event_edition_maps<C: ConnectionTrait>(
+    conn: &C,
     event_id: u32,
     edition_id: u32,
-) -> RecordsResult<Vec<models::Map>> {
-    sqlx::query_as(
-        "select m.* from maps m
-        inner join event_edition_maps eem on m.id = eem.map_id
-        where eem.event_id = ? and eem.edition_id = ?",
-    )
-    .bind(event_id)
-    .bind(edition_id)
-    .fetch_all(conn)
-    .await
-    .map_err(From::from)
+) -> RecordsResult<Vec<maps::Model>> {
+    let result = maps::Entity::find()
+        .join_rev(
+            sea_orm::JoinType::InnerJoin,
+            event_edition_maps::Relation::Maps.def(),
+        )
+        .filter(
+            event_edition_maps::Column::EventId
+                .eq(event_id)
+                .and(event_edition_maps::Column::EditionId.eq(edition_id)),
+        )
+        .all(conn)
+        .await?;
+    Ok(result)
 }
 
 /// Returns the optional event bound to the provided handle.
-pub async fn get_event_by_handle(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn get_event_by_handle<C: ConnectionTrait>(
+    conn: &C,
     handle: &str,
-) -> RecordsResult<Option<models::Event>> {
-    let r = sqlx::query_as("SELECT * FROM event WHERE handle = ?")
-        .bind(handle)
-        .fetch_optional(conn)
+) -> RecordsResult<Option<event::Model>> {
+    let r = event::Entity::find()
+        .filter(event::Column::Handle.eq(handle))
+        .one(conn)
         .await?;
     Ok(r)
 }
@@ -116,19 +159,14 @@ pub async fn get_event_by_handle(
 ///
 /// * `event_id`: the database ID of the event.
 /// * `edition_id` the ID of the edition bound to this event.
-pub async fn get_edition_by_id(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn get_edition_by_id<C: ConnectionTrait>(
+    conn: &C,
     event_id: u32,
     edition_id: u32,
-) -> RecordsResult<Option<models::EventEdition>> {
-    let r = sqlx::query_as(
-        "SELECT * FROM event_edition
-        WHERE event_id = ? AND id = ?",
-    )
-    .bind(event_id)
-    .bind(edition_id)
-    .fetch_optional(conn)
-    .await?;
+) -> RecordsResult<Option<event_edition::Model>> {
+    let r = event_edition::Entity::find_by_id((edition_id, event_id))
+        .one(conn)
+        .await?;
     Ok(r)
 }
 
@@ -138,21 +176,21 @@ pub async fn get_edition_by_id(
 ///
 /// * `event_id`: the database ID of the event.
 /// * `edition_id` the ID of the edition bound to this event.
-pub async fn get_categories_by_edition_id(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn get_categories_by_edition_id<C: ConnectionTrait>(
+    conn: &C,
     event_id: u32,
     edition_id: u32,
-) -> RecordsResult<Vec<models::EventCategory>> {
-    let r = sqlx::query_as(
-        "select ec.* from event_category ec
-        inner join event_edition_categories eec on ec.id = eec.category_id
-        where eec.event_id = ? and eec.edition_id = ?
-        order by ec.id asc",
-    )
-    .bind(event_id)
-    .bind(edition_id)
-    .fetch_all(conn)
-    .await?;
+) -> RecordsResult<Vec<event_category::Model>> {
+    let r = event_category::Entity::find()
+        .reverse_join(event_edition_categories::Entity)
+        .filter(
+            event_edition_categories::Column::EventId
+                .eq(event_id)
+                .and(event_edition_categories::Column::EditionId.eq(edition_id)),
+        )
+        .order_by_asc(event_category::Column::Id)
+        .all(conn)
+        .await?;
 
     Ok(r)
 }
@@ -177,23 +215,25 @@ pub struct MedalTimes {
 /// * `event_id`: the database ID of the event.
 /// * `edition_id` the ID of the edition bound to this event.
 /// * `map_id`: the database ID of the map.
-pub async fn get_medal_times_of(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn get_medal_times_of<C: ConnectionTrait>(
+    conn: &C,
     event_id: u32,
     edition_id: u32,
     map_id: u32,
 ) -> RecordsResult<Option<MedalTimes>> {
-    let (bronze_time, silver_time, gold_time, champion_time) = sqlx::query_as(
-        "select eem.bronze_time, eem.silver_time, eem.gold_time, eem.author_time
-        from event_edition_maps eem
-        where eem.map_id = ? and eem.event_id = ? and eem.edition_id = ?",
-    )
-    .bind(map_id)
-    .bind(event_id)
-    .bind(edition_id)
-    .fetch_optional(conn)
-    .await?
-    .unwrap_or_default();
+    let (bronze_time, silver_time, gold_time, champion_time) =
+        event_edition_maps::Entity::find_by_id((event_id, edition_id, map_id))
+            .select_only()
+            .columns([
+                event_edition_maps::Column::BronzeTime,
+                event_edition_maps::Column::SilverTime,
+                event_edition_maps::Column::GoldTime,
+                event_edition_maps::Column::AuthorTime,
+            ])
+            .into_tuple()
+            .one(conn)
+            .await?
+            .unwrap_or_default();
 
     let Some(bronze_time) = bronze_time else {
         return Ok(None);
@@ -222,21 +262,28 @@ pub async fn get_medal_times_of(
 ///
 /// * `event_id`: the database ID of the event.
 /// * `edition_id` the ID of the edition bound to this event.
-pub fn get_admins_of(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn get_admins_of<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
     event_id: u32,
     edition_id: u32,
-) -> impl Stream<Item = sqlx::Result<models::Player>> + '_ {
-    sqlx::query_as(
-        "SELECT * FROM players
-            WHERE id IN (
-                SELECT player_id FROM event_edition_admins
-                WHERE event_id = ? AND edition_id = ?
-            )",
-    )
-    .bind(event_id)
-    .bind(edition_id)
-    .fetch(conn)
+) -> RecordsResult<impl Stream<Item = Result<players::Model, DbErr>> + '_> {
+    let r = players::Entity::find()
+        .filter(
+            players::Column::Id.in_subquery(
+                Query::select()
+                    .from(event_edition_admins::Entity)
+                    .and_where(
+                        event_edition_admins::Column::EventId
+                            .eq(event_id)
+                            .and(event_edition_admins::Column::EditionId.eq(edition_id)),
+                    )
+                    .column(event_edition_admins::Column::PlayerId)
+                    .take(),
+            ),
+        )
+        .stream(conn)
+        .await?;
+    Ok(r)
 }
 
 /// Returns the event editions which contain the map with the provided ID.
@@ -253,29 +300,39 @@ pub fn get_admins_of(
 /// 2. The ID of the event edition
 /// 3. The ID of the original map bound to the provided map ID. This can be null if the map doesn't
 ///    have an original map.
-pub fn get_editions_which_contain(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn get_editions_which_contain<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
     map_id: u32,
-) -> impl Stream<Item = sqlx::Result<(u32, u32, Option<u32>)>> + '_ {
-    sqlx::query_as(
-        "select eem.event_id, eem.edition_id, original_map_id from event_edition_maps eem
-            inner join event_edition ee on ee.event_id = eem.event_id and ee.id = eem.edition_id
-            where ee.save_non_event_record and map_id = ?",
-    )
-    .bind(map_id)
-    .fetch(conn)
+) -> RecordsResult<impl Stream<Item = Result<(u32, u32, Option<u32>), DbErr>> + '_> {
+    let r = event_edition_maps::Entity::find()
+        .inner_join(event_edition::Entity)
+        .filter(
+            event_edition::Column::SaveNonEventRecord
+                .ne(0)
+                .and(event_edition_maps::Column::MapId.eq(map_id)),
+        )
+        .select_only()
+        .columns([
+            event_edition_maps::Column::EventId,
+            event_edition_maps::Column::EditionId,
+            event_edition_maps::Column::OriginalMapId,
+        ])
+        .into_tuple()
+        .stream(conn)
+        .await?;
+    Ok(r)
 }
 
 /// The event map retrieved from the [`have_event_edition_with_map`][1] function.
 ///
 /// [1]: crate::must::have_event_edition_with_map
-#[derive(sqlx::FromRow)]
+#[derive(FromQueryResult)]
 pub struct EventMap {
     /// The map of the event edition.
     ///
     /// For example for the Benchmark, this would be a map with a UID finishing with `_benchmark`.
-    #[sqlx(flatten)]
-    pub map: models::Map,
+    #[sea_orm(nested)]
+    pub map: maps::Model,
     /// The optional ID of the original map.
     ///
     /// For example for the Benchmark, this would be the ID of the map with a normal UID.
@@ -294,24 +351,47 @@ pub struct EventMap {
 ///
 /// For example for the Benchmark, with `map_uid` as `"X"` or `"X_benchmark"`, the function returns
 /// the map with the UID `X_benchmark`, and the ID of the map with UID `X`.
-pub async fn get_map_in_edition(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn get_map_in_edition<C: ConnectionTrait>(
+    conn: &C,
     map_uid: &str,
     event_id: u32,
     edition_id: u32,
 ) -> RecordsResult<Option<EventMap>> {
-    let map = sqlx::query_as(
-        "select m.*, eem.original_map_id from event_edition_maps eem
-        inner join maps m on m.id = eem.map_id
-        inner join maps om on om.id in (eem.map_id, eem.original_map_id)
-        where eem.event_id = ? and eem.edition_id = ? and om.game_id = ?
-            and (m.id = om.id or eem.transitive_save)",
-    )
-    .bind(event_id)
-    .bind(edition_id)
-    .bind(map_uid)
-    .fetch_optional(conn)
-    .await?;
+    let map = event_edition_maps::Entity::find()
+        .join_as(
+            sea_orm::JoinType::InnerJoin,
+            event_edition_maps::Relation::Maps.def(),
+            "map",
+        )
+        .join_as(
+            sea_orm::JoinType::InnerJoin,
+            event_edition_maps::Relation::OriginalMaps
+                .def()
+                .condition_type(sea_orm::sea_query::ConditionType::Any)
+                .on_condition(|_left, right| {
+                    Expr::col((right, maps::Column::Id))
+                        .equals(event_edition_maps::Column::MapId)
+                        .into_condition()
+                }),
+            "original_map",
+        )
+        .filter(
+            event_edition_maps::Column::EventId
+                .eq(event_id)
+                .and(event_edition_maps::Column::EditionId.eq(edition_id))
+                .and(Expr::col(("original_map", maps::Column::GameId)).eq(map_uid))
+                .and(
+                    Expr::col(("map", maps::Column::Id))
+                        .equals(("original_map", maps::Column::Id))
+                        .or(event_edition_maps::Column::TransitiveSave.ne(0)),
+                ),
+        )
+        .select_only()
+        .expr(Expr::col(("map", Asterisk)))
+        .column(event_edition_maps::Column::OriginalMapId)
+        .into_model()
+        .one(conn)
+        .await?;
 
     Ok(map)
 }

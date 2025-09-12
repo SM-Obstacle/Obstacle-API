@@ -57,14 +57,21 @@
 //! and minimize inconsistencies between Redis and MariaDB.
 
 use crate::{
-    DatabaseConnection, RedisConnection, TxnDatabaseConnection,
+    RedisConnection,
     error::{RecordsError, RecordsResult},
     opt_event::OptEvent,
     redis_key::{MapKey, map_key},
 };
 use deadpool_redis::redis::{self, AsyncCommands};
-use futures::TryStreamExt;
+use entity::{event_edition_records, global_event_records, global_records, records};
+use futures::{StreamExt, TryStreamExt};
 use itertools::{EitherOrBoth, Itertools};
+use sea_orm::{
+    ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, Order, PaginatorTrait,
+    QueryFilter as _, QuerySelect, StreamTrait,
+    prelude::Expr,
+    sea_query::{Query, SelectStatement},
+};
 
 use std::{
     collections::HashMap,
@@ -82,7 +89,7 @@ use tokio::sync::{Mutex, Semaphore};
 /// If many tasks wrap their procedure for the same ID, it is guaranteed that only one of them
 /// will execute at a time, implying the other tasks to wait before executing the next one.
 ///
-/// Therefore, this function might block (asynchronously), with a timeout of 10 seconds.
+/// Therefore, this function may await for up to 10 seconds.
 pub async fn lock_within<F, Fut, R>(map_id: u32, f: F) -> R
 where
     F: FnOnce() -> Fut,
@@ -96,9 +103,6 @@ where
     /// It is locked if and only if the associated semaphore is acquired. This is so that
     /// we don't remove the entry from the hash map then reinsert it again if another task is running
     /// for the same ID. The entry is removed if the associated semaphore is referenced only once.
-    ///
-    /// We use a mutex and a semaphore because they seem to be the most efficient compared to
-    /// a `RwLock` instead of the `Mutex` or a `Mutex<()>` instead of the `Semaphore`.
     static LOCKS: LazyLock<Mutex<HashMap<u32, Arc<Semaphore>>>> = LazyLock::new(Default::default);
 
     let semaphore = {
@@ -139,8 +143,8 @@ where
 /// Updates the rank of a player on a map.
 ///
 /// This is roughly just a `ZADD` command for the Redis leaderboard of the map.
-/// The difference is that it locks the leaderboard during the operation so that any other request
-/// that might access the ranks of the leaderboard must wait for it to finish.
+/// The difference is that it locks the leaderboard during the operation, to avoid modifying
+/// the leaderboard while another request handler operates on it.
 pub async fn update_rank(
     conn: &mut RedisConnection,
     map_id: u32,
@@ -156,52 +160,48 @@ pub async fn update_rank(
     Ok(())
 }
 
-async fn count_records_map<M>(
-    TxnDatabaseConnection {
-        conn: DatabaseConnection { mysql_conn, .. },
-        ..
-    }: &mut TxnDatabaseConnection<'_, M>,
+async fn count_records_map<C: ConnectionTrait>(
+    conn: &C,
     map_id: u32,
     event: OptEvent<'_>,
-) -> RecordsResult<i64> {
-    let builder = event.sql_frag_builder();
+) -> RecordsResult<u64> {
+    let query = records::Entity::find()
+        .filter(records::Column::MapId.eq(map_id))
+        .group_by(records::Column::RecordPlayerId);
 
-    let mut query = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM (SELECT r.* FROM records r ");
-    builder
-        .push_event_join(&mut query, "eer", "r")
-        .push(" where map_id = ")
-        .push_bind(map_id)
-        .push(" ");
-    let query = builder
-        .push_event_filter(&mut query, "eer")
-        .push(" group by record_player_id) r")
-        .build_query_scalar();
+    let query = match event.get() {
+        Some((ev, ed)) => query.reverse_join(event_edition_records::Entity).filter(
+            event_edition_records::Column::EventId
+                .eq(ev.id)
+                .and(event_edition_records::Column::EditionId.eq(ed.id)),
+        ),
+        None => query,
+    };
 
-    query
-        .fetch_one(&mut ***mysql_conn)
-        .await
-        .map_err(Into::into)
+    let result = query.count(conn).await?;
+    Ok(result)
 }
 
 /// Checks if the Redis leaderboard for the map with the provided ID has a different count
-/// than in the database, and reupdates the Redis leaderboard completly if so.
+/// than in the database, and regenerates the Redis leaderboard completely if so.
 ///
 /// This is a check to avoid differences between the MariaDB and the Redis leaderboards.
 ///
 /// It returns the number of records in the map.
-pub async fn update_leaderboard<M>(
-    conn: &mut TxnDatabaseConnection<'_, M>,
+pub async fn update_leaderboard<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     map_id: u32,
     event: OptEvent<'_>,
-) -> RecordsResult<i64> {
-    let mysql_count: i64 = count_records_map(conn, map_id, event).await?;
+) -> RecordsResult<u64> {
+    let mysql_count = count_records_map(conn, map_id, event).await?;
 
     lock_within(map_id, || async move {
         let key = map_key(map_id, event);
 
-        let redis_count: i64 = conn.conn.redis_conn.zcount(key, "-inf", "+inf").await?;
+        let redis_count: u64 = redis_conn.zcount(key, "-inf", "+inf").await?;
         if redis_count != mysql_count {
-            force_update_locked(&mut conn.conn, map_id, event).await?;
+            force_update_locked(conn, redis_conn, map_id, event).await?;
         }
 
         RecordsResult::Ok(())
@@ -211,31 +211,43 @@ pub async fn update_leaderboard<M>(
     Ok(mysql_count)
 }
 
-fn get_mariadb_lb_query(
-    map_id: u32,
-    event: OptEvent<'_>,
-) -> sqlx::QueryBuilder<'static, sqlx::MySql> {
-    let builder = event.sql_frag_builder();
-
-    let mut q = sqlx::QueryBuilder::new(
-        "select record_player_id, min(time) as time \
-        from records r ",
-    );
-
-    builder
-        .push_event_join(&mut q, "eer", "r")
-        .push(" where map_id = ")
-        .push_bind(map_id)
-        .push(" ");
-    builder
-        .push_event_filter(&mut q, "eer")
-        .push(" group by record_player_id order by time, record_player_id asc");
-
-    q
+#[derive(sea_orm::FromQueryResult)]
+struct DbLeaderboardItem {
+    record_player_id: u32,
+    time: i32,
 }
 
-async fn force_update_locked(
-    conn: &mut DatabaseConnection<'_>,
+fn get_mariadb_lb_query(map_id: u32, event: OptEvent<'_>) -> SelectStatement {
+    let mut query = Query::select();
+    query
+        .order_by_expr(Expr::col(("r", records::Column::Time)).into(), Order::Asc)
+        .order_by_expr(
+            Expr::col(("r", records::Column::RecordPlayerId)).into(),
+            Order::Asc,
+        )
+        .expr(Expr::col(("r", records::Column::RecordPlayerId)))
+        .expr(Expr::col(("r", records::Column::Time)))
+        .and_where(Expr::col(("r", records::Column::MapId)).eq(map_id));
+
+    match event.get() {
+        Some((ev, ed)) => {
+            query.from_as(global_event_records::Entity, "r").and_where(
+                Expr::col(("r", global_event_records::Column::EventId))
+                    .eq(ev.id)
+                    .and(Expr::col(("r", global_event_records::Column::EditionId)).eq(ed.id)),
+            );
+        }
+        None => {
+            query.from_as(global_records::Entity, "r");
+        }
+    }
+
+    query
+}
+
+async fn force_update_locked<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     map_id: u32,
     event: OptEvent<'_>,
 ) -> RecordsResult<()> {
@@ -246,16 +258,20 @@ async fn force_update_locked(
 
     pipe.del(&key);
 
-    get_mariadb_lb_query(map_id, event)
-        .build_query_as()
-        .fetch(&mut **conn.mysql_conn)
-        .map_ok(|(player_id, time): (u32, i32)| {
-            pipe.zadd(&key, player_id, time);
+    let stmt = conn
+        .get_database_backend()
+        .build(&get_mariadb_lb_query(map_id, event));
+
+    conn.stream(stmt)
+        .await?
+        .map(|res| res.and_then(|result| DbLeaderboardItem::from_query_result(&result, "")))
+        .map_ok(|item| {
+            pipe.zadd(&key, item.record_player_id, item.time);
         })
         .try_collect::<()>()
         .await?;
 
-    let _: () = pipe.query_async(conn.redis_conn).await?;
+    let _: () = pipe.query_async(redis_conn).await?;
 
     Ok(())
 }
@@ -287,35 +303,38 @@ async fn get_rank_impl(
 /// The ranking type is the standard competition ranking (1224).
 ///
 /// See the [module documentation](super) for more information.
-pub async fn get_rank<M>(
-    TxnDatabaseConnection { conn, .. }: &mut TxnDatabaseConnection<'_, M>,
+pub async fn get_rank<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     map_id: u32,
     player_id: u32,
     time: i32,
     event: OptEvent<'_>,
 ) -> RecordsResult<i32> {
-    lock_within(map_id, || async move {
-        let key = map_key(map_id, event);
+    let key = map_key(map_id, event);
 
+    lock_within(map_id, || async move {
         // We update the Redis leaderboard if it doesn't have the requested `time`, and keep
         // track of the previous time if it's lower than ours.
-        let score: Option<i32> = conn.redis_conn.zscore(&key, player_id).await?;
+        let score: Option<i32> = redis_conn.zscore(&key, player_id).await?;
         let newest_time = match score {
             Some(t) if t == time => None,
             other => {
-                force_update_locked(conn, map_id, event).await?;
+                force_update_locked(conn, redis_conn, map_id, event).await?;
                 other.filter(|t| *t < time)
             }
         };
 
-        match get_rank_impl(conn.redis_conn, &key, time).await? {
+        match get_rank_impl(redis_conn, &key, time).await? {
             Some(r) => {
                 if let Some(time) = newest_time {
-                    let _: () = conn.redis_conn.zadd(key, player_id, time).await?;
+                    let _: () = redis_conn.zadd(key, player_id, time).await?;
                 }
                 Ok(r)
             }
-            None => Err(get_rank_failed(conn, player_id, map_id, event, time, score).await?),
+            None => Err(
+                get_rank_failed(conn, redis_conn, player_id, map_id, event, time, score).await?,
+            ),
         }
     })
     .await
@@ -324,109 +343,85 @@ pub async fn get_rank<M>(
 /// Returns an error and prints a clear message of the leaderboards differences between
 /// MariaDB and Redis.
 #[cold]
-async fn get_rank_failed(
-    db: &mut DatabaseConnection<'_>,
+async fn get_rank_failed<C: ConnectionTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     player_id: u32,
     map_id: u32,
     event: OptEvent<'_>,
-    time: i32,
-    tested_time: Option<i32>,
+    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] time: i32,
+    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] tested_time: Option<i32>,
 ) -> RecordsResult<RecordsError> {
-    use std::fmt::Write as _;
-
-    fn num_digits<N>(n: N) -> usize
-    where
-        f64: From<N>,
-    {
-        (f64::from(n).log10() + 1.) as _
-    }
-
     let key = &map_key(map_id, event);
-    let redis_lb: Vec<i64> = db.redis_conn.zrange_withscores(key, 0, -1).await?;
-
-    let mariadb_lb = get_mariadb_lb_query(map_id, event)
-        .build_query_as::<(u32, i32)>()
-        .fetch_all(&mut **db.mysql_conn)
-        .await?;
+    let redis_lb: Vec<i64> = redis_conn.zrange_withscores(key, 0, -1).await?;
+    let mariadb_lb = conn
+        .get_database_backend()
+        .build(&get_mariadb_lb_query(map_id, event));
+    let mariadb_lb = conn
+        .query_all(mariadb_lb)
+        .await?
+        .into_iter()
+        .map(|result| DbLeaderboardItem::from_query_result(&result, ""))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let lb = redis_lb
-        .chunks_exact(2)
-        .map(|chunk| (chunk[0] as u32, chunk[1] as i32))
-        .zip_longest(mariadb_lb)
-        .collect::<Vec<_>>();
-
-    let width = lb
+        .as_chunks()
+        .0
         .iter()
-        .map(|e| match e {
-            EitherOrBoth::Both((rpid, rtime), (mpid, mtime)) => {
-                num_digits(*rpid) + num_digits(*rtime) + num_digits(*mpid) + num_digits(*mtime)
-            }
-            EitherOrBoth::Left((rpid, rtime)) => num_digits(*rpid) + num_digits(*rtime),
-            EitherOrBoth::Right((mpid, mtime)) => num_digits(*mpid) + num_digits(*mtime),
-        })
-        .max()
-        .unwrap_or_default()
-        .max("player".len() * 2 + "time".len() * 2 + 1);
-    let w4 = width / 4;
+        .map(|[player_id, score]| (*player_id as u32, *score as i32))
+        .zip_longest(mariadb_lb);
 
-    let mut msg = format!(
-        "{:w2$} || {:w2$}\n{empty:-<w$}\n{player:w4$} | {time:w4$} || {player:w4$} | {time:w4$}\n",
-        "redis",
-        "mariadb",
-        player = "player",
-        time = "time",
-        w2 = width / 2 + 3,
-        w = width + 10,
-        empty = "",
-    );
+    let mut table = prettytable::Table::init(vec![prettytable::row![
+        "Redis player",
+        "Redis time",
+        "SQL player",
+        "SQL time",
+    ]]);
 
     for row in lb {
         match row {
-            EitherOrBoth::Both((rpid, rtime), (mpid, mtime)) => {
-                writeln!(
-                    msg,
-                    "{c}{rpid:w4$} | {rtime:w4$} || {mpid:w4$} | {mtime:w4$}{c_end}",
-                    c = if rpid != mpid || rtime != mtime {
-                        "\x1b[93m"
-                    } else if player_id == rpid && player_id == mpid {
-                        "\x1b[34m"
-                    } else {
-                        ""
-                    },
-                    c_end = if rpid != mpid
-                        || rtime != mtime
-                        || (player_id == rpid && player_id == mpid)
-                    {
-                        "\x1b[0m"
-                    } else {
-                        ""
-                    },
-                )
-                .unwrap();
+            EitherOrBoth::Both(
+                (redis_player_id, redis_time),
+                DbLeaderboardItem {
+                    record_player_id: sql_player_id,
+                    time: sql_time,
+                },
+            ) => {
+                let color = if redis_player_id != sql_player_id || redis_time != sql_time {
+                    // Conflict
+                    "Fy"
+                } else if player_id == redis_player_id && player_id == sql_player_id {
+                    // Currently selected player
+                    "Fb"
+                } else {
+                    ""
+                };
+
+                table.add_row(prettytable::Row::new(vec![
+                    prettytable::Cell::from(&redis_player_id).style_spec(color),
+                    prettytable::Cell::from(&redis_time).style_spec(color),
+                    prettytable::Cell::from(&sql_player_id).style_spec(color),
+                    prettytable::Cell::from(&sql_time).style_spec(color),
+                ]));
             }
-            EitherOrBoth::Left((rpid, rtime)) => {
-                writeln!(
-                    msg,
-                    "\x1b[93m{rpid:w4$} | {rtime:w4$} || {empty:w4$} | {empty:w4$}\x1b[0m",
-                    empty = ""
-                )
-                .unwrap();
+            EitherOrBoth::Left((redis_player_id, redis_time)) => {
+                table.add_row(prettytable::row![Fy => redis_player_id, redis_time, "", ""]);
             }
-            EitherOrBoth::Right((mpid, mtime)) => {
-                writeln!(
-                    msg,
-                    "\x1b[93m{empty:w4$} | {empty:w4$} || {mpid:w4$} | {mtime:w4$}\x1b[0m",
-                    empty = ""
-                )
-                .unwrap();
+            EitherOrBoth::Right(DbLeaderboardItem {
+                record_player_id: sql_player_id,
+                time: sql_time,
+            }) => {
+                table.add_row(prettytable::row![Fy => "", "", sql_player_id, sql_time]);
             }
         }
     }
 
     #[cfg(feature = "tracing")]
     tracing::error!(
-        "missing player rank ({player_id} on map {map_id} with time {time}); tested time: {tested_time:?}\n{msg}"
+        "missing player rank ({player_id} on map {map_id} ({key}) with time {time}); tested time: {tested_time:?}\n{table}"
     );
 
-    Ok(RecordsError::Internal)
+    Ok(RecordsError::Internal(
+        "Error when retrieving the rank of a player".to_owned(),
+    ))
 }

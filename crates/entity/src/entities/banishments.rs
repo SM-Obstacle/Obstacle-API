@@ -1,0 +1,37 @@
+use sea_orm::entity::prelude::*;
+
+/// A banishment in the database.
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[sea_orm(table_name = "banishments")]
+pub struct Model {
+    #[sea_orm(primary_key)]
+    pub id: u32,
+    pub date_ban: DateTime,
+    pub duration: Option<i64>,
+    pub was_reprieved: i8,
+    pub reason: String,
+    pub player_id: Option<u32>,
+    pub banished_by: Option<u32>,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::players::Entity",
+        from = "Column::BanishedBy",
+        to = "super::players::Column::Id",
+        on_update = "Restrict",
+        on_delete = "SetNull"
+    )]
+    BanAuthor,
+    #[sea_orm(
+        belongs_to = "super::players::Entity",
+        from = "Column::PlayerId",
+        to = "super::players::Column::Id",
+        on_update = "Restrict",
+        on_delete = "SetNull"
+    )]
+    Player,
+}
+
+impl ActiveModelBehavior for ActiveModel {}

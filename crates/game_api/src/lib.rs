@@ -6,16 +6,13 @@ pub use deadpool_redis::Pool as RedisPool;
 pub use sqlx::MySqlPool;
 
 mod auth;
+pub mod configure;
 mod env;
 mod error;
 mod graphql;
 mod http;
 mod modeversion;
-pub(crate) mod must;
 mod utils;
-
-#[cfg(test)]
-mod tests;
 
 pub use auth::AuthState;
 pub use env::*;
@@ -24,3 +21,8 @@ pub use graphql::graphql_route;
 pub use http::api_route;
 pub use modeversion::*;
 pub use utils::Res;
+
+#[doc(hidden)]
+pub mod __private {
+    pub use records_lib::internal;
+}

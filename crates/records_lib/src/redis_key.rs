@@ -202,7 +202,7 @@ impl fmt::Display for MapKey<'_> {
 ///
 /// This is a generic version of the [`alone_map_key`] and [`event_map_key`] functions.
 pub fn map_key(map_id: u32, event: OptEvent<'_>) -> MapKey<'_> {
-    match event.event {
+    match event.get() {
         Some((event, edition)) => MapKey::Evented(event_map_key(map_id, &event.handle, edition.id)),
         None => MapKey::Alone(alone_map_key(map_id)),
     }

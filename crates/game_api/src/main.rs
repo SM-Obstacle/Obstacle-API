@@ -10,44 +10,17 @@ use actix_session::{
     storage::CookieSessionStore,
 };
 use actix_web::{
-    App, HttpServer, Responder,
+    App, HttpServer,
     cookie::{Key, time::Duration as CookieDuration},
-    web::{self, Data},
+    middleware,
 };
 use anyhow::Context;
-use game_api_lib::{
-    AuthState, FitRequestId, RecordsErrorKind, RecordsResponse, api_route, graphql_route,
-};
-use records_lib::{Database, get_mysql_pool, get_redis_pool};
-use reqwest::Client;
+use game_api_lib::configure;
+use migration::MigratorTrait;
+use records_lib::Database;
 use tracing::level_filters::LevelFilter;
-use tracing_actix_web::{DefaultRootSpanBuilder, RequestId, RootSpanBuilder, TracingLogger};
+use tracing_actix_web::TracingLogger;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
-
-struct CustomRootSpanBuilder;
-
-impl RootSpanBuilder for CustomRootSpanBuilder {
-    fn on_request_start(request: &actix_web::dev::ServiceRequest) -> tracing::Span {
-        let db = request.app_data::<Database>().unwrap();
-        tracing_actix_web::root_span!(
-            request,
-            pool_size = db.mysql_pool.size(),
-            pool_num_idle = db.mysql_pool.num_idle()
-        )
-    }
-
-    fn on_request_end<B: actix_web::body::MessageBody>(
-        span: tracing::Span,
-        outcome: &Result<actix_web::dev::ServiceResponse<B>, actix_web::Error>,
-    ) {
-        DefaultRootSpanBuilder::on_request_end(span, outcome);
-    }
-}
-
-/// The actix route handler for the Not Found response.
-async fn not_found(req_id: RequestId) -> RecordsResponse<impl Responder> {
-    Err::<String, _>(RecordsErrorKind::EndpointNotFound).fit(req_id)
-}
 
 /// The main entry point.
 #[tokio::main]
@@ -55,25 +28,17 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
     let env = game_api_lib::init_env()?;
     #[cfg(feature = "request_filter")]
-    request_filter::init_wh_url(env.used_once.wh_invalid_req_url)
-        .unwrap_or_else(|_| panic!("Invalid request WH URL isn't supposed to be set twice"));
+    request_filter::init_wh_url(env.used_once.wh_invalid_req_url).map_err(|_| {
+        game_api_lib::internal!("Invalid request WH URL isn't supposed to be set twice")
+    })?;
 
-    let mysql_pool = get_mysql_pool(env.db_env.db_url.db_url)
+    let db = Database::from_db_url(env.db_env.db_url.db_url, env.db_env.redis_url.redis_url)
         .await
-        .context("Cannot create MySQL pool")?;
-    let redis_pool =
-        get_redis_pool(env.db_env.redis_url.redis_url).context("Cannot create Redis pool")?;
+        .context("Cannot initialize database connection")?;
 
-    sqlx::migrate!("../../db/migrations")
-        .run(&mysql_pool)
-        .await?;
-
-    let db = Database {
-        mysql_pool,
-        redis_pool,
-    };
-
-    let client = Client::new();
+    migration::Migrator::up(&db.sql_conn, None)
+        .await
+        .context("Cannot migrate")?;
 
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::CLOSE)
@@ -82,14 +47,30 @@ async fn main() -> anyhow::Result<()> {
                 .with_default_directive(LevelFilter::INFO.into())
                 .from_env_lossy(),
         )
-        .init();
+        .try_init()
+        .map_err(anyhow::Error::msg)
+        .context("Cannot initialize trace subscriber")?;
 
-    tracing::info!(
-        "Using max connections: {}",
-        db.mysql_pool.options().get_max_connections()
-    );
+    let max_connections = {
+        #[allow(unreachable_patterns)]
+        match db.sql_conn {
+            #[cfg(feature = "mysql")]
+            sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(_) => db
+                .sql_conn
+                .get_mysql_connection_pool()
+                .options()
+                .get_max_connections(),
+            #[cfg(feature = "postgres")]
+            sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(_) => db
+                .sql_conn
+                .get_postgres_connection_pool()
+                .options()
+                .get_max_connections(),
+            _ => 0,
+        }
+    };
 
-    let auth_state = Data::new(AuthState::default());
+    tracing::info!("Using max connections: {max_connections}");
 
     let sess_key = Key::from(env.used_once.sess_key.as_bytes());
     drop(env.used_once.sess_key);
@@ -107,7 +88,9 @@ async fn main() -> anyhow::Result<()> {
 
         App::new()
             .wrap(cors)
-            .wrap(TracingLogger::<CustomRootSpanBuilder>::new())
+            .wrap(middleware::from_fn(configure::mask_internal_errors))
+            .wrap(middleware::from_fn(configure::fit_request_id))
+            .wrap(TracingLogger::<configure::RootSpanBuilder>::new())
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), sess_key.clone())
                     .cookie_secure(cfg!(not(debug_assertions)))
@@ -117,18 +100,13 @@ async fn main() -> anyhow::Result<()> {
                     ))
                     .build(),
             )
-            .app_data(auth_state.clone())
-            .app_data(client.clone())
-            .app_data(db.clone())
-            .service(graphql_route(db.clone(), client.clone()))
-            .service(api_route())
-            .default_service(web::to(not_found))
+            .configure(|cfg| configure::configure(cfg, db.clone()))
     })
     .bind(("0.0.0.0", game_api_lib::env().port))
-    .context("Cannot bind 0.0.0.0 address")?
+    .context("Cannot bind address")?
     .run()
     .await
-    .context("Cannot create actix-web server")?;
+    .context("Cannot run web server")?;
 
     Ok(())
 }

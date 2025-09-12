@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use async_graphql::SimpleObject;
 use deadpool_redis::redis::AsyncCommands;
 use records_lib::{
-    Database, DatabaseConnection, MySqlPool, RedisPool, acquire, map,
+    Database, RedisConnection, RedisPool, map,
     mappack::{AnyMappackId, update_mappack},
     must, player,
     redis_key::{
@@ -14,6 +14,7 @@ use records_lib::{
     },
 };
 use reqwest::Client;
+use sea_orm::{ConnectionTrait, DbConn};
 use serde::Deserialize;
 
 use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
@@ -28,9 +29,10 @@ struct MXMappackInfoResponse {
     Created: String,
 }
 
-async fn fill_mappack(
+async fn fill_mappack<C: ConnectionTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     client: &Client,
-    conn: &mut DatabaseConnection<'_>,
     mappack: AnyMappackId<'_>,
     mappack_id: u32,
 ) -> RecordsResult<()> {
@@ -56,9 +58,8 @@ async fn fill_mappack(
 
     for mx_map in maps {
         // We check that the map exists in our database
-        let _ = must::have_map(conn.mysql_conn, &mx_map.TrackUID).await?;
-        let _: () = conn
-            .redis_conn
+        let _ = must::have_map(conn, &mx_map.TrackUID).await?;
+        let _: () = redis_conn
             .sadd(mappack_key(mappack), mx_map.TrackUID)
             .await
             .with_api_err()?;
@@ -68,20 +69,17 @@ async fn fill_mappack(
     // These keys would probably be null for some mappacks, because they would belong
     // to an event edition, so these info would be retrieved from our information system.
 
-    let _: () = conn
-        .redis_conn
+    let _: () = redis_conn
         .set(mappack_mx_username_key(mappack), info.Username)
         .await
         .with_api_err()?;
 
-    let _: () = conn
-        .redis_conn
+    let _: () = redis_conn
         .set(mappack_mx_name_key(mappack), info.Name)
         .await
         .with_api_err()?;
 
-    let _: () = conn
-        .redis_conn
+    let _: () = redis_conn
         .set(mappack_mx_created_key(mappack), info.Created)
         .await
         .with_api_err()?;
@@ -187,10 +185,9 @@ impl MappackPlayer<'_> {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<MappackMap>> {
         let db = ctx.data_unchecked::<Database>();
-        let conn = acquire!(db?);
+        let mut redis_conn = db.redis_pool.get().await?;
 
-        let maps_uids: Vec<String> = conn
-            .redis_conn
+        let maps_uids: Vec<String> = redis_conn
             .zrange_withscores(
                 mappack_player_ranks_key(
                     AnyMappackId::Id(&self.mappack.mappack_id),
@@ -200,23 +197,19 @@ impl MappackPlayer<'_> {
                 -1,
             )
             .await?;
-        let maps_uids = maps_uids.chunks_exact(2);
+        let (maps_uids, _) = maps_uids.as_chunks::<2>();
 
-        let mut out = Vec::with_capacity(maps_uids.size_hint().0);
+        let mut out = Vec::with_capacity(maps_uids.len());
 
-        for chunk in maps_uids {
-            let [game_id, rank] = chunk else {
-                unreachable!("plz stabilize Iterator::array_chunks")
-            };
+        for [game_id, rank] in maps_uids {
             let rank = rank.parse()?;
-            let last_rank = conn
-                .redis_conn
+            let last_rank = redis_conn
                 .get(mappack_map_last_rank(
                     AnyMappackId::Id(&self.mappack.mappack_id),
                     game_id,
                 ))
                 .await?;
-            let map = must::have_map(conn.mysql_conn, game_id).await?;
+            let map = must::have_map(&db.sql_conn, game_id).await?;
 
             out.push(MappackMap {
                 map: map.into(),
@@ -308,17 +301,16 @@ impl Mappack {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<MappackPlayer<'a>>> {
         let db = ctx.data_unchecked::<Database>();
-        let conn = acquire!(db?);
+        let mut redis_conn = db.redis_pool.get().await?;
 
-        let leaderboard: Vec<u32> = conn
-            .redis_conn
+        let leaderboard: Vec<u32> = redis_conn
             .zrange(mappack_lb_key(AnyMappackId::Id(&self.mappack_id)), 0, -1)
             .await?;
 
         let mut out = Vec::with_capacity(leaderboard.len());
 
         for id in leaderboard {
-            let player = player::get_player_from_id(conn.mysql_conn, id).await?;
+            let player = player::get_player_from_id(&db.sql_conn, id).await?;
             out.push(MappackPlayer {
                 inner: player.into(),
                 mappack: self,
@@ -333,9 +325,9 @@ impl Mappack {
         ctx: &async_graphql::Context<'_>,
         login: String,
     ) -> async_graphql::Result<MappackPlayer<'a>> {
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
-        let mut mysql_conn = mysql_pool.acquire().await?;
-        let player = must::have_player(&mut mysql_conn, &login).await?;
+        let conn = ctx.data_unchecked::<DbConn>();
+
+        let player = must::have_player(conn, &login).await?;
 
         Ok(MappackPlayer {
             inner: player.into(),
@@ -372,11 +364,12 @@ pub async fn get_mappack(
     mappack_id: String,
 ) -> RecordsResult<Mappack> {
     let db = ctx.data_unchecked::<Database>();
-    let mut conn = acquire!(db.with_api_err()?);
+    let conn = ctx.data_unchecked::<DbConn>();
+    let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
+
     let mappack = AnyMappackId::Id(&mappack_id);
 
-    let mappack_uids: Vec<String> = conn
-        .redis_conn
+    let mappack_uids: Vec<String> = redis_conn
         .smembers(mappack_key(mappack))
         .await
         .with_api_err()?;
@@ -390,12 +383,17 @@ pub async fn get_mappack(
         let client = ctx.data_unchecked::<Client>();
 
         // We fill the mappack
-        fill_mappack(client, &mut conn, mappack, mappack_id_int).await?;
+        fill_mappack(conn, &mut redis_conn, client, mappack, mappack_id_int).await?;
 
         // And we update it to have its scores cached
-        update_mappack(&mut conn, AnyMappackId::Id(&mappack_id), Default::default())
-            .await
-            .with_api_err()?;
+        update_mappack(
+            conn,
+            &mut redis_conn,
+            AnyMappackId::Id(&mappack_id),
+            Default::default(),
+        )
+        .await
+        .with_api_err()?;
     }
 
     Ok(From::from(mappack_id))

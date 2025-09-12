@@ -1,6 +1,6 @@
 use clap::Parser;
 use mkenv::Env as _;
-use records_lib::{get_mysql_pool, get_redis_pool, Database, DbEnv, LibEnv};
+use records_lib::{Database, DbEnv, LibEnv};
 
 use self::{clear::ClearCommand, leaderboard::LbCommand, populate::PopulateCommand};
 
@@ -36,10 +36,8 @@ async fn main() -> anyhow::Result<()> {
     let env = Env::try_get()?;
     records_lib::init_env(env.lib_env);
 
-    let db = Database {
-        mysql_pool: get_mysql_pool(env.db_env.db_url.db_url).await?,
-        redis_pool: get_redis_pool(env.db_env.redis_url.redis_url)?,
-    };
+    let db =
+        Database::from_db_url(env.db_env.db_url.db_url, env.db_env.redis_url.redis_url).await?;
 
     let cmd = Command::parse();
 

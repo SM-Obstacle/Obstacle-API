@@ -1,0 +1,20 @@
+[package]
+name = "migration"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "migration"
+path = "src/lib.rs"
+
+[dependencies]
+sea-orm = { workspace = true, features = ["sqlx", "sqlx-dep"] }
+entity = { path = "../entity" }
+sea-orm-migration = { version = "1.1.0", features = ["runtime-tokio"] }
+tokio = { workspace = true }
+
+[features]
+default = []
+mysql = ["sea-orm-migration/sqlx-mysql", "sea-orm/sqlx-mysql"]
+postgres = ["sea-orm-migration/sqlx-postgres", "sea-orm/sqlx-postgres"]

@@ -1,20 +1,29 @@
-use std::{collections::HashMap, iter::repeat_n, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use async_graphql::{
     ID,
     dataloader::{DataLoader, Loader},
 };
 use deadpool_redis::redis::AsyncCommands;
-use futures::StreamExt;
+use entity::{
+    event_edition, event_edition_maps, global_event_records, global_records, maps, player_rating,
+    records,
+};
 use records_lib::{
-    Database, DatabaseConnection, TxnDatabaseConnection, acquire,
-    models::{self, Record},
+    Database, RedisConnection,
     opt_event::OptEvent,
     ranks::{get_rank, update_leaderboard},
-    redis_key::alone_map_key,
-    transaction::{self, ReadOnly},
+    redis_key::map_key,
+    transaction,
 };
-use sqlx::{FromRow, MySqlPool, mysql};
+use sea_orm::{
+    ColumnTrait as _, ConnectionTrait, DatabaseConnection, DbConn, DbErr, EntityTrait,
+    FromQueryResult, QueryFilter, QueryOrder, QuerySelect, StreamTrait,
+    prelude::Expr,
+    sea_query::{Asterisk, ExprTrait, Func, Query},
+};
+
+use crate::internal;
 
 use super::{
     SortState,
@@ -24,85 +33,105 @@ use super::{
     record::RankedRecord,
 };
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, FromQueryResult)]
 pub struct Map {
-    #[sqlx(flatten)]
-    pub inner: models::Map,
+    #[sea_orm(nested)]
+    pub inner: maps::Model,
 }
 
-impl From<models::Map> for Map {
-    fn from(inner: models::Map) -> Self {
+impl From<maps::Model> for Map {
+    fn from(inner: maps::Model) -> Self {
         Self { inner }
     }
 }
 
-async fn get_map_records<M>(
-    conn: &mut TxnDatabaseConnection<'_, M>,
+async fn get_map_records<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
     map_id: u32,
     event: OptEvent<'_>,
     rank_sort_by: Option<SortState>,
     date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<Vec<RankedRecord>> {
-    let key = alone_map_key(map_id);
+    let key = map_key(map_id, event);
 
-    update_leaderboard(conn, map_id, event).await?;
+    update_leaderboard(conn, redis_conn, map_id, event).await?;
 
     let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
     let record_ids: Vec<i32> = if to_reverse {
-        conn.conn.redis_conn.zrevrange(&key, 0, 99)
+        redis_conn.zrevrange(&key, 0, 99)
     } else {
-        conn.conn.redis_conn.zrange(&key, 0, 99)
+        redis_conn.zrange(&key, 0, 99)
     }
     .await?;
+
     if record_ids.is_empty() {
         return Ok(Vec::new());
     }
 
-    let builder = event.sql_frag_builder();
+    let mut select = Query::select();
 
-    let mut query = sqlx::QueryBuilder::new("SELECT * FROM ");
-    builder
-        .push_event_view_name(&mut query, "r")
-        .push(" where r.map_id = ")
-        .push_bind(map_id)
-        .push(" ");
+    let select = match event.get() {
+        Some((ev, ed)) => select.from_as(global_event_records::Entity, "r").and_where(
+            Expr::col(("r", global_event_records::Column::EventId))
+                .eq(ev.id)
+                .and(Expr::col(("r", global_event_records::Column::EditionId)).eq(ed.id)),
+        ),
+        None => select.from_as(global_records::Entity, "r"),
+    }
+    .column(Asterisk)
+    .and_where(Expr::col(("r", records::Column::MapId)).eq(map_id));
 
     if let Some(ref s) = date_sort_by {
-        query.push(" order by r.record_date");
-        if let SortState::Sort = s {
-            query.push(" desc");
-        }
+        select.order_by_expr(
+            Expr::col(("r", records::Column::RecordDate)).into(),
+            match s {
+                SortState::Sort => sea_orm::Order::Desc,
+                SortState::Reverse => sea_orm::Order::Asc,
+            },
+        );
     } else {
-        let mut sep = builder
-            .push_event_filter(&mut query, "r")
-            .push(" and r.record_player_id in (")
-            .separated(", ");
-        for id in record_ids {
-            sep.push_bind(id);
-        }
-        query.push(") order by r.time");
-        if to_reverse {
-            query.push(" desc");
-        } else {
-            query.push(" asc");
-        }
-        query.push(", r.record_date asc");
+        select
+            .and_where(Expr::col(("r", records::Column::RecordPlayerId)).is_in(record_ids))
+            .order_by_expr(
+                Expr::col(("r", records::Column::Time)).into(),
+                if to_reverse {
+                    sea_orm::Order::Desc
+                } else {
+                    sea_orm::Order::Asc
+                },
+            )
+            .order_by_expr(
+                Expr::col(("r", records::Column::RecordDate)).into(),
+                sea_orm::Order::Asc,
+            );
     }
 
     if date_sort_by.is_some() {
-        query.push(" limit 100");
+        select.limit(100);
     }
 
-    let records = query
-        .build_query_as::<Record>()
-        .fetch_all(&mut **conn.conn.mysql_conn)
-        .await?;
+    let stmt = conn.get_database_backend().build(&*select);
+    let records = conn
+        .query_all(stmt)
+        .await?
+        .into_iter()
+        .map(|result| records::Model::from_query_result(&result, ""))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
     for record in records {
-        let rank = get_rank(conn, map_id, record.record_player_id, record.time, event).await?;
-        ranked_records.push(models::RankedRecord { rank, record }.into());
+        let rank = get_rank(
+            conn,
+            redis_conn,
+            map_id,
+            record.record_player_id,
+            record.time,
+            event,
+        )
+        .await?;
+        ranked_records.push(records::RankedRecord { rank, record }.into());
     }
 
     Ok(ranked_records)
@@ -117,28 +146,19 @@ impl Map {
         date_sort_by: Option<SortState>,
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
-        let conn = acquire!(db?);
+        let mut redis_conn = db.redis_pool.get().await?;
 
-        records_lib::assert_future_send(transaction::within(
-            conn.mysql_conn,
-            ReadOnly,
-            async |mysql_conn, guard| {
-                get_map_records(
-                    &mut TxnDatabaseConnection::new(
-                        guard,
-                        DatabaseConnection {
-                            mysql_conn,
-                            redis_conn: conn.redis_conn,
-                        },
-                    ),
-                    self.inner.id,
-                    event,
-                    rank_sort_by,
-                    date_sort_by,
-                )
-                .await
-            },
-        ))
+        records_lib::assert_future_send(transaction::within(&db.sql_conn, async |txn| {
+            get_map_records(
+                txn,
+                &mut redis_conn,
+                self.inner.id,
+                event,
+                rank_sort_by,
+                date_sort_by,
+            )
+            .await
+        }))
         .await
     }
 }
@@ -155,11 +175,11 @@ struct RelatedEdition<'a> {
     edition: EventEdition<'a>,
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(FromQueryResult)]
 struct RawRelatedEdition {
     map_id: u32,
-    #[sqlx(flatten)]
-    edition: models::EventEdition,
+    #[sea_orm(nested)]
+    edition: event_edition::Model,
 }
 
 #[async_graphql::Object]
@@ -194,36 +214,43 @@ impl Map {
     async fn related_event_editions(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<RelatedEdition>> {
-        let mysql_pool = ctx.data_unchecked::<MySqlPool>();
+    ) -> async_graphql::Result<Vec<RelatedEdition<'_>>> {
+        let conn = ctx.data_unchecked::<DbConn>();
         let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
 
-        let mut mysql_conn = mysql_pool.acquire().await?;
+        let raw_editions = event_edition::Entity::find()
+            .reverse_join(event_edition_maps::Entity)
+            .filter(
+                event_edition_maps::Column::MapId
+                    .eq(self.inner.id)
+                    .or(event_edition_maps::Column::OriginalMapId.eq(self.inner.id)),
+            )
+            .order_by_desc(event_edition::Column::StartDate)
+            .column(event_edition_maps::Column::MapId)
+            .into_model::<RawRelatedEdition>()
+            .all(conn)
+            .await?;
 
-        let mut raw_editions = sqlx::query_as::<_, RawRelatedEdition>(
-            "select ee.*, eem.map_id from event_edition ee
-            inner join event_edition_maps eem on ee.id = eem.edition_id and ee.event_id = eem.event_id
-            where ? in (eem.map_id, eem.original_map_id)
-            order by ee.start_date desc")
-        .bind(self.inner.id)
-        .fetch(&mut *mysql_conn);
+        let mut out = Vec::with_capacity(raw_editions.len());
 
-        let mut out = Vec::with_capacity(raw_editions.size_hint().0);
+        let mut maps = map_loader
+            .load_many(raw_editions.iter().map(|e| e.map_id))
+            .await?;
 
-        while let Some(raw_edition) = raw_editions.next().await {
-            let edition = raw_edition?;
+        for edition in raw_editions {
+            let map = maps
+                .remove(&edition.map_id)
+                .ok_or_else(|| internal!("unknown map id: {}", edition.map_id))?;
             out.push(RelatedEdition {
-                map: map_loader
-                    .load_one(edition.map_id)
-                    .await?
-                    .expect("unknown map id"),
+                map,
                 // We want to redirect to the event map page if the edition saves any records
                 // on its maps, doesn't have any original map like campaign, or if the map
                 // isn't the original one.
-                redirect_to_event: !edition.edition.is_transparent
-                    && edition.edition.save_non_event_record
-                    && (edition.edition.non_original_maps || self.inner.id == edition.map_id),
-                edition: EventEdition::from_inner(edition.edition, mysql_pool).await?,
+                // TODO: this shouldn't be decided by the API actually
+                redirect_to_event: edition.edition.is_transparent == 0
+                    && edition.edition.save_non_event_record != 0
+                    && (edition.edition.non_original_maps != 0 || self.inner.id == edition.map_id),
+                edition: EventEdition::from_inner(conn, edition.edition).await?,
             });
         }
 
@@ -234,16 +261,22 @@ impl Map {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<PlayerRating>> {
-        let db = ctx.data_unchecked();
-        let fetch_all = sqlx::query_as(
-            r#"SELECT CAST(0 AS UNSIGNED) AS "player_id", map_id, kind,
-            AVG(rating) AS "rating" FROM player_rating
-            WHERE map_id = ? GROUP BY kind ORDER BY kind"#,
-        )
-        .bind(self.inner.id)
-        .fetch_all(db)
-        .await?;
-        Ok(fetch_all)
+        let conn = ctx.data_unchecked::<DatabaseConnection>();
+        let all = player_rating::Entity::find()
+            .filter(player_rating::Column::MapId.eq(self.inner.id))
+            .group_by(player_rating::Column::Kind)
+            .order_by_asc(player_rating::Column::Kind)
+            .select_only()
+            .expr_as(1.cast_as("UNSIGNED"), "player_id")
+            .columns([player_rating::Column::MapId, player_rating::Column::Kind])
+            .expr_as(
+                Func::avg(Expr::col(player_rating::Column::Rating)),
+                "rating",
+            )
+            .into_model()
+            .all(conn)
+            .await?;
+        Ok(all)
     }
 
     async fn records(
@@ -257,34 +290,21 @@ impl Map {
     }
 }
 
-pub struct MapLoader(pub MySqlPool);
+pub struct MapLoader(pub DbConn);
 
 impl Loader<u32> for MapLoader {
     type Value = Map;
-    type Error = Arc<sqlx::Error>;
+    type Error = Arc<DbErr>;
 
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
-        let query = format!(
-            "SELECT * FROM maps WHERE id IN ({})",
-            repeat_n("?".to_string(), keys.len())
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-
-        let mut query = sqlx::query(&query);
-
-        for key in keys {
-            query = query.bind(key);
-        }
-
-        Ok(query
-            .map(|row: mysql::MySqlRow| {
-                let map = Map::from_row(&row).unwrap();
-                (map.inner.id, map)
-            })
-            .fetch_all(&self.0)
+        let hashmap = maps::Entity::find()
+            .filter(maps::Column::Id.is_in(keys.iter().copied()))
+            .all(&self.0)
             .await?
             .into_iter()
-            .collect())
+            .map(|map| (map.id, map.into()))
+            .collect();
+
+        Ok(hashmap)
     }
 }

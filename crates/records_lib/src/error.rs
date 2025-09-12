@@ -1,6 +1,7 @@
 //! A module containing the [`RecordsError`] struct, which contains various basic error types.
 
 use deadpool_redis::PoolError;
+use sea_orm::TransactionError;
 
 /// Represents any type of error that could happen when using this crate.
 ///
@@ -14,32 +15,33 @@ use deadpool_redis::PoolError;
 /// error types that are not present here, with their associated code. These codes should not be
 /// in conflict.
 #[derive(thiserror::Error, Debug)]
-#[repr(i32)]
 #[rustfmt::skip]
 pub enum RecordsError {
-    // Caution: when creating a new error, you must ensure its code isn't
-    // in conflict with another one in `game_api::RecordsErrorKind`.
-
     // --------
     // --- Internal server errors
     // --------
 
     /// An error that happened when interacting with the MySQL/MariaDB database.
     #[error(transparent)]
-    MySql(#[from] sqlx::Error) = 102,
+    MySql(#[from] sqlx::Error),
     /// An error that happened when interacting with the Redis database.
     #[error(transparent)]
-    Redis(#[from] deadpool_redis::redis::RedisError) = 103,
+    Redis(#[from] deadpool_redis::redis::RedisError),
     /// An error that happened when sending an external request.
     #[error(transparent)]
-    ExternalRequest(#[from] reqwest::Error) = 104,
+    ExternalRequest(#[from] reqwest::Error),
     /// An error that happened when using the Redis pool.
     #[error(transparent)]
-    PoolError(#[from] PoolError) = 108,
-    // FIXME: this is here because of the `update_ranks` module malfunctioning sometimes.
-    /// An unknown internal error.
-    #[error("unknown internal error")]
-    Internal = 109,
+    PoolError(#[from] PoolError),
+    /// An internal error.
+    #[error("internal error: {0}")]
+    Internal(String),
+    /// A masked internal error.
+    #[error("internal error")]
+    MaskedInternal,
+    /// An error from the database.
+    #[error(transparent)]
+    DbError(#[from] sea_orm::DbErr),
 
     // --------
     // --- Logical errors
@@ -50,19 +52,19 @@ pub enum RecordsError {
     PlayerNotFound(
         /// The player login.
         String,
-    ) = 302,
+    ),
     /// The map with the provided UID was not found.
     #[error("map with uid `{0}` not found in database")]
     MapNotFound(
         /// The map UID.
         String,
-    ) = 304,
+    ),
     /// The event with the provided handle was not found.
     #[error("event `{0}` not found")]
     EventNotFound(
         /// The event handle.
         String,
-    ) = 310,
+    ),
     /// The event edition with the provided handle and edition ID was not found.
     #[error("event edition `{1}` not found for event `{0}`")]
     EventEditionNotFound(
@@ -70,7 +72,7 @@ pub enum RecordsError {
         String,
         /// The event edition ID.
         u32,
-    ) = 311,
+    ),
     /// The map isn't present in the provided event edition.
     #[error("map with uid `{0}` is not registered for event `{1}` edition {2}")]
     MapNotInEventEdition(
@@ -80,7 +82,34 @@ pub enum RecordsError {
         String,
         /// The event edition ID.
         u32,
-    ) = 312,
+    ),
+}
+
+/// Shortcut for creating an internal error, by formatting a message.
+///
+/// See [`RecordsError::Internal`].
+#[macro_export]
+macro_rules! internal {
+    ($($t:tt)*) => {{
+        $crate::error::RecordsError::Internal($crate::error::__private::format!($($t)*))
+    }};
+}
+
+#[doc(hidden)]
+pub mod __private {
+    pub use std::format;
+}
+
+impl<E> From<TransactionError<E>> for RecordsError
+where
+    RecordsError: From<E>,
+{
+    fn from(value: TransactionError<E>) -> Self {
+        match value {
+            TransactionError::Connection(db_err) => From::from(db_err),
+            TransactionError::Transaction(e) => From::from(e),
+        }
+    }
 }
 
 impl RecordsError {

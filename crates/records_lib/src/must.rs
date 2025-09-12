@@ -10,16 +10,19 @@
 //! we most likely want things to be already existing, without checking it repeatedly
 //! and returning the error to the client.
 
+use entity::{event as event_entity, event_edition, maps, players};
+use sea_orm::{ConnectionTrait, EntityTrait};
+
 use crate::{
     error::{RecordsError, RecordsResult},
-    event, map, models, player,
+    event, internal, map, player,
 };
 
 /// Returns the event in the database bound to the provided event handle.
-pub async fn have_event_handle(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn have_event_handle<C: ConnectionTrait>(
+    conn: &C,
     event_handle: &str,
-) -> RecordsResult<models::Event> {
+) -> RecordsResult<event_entity::Model> {
     event::get_event_by_handle(conn, event_handle)
         .await?
         .ok_or_else(|| RecordsError::EventNotFound(event_handle.to_owned()))
@@ -28,31 +31,30 @@ pub async fn have_event_handle(
 /// Returns the event and its edition in the database bound to the provided IDs.
 // FIXME: although this function is called when we know the edition exists,
 // do we have to get rid of the `fetch_one` method usage?
-pub async fn have_event_edition_from_ids(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn have_event_edition_from_ids<C: ConnectionTrait>(
+    conn: &C,
     event_id: u32,
     edition_id: u32,
-) -> RecordsResult<(models::Event, models::EventEdition)> {
-    let event = sqlx::query_as("select * from event where id = ?")
-        .bind(event_id)
-        .fetch_one(&mut *conn)
-        .await?;
+) -> RecordsResult<(event_entity::Model, event_edition::Model)> {
+    let event = event_entity::Entity::find_by_id(event_id)
+        .one(conn)
+        .await?
+        .ok_or_else(|| {
+            internal!("have_event_edition_from_ids: Event with ID {event_id} must be in database")
+        })?;
 
-    let edition = sqlx::query_as("select * from event_edition where event_id = ? and id = ?")
-        .bind(event_id)
-        .bind(edition_id)
-        .fetch_one(conn)
-        .await?;
+    let edition = event_edition::Entity::find_by_id((event_id, edition_id)).one(conn).await?
+        .ok_or_else(|| internal!("Event edition with event ID {event_id} and edition ID {edition_id} must be in database"))?;
 
     Ok((event, edition))
 }
 
 /// Returns the event and its edition in the database bound to the provided handles and edition ID.
-pub async fn have_event_edition(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn have_event_edition<C: ConnectionTrait>(
+    conn: &C,
     event_handle: &str,
     edition_id: u32,
-) -> RecordsResult<(models::Event, models::EventEdition)> {
+) -> RecordsResult<(event_entity::Model, event_edition::Model)> {
     let event = have_event_handle(conn, event_handle).await?;
 
     let Some(event_edition) = event::get_edition_by_id(conn, event.id, edition_id).await? else {
@@ -66,20 +68,17 @@ pub async fn have_event_edition(
 }
 
 /// Returns the player in the database bound to the provided login.
-pub async fn have_player(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn have_player<C: ConnectionTrait>(
+    conn: &C,
     login: &str,
-) -> RecordsResult<models::Player> {
+) -> RecordsResult<players::Model> {
     player::get_player_from_login(conn, login)
         .await?
         .ok_or_else(|| RecordsError::PlayerNotFound(login.to_string()))
 }
 
 /// Returns the map in the database bound to the provided map UID.
-pub async fn have_map(
-    conn: &mut sqlx::MySqlConnection,
-    map_uid: &str,
-) -> RecordsResult<models::Map> {
+pub async fn have_map<C: ConnectionTrait>(conn: &C, map_uid: &str) -> RecordsResult<maps::Model> {
     map::get_map_from_uid(conn, map_uid)
         .await?
         .ok_or_else(|| RecordsError::MapNotFound(map_uid.to_owned()))
@@ -101,12 +100,12 @@ pub async fn have_map(
 /// For example, for the Benchmark, if the given map UID is `X`, the returned map will be the one
 /// with the UID `X_benchmark`. If the given map UID is already `X_benchmark`, it will
 /// simply be the corresponding map.
-pub async fn have_event_edition_with_map(
-    conn: &mut sqlx::MySqlConnection,
+pub async fn have_event_edition_with_map<C: ConnectionTrait>(
+    conn: &C,
     map_uid: &str,
     event_handle: &str,
     edition_id: u32,
-) -> RecordsResult<(models::Event, models::EventEdition, event::EventMap)> {
+) -> RecordsResult<(event_entity::Model, event_edition::Model, event::EventMap)> {
     let (event, event_edition) = have_event_edition(conn, event_handle, edition_id).await?;
 
     let map = event::get_map_in_edition(conn, map_uid, event.id, event_edition.id)

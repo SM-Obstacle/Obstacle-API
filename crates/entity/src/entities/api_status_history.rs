@@ -1,0 +1,31 @@
+use sea_orm::entity::prelude::*;
+
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[sea_orm(table_name = "api_status_history")]
+pub struct Model {
+    #[sea_orm(primary_key)]
+    pub status_history_id: u32,
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub status_id: u8,
+    pub status_history_date: Option<DateTime>,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::api_status::Entity",
+        from = "Column::StatusId",
+        to = "super::api_status::Column::StatusId",
+        on_update = "Restrict",
+        on_delete = "Restrict"
+    )]
+    ApiStatus,
+}
+
+impl Related<super::api_status::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::ApiStatus.def()
+    }
+}
+
+impl ActiveModelBehavior for ActiveModel {}

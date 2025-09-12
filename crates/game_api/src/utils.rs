@@ -1,5 +1,4 @@
 use std::{
-    convert::Infallible,
     future::{Ready, ready},
     ops::{Deref, DerefMut},
 };
@@ -7,10 +6,15 @@ use std::{
 use actix_web::{
     FromRequest, HttpRequest, HttpResponse, Responder, body::MessageBody, dev::Payload,
 };
-use records_lib::{Database, models};
+use entity::{api_status, api_status_history, types};
+use records_lib::Database;
+use sea_orm::{
+    ConnectionTrait, DbConn, EntityTrait, FromQueryResult, QueryOrder, QuerySelect, prelude::Expr,
+    sea_query::Asterisk,
+};
 use serde::Serialize;
 
-use crate::{RecordsResult, RecordsResultExt};
+use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt, internal};
 
 /// Converts the provided body to a `200 OK` JSON responses.
 pub fn json<T: Serialize, E>(obj: T) -> Result<HttpResponse, E> {
@@ -27,24 +31,28 @@ pub fn any_repeated<T: PartialEq>(slice: &[T]) -> bool {
     false
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Serialize, FromQueryResult)]
 pub struct ApiStatus {
     pub at: chrono::NaiveDateTime,
-    #[sqlx(flatten)]
-    pub kind: models::ApiStatusKind,
+    #[sea_orm(nested)]
+    pub kind: types::ApiStatusKind,
 }
 
-pub async fn get_api_status(db: &Database) -> RecordsResult<ApiStatus> {
-    let result = sqlx::query_as(
-        "SELECT a.*, sh1.status_history_date as `at`
-        FROM api_status_history sh1
-        INNER JOIN api_status a ON a.status_id = sh1.status_id
-        ORDER BY sh1.status_history_id DESC
-        LIMIT 1",
-    )
-    .fetch_one(&db.mysql_pool)
-    .await
-    .with_api_err()?;
+pub async fn get_api_status<C: ConnectionTrait>(conn: &C) -> RecordsResult<ApiStatus> {
+    let result = api_status_history::Entity::find()
+        .inner_join(api_status::Entity)
+        .order_by_desc(api_status_history::Column::StatusHistoryId)
+        .limit(1)
+        .select_only()
+        .column_as(api_status_history::Column::StatusHistoryDate, "at")
+        .expr(Expr::col((api_status::Entity, Asterisk)))
+        .into_model()
+        .one(conn)
+        .await
+        .with_api_err()?
+        .ok_or_else(|| {
+            internal!("api_status and api_status_history must have at least one row in database")
+        })?;
 
     Ok(result)
 }
@@ -91,16 +99,62 @@ impl<T> DerefMut for Res<T> {
 }
 
 impl<T: Clone + 'static> FromRequest for Res<T> {
-    type Error = Infallible;
+    type Error = RecordsErrorKind;
 
-    type Future = Ready<Result<Self, Infallible>>;
+    type Future = Ready<RecordsResult<Self>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let client = req
+        let obj = req
             .app_data::<T>()
-            .unwrap_or_else(|| panic!("{} should be present", std::any::type_name::<T>()))
-            .clone();
-        ready(Ok(Self(client)))
+            .ok_or_else(|| internal!("{} should be present", std::any::type_name::<T>()))
+            .cloned();
+        ready(obj.map(Self))
+    }
+}
+
+pub struct ExtractDbConn(pub DbConn);
+
+impl AsRef<DbConn> for ExtractDbConn {
+    #[inline(always)]
+    fn as_ref(&self) -> &DbConn {
+        self
+    }
+}
+
+impl AsMut<DbConn> for ExtractDbConn {
+    #[inline(always)]
+    fn as_mut(&mut self) -> &mut DbConn {
+        self
+    }
+}
+
+impl Deref for ExtractDbConn {
+    type Target = DbConn;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ExtractDbConn {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl FromRequest for ExtractDbConn {
+    type Error = RecordsErrorKind;
+
+    type Future = Ready<RecordsResult<Self>>;
+
+    fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
+        ready(
+            <Res<Database> as FromRequest>::from_request(req, payload)
+                .into_inner()
+                .map(|db| Self(db.0.sql_conn)),
+        )
     }
 }
 
