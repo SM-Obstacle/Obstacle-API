@@ -189,7 +189,7 @@ async fn event_edition_one_map() -> anyhow::Result<()> {
         // The test might take less than one second to run, and the API checks the availability
         // of an event edition with second-level precision, so we substract some time to ensure
         // the edition is visible in the test.
-        chrono::Utc::now().naive_utc() - Duration::from_secs(5)
+        chrono::Utc::now().naive_utc() - Duration::from_secs(3600 * 24)
     });
 
     let editions = (1..=3).map(|event_id| event_edition::ActiveModel {
@@ -369,7 +369,7 @@ async fn event_edition_one_map_expired() -> anyhow::Result<()> {
         event_id: Set(1),
         id: Set(1),
         name: Set("event_1_1_name".to_owned()),
-        start_date: Set(chrono::Utc::now().naive_utc() - Duration::from_secs(100)),
+        start_date: Set(chrono::Utc::now().naive_utc() - Duration::from_secs(3600 * 24)),
         ttl: Set(Some(50)),
         save_non_event_record: Set(0),
         non_original_maps: Set(0),
@@ -437,7 +437,8 @@ async fn event_edition_one_map_include_expired() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let start_date = chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(100);
+    let start_date =
+        chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(3600 * 24);
 
     let edition = event_edition::ActiveModel {
         event_id: Set(1),
@@ -608,7 +609,8 @@ async fn event_edition_one_map_not_yet_released() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let start_date = chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(100);
+    let start_date =
+        chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(3600 * 24);
 
     let edition = event_edition::ActiveModel {
         event_id: Set(1),
@@ -800,7 +802,8 @@ async fn event_edition_one_map_medals() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let start_date = chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(100);
+    let start_date =
+        chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(3600 * 24);
 
     let edition = event_edition::ActiveModel {
         event_id: Set(1),
@@ -937,7 +940,8 @@ async fn event_edition_one_map_two_categories() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let start_date = chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(100);
+    let start_date =
+        chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(3600 * 24);
 
     let edition = event_edition::ActiveModel {
         event_id: Set(1),
@@ -1094,7 +1098,8 @@ async fn event_edition_one_map_original_map_transitive_save() -> anyhow::Result<
         ..Default::default()
     };
 
-    let start_date = chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(100);
+    let start_date =
+        chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(3600 * 24);
 
     let edition = event_edition::ActiveModel {
         event_id: Set(1),
@@ -1239,7 +1244,8 @@ async fn event_edition_one_map_original_map_no_transitive_save() -> anyhow::Resu
         ..Default::default()
     };
 
-    let start_date = chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(100);
+    let start_date =
+        chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(3600 * 24);
 
     let edition = event_edition::ActiveModel {
         event_id: Set(1),
@@ -1384,7 +1390,8 @@ async fn event_edition_one_map_next_opponent() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let start_date = chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(100);
+    let start_date =
+        chrono::Utc::now().naive_utc().trunc_subsecs(0) - Duration::from_secs(3600 * 24);
 
     let edition = event_edition::ActiveModel {
         event_id: Set(1),
