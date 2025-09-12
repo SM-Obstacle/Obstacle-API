@@ -164,7 +164,7 @@ pub async fn get_edition_by_id<C: ConnectionTrait>(
     event_id: u32,
     edition_id: u32,
 ) -> RecordsResult<Option<event_edition::Model>> {
-    let r = event_edition::Entity::find_by_id((event_id, edition_id))
+    let r = event_edition::Entity::find_by_id((edition_id, event_id))
         .one(conn)
         .await?;
     Ok(r)
