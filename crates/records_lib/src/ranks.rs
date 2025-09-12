@@ -169,7 +169,7 @@ async fn count_records_map<C: ConnectionTrait>(
         .filter(records::Column::MapId.eq(map_id))
         .group_by(records::Column::RecordPlayerId);
 
-    let query = match event.event {
+    let query = match event.get() {
         Some((ev, ed)) => query.reverse_join(event_edition_records::Entity).filter(
             event_edition_records::Column::EventId
                 .eq(ev.id)
@@ -229,7 +229,7 @@ fn get_mariadb_lb_query(map_id: u32, event: OptEvent<'_>) -> SelectStatement {
         .expr(Expr::col(("r", records::Column::Time)))
         .and_where(Expr::col(("r", records::Column::MapId)).eq(map_id));
 
-    match event.event {
+    match event.get() {
         Some((ev, ed)) => {
             query.from_as(global_event_records::Entity, "r").and_where(
                 Expr::col(("r", global_event_records::Column::EventId))

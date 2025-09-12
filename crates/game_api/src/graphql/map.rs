@@ -18,7 +18,7 @@ use records_lib::{
 };
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DatabaseConnection, DbConn, DbErr, EntityTrait,
-    FromQueryResult, QueryFilter, QueryOrder, QuerySelect, StatementBuilder, StreamTrait,
+    FromQueryResult, QueryFilter, QueryOrder, QuerySelect, StreamTrait,
     prelude::Expr,
     sea_query::{Asterisk, ExprTrait, Func, Query},
 };
@@ -71,7 +71,7 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
 
     let mut select = Query::select();
 
-    let select = match event.event {
+    let select = match event.get() {
         Some((ev, ed)) => select.from_as(global_event_records::Entity, "r").and_where(
             Expr::col(("r", global_event_records::Column::EventId))
                 .eq(ev.id)
@@ -111,7 +111,7 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
         select.limit(100);
     }
 
-    let stmt = StatementBuilder::build(&*select, &conn.get_database_backend());
+    let stmt = conn.get_database_backend().build(&*select);
     let records = conn
         .query_all(stmt)
         .await?

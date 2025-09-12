@@ -9,7 +9,7 @@ use entity::{
 use futures::{Stream as _, StreamExt as _, TryStreamExt};
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, DbErr, EntityTrait, FromQueryResult, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, RelationTrait as _, StatementBuilder,
+    QueryFilter, QueryOrder, QuerySelect, RelationTrait as _,
     prelude::Expr,
     sea_query::{ExprTrait as _, Func, IntoCondition, Query},
 };
@@ -417,7 +417,7 @@ impl EventEditionPlayerCategorizedRank<'_> {
             select.from_as(global_event_records::Entity, "r");
         }
 
-        let stmt = StatementBuilder::build(&*select, &conn.get_database_backend());
+        let stmt = conn.get_database_backend().build(&*select);
         let res = conn
             .query_all(stmt)
             .await?

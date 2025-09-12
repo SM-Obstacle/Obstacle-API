@@ -7,7 +7,7 @@ use futures::TryStreamExt;
 use sea_orm::{
     ActiveValue::Set,
     ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter as _, QuerySelect,
-    RelationTrait as _, StatementBuilder,
+    RelationTrait as _,
     prelude::Expr,
     sea_query::{ExprTrait, Func, Query},
 };
@@ -338,7 +338,7 @@ pub async fn unban(
         )
         .and_where(banishments::Column::Id.eq(ban.inner.id));
 
-    let query = StatementBuilder::build(&*query, &conn.get_database_backend());
+    let query = conn.get_database_backend().build(&*query);
 
     conn.execute(query).await.with_api_err()?;
 

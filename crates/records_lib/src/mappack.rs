@@ -5,7 +5,7 @@ use std::{fmt, time::SystemTime};
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
 use entity::{event, event_edition, global_event_records, global_records, players, records};
 use sea_orm::{
-    ConnectionTrait, FromQueryResult, Order, StatementBuilder, StreamTrait, TransactionTrait,
+    ConnectionTrait, FromQueryResult, Order, StreamTrait, TransactionTrait,
     prelude::Expr,
     sea_query::{Asterisk, Query},
 };
@@ -305,9 +305,9 @@ async fn save(
     }
 
     // Set the time of the update
-    let update_time = SystemTime::UNIX_EPOCH
-        .elapsed()
-        .map_err(|e| internal!("Failed to get elapsed time since UNIX_EPOCH for mappack update: {e}"))?;
+    let update_time = SystemTime::UNIX_EPOCH.elapsed().map_err(|e| {
+        internal!("Failed to get elapsed time since UNIX_EPOCH for mappack update: {e}")
+    })?;
     let _: () = redis_conn
         .set(mappack_time_key(mappack), update_time.as_secs())
         .await?;
@@ -384,7 +384,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
             .and_where(Expr::col(("r", records::Column::MapId)).eq(map.id))
             .order_by_expr(Expr::col(("r", records::Column::Time)).into(), Order::Asc);
 
-        match event.event {
+        match event.get() {
             Some((ev, ed)) => {
                 query.from_as(global_event_records::Entity, "r").and_where(
                     Expr::col(("r", global_event_records::Column::EventId))
@@ -397,7 +397,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
             }
         }
 
-        let stmt = StatementBuilder::build(&query, &conn.get_database_backend());
+        let stmt = conn.get_database_backend().build(&query);
         let res = conn
             .query_all(stmt)
             .await?

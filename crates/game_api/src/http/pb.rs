@@ -4,8 +4,8 @@ use entity::{checkpoint_times, global_event_records, global_records, maps, playe
 use futures::{Stream as _, StreamExt, TryStreamExt};
 use records_lib::opt_event::OptEvent;
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, FromQueryResult, StatementBuilder, StreamTrait,
-    prelude::Expr, sea_query::Query,
+    ColumnTrait as _, ConnectionTrait, FromQueryResult, StreamTrait, prelude::Expr,
+    sea_query::Query,
 };
 use serde::{Deserialize, Serialize};
 
@@ -43,7 +43,7 @@ pub async fn pb<C: ConnectionTrait + StreamTrait>(
 ) -> RecordsResult<PbResponse> {
     let mut select = Query::select();
 
-    match event.event {
+    match event.get() {
         Some((ev, ed)) => {
             select.from_as(global_event_records::Entity, "r").and_where(
                 Expr::col(("r", global_event_records::Column::EventId))
@@ -90,7 +90,7 @@ pub async fn pb<C: ConnectionTrait + StreamTrait>(
             "time",
         );
 
-    let stmt = StatementBuilder::build(&*times, &conn.get_database_backend());
+    let stmt = conn.get_database_backend().build(&*times);
     let times = conn
         .stream(stmt)
         .await

@@ -14,7 +14,7 @@ pub async fn get_time_on_map<C: ConnectionTrait>(
     map_id: u32,
     event: OptEvent<'_>,
 ) -> RecordsResult<Option<i32>> {
-    let time = match event.event {
+    let time = match event.get() {
         Some((ev, ed)) => {
             global_event_records::Entity::find()
                 .filter(

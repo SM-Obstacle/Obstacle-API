@@ -3,8 +3,7 @@
 use deadpool_redis::redis::AsyncCommands as _;
 use entity::{global_event_records, global_records, players, records};
 use sea_orm::{
-    ConnectionTrait, FromQueryResult, Order, StatementBuilder, StreamTrait, prelude::Expr,
-    sea_query::Query,
+    ConnectionTrait, FromQueryResult, Order, StreamTrait, prelude::Expr, sea_query::Query,
 };
 
 use crate::{
@@ -181,7 +180,7 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
         .expr_as(Expr::col(("r", records::Column::Time)), "time")
         .expr_as(Expr::col(("r", records::Column::MapId)), "map_id");
 
-    match event.event {
+    match event.get() {
         Some((ev, ed)) => {
             query.from_as(global_event_records::Entity, "r").and_where(
                 Expr::col(("r", global_event_records::Column::EventId))
@@ -194,7 +193,7 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
         }
     }
 
-    let stmt = StatementBuilder::build(&query, &conn.get_database_backend());
+    let stmt = conn.get_database_backend().build(&query);
     let result = conn
         .query_all(stmt)
         .await?

@@ -21,7 +21,7 @@ use records_lib::{
 use sea_orm::{
     ActiveValue::Set,
     ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
-    QuerySelect, QueryTrait as _, RelationTrait as _, StatementBuilder, StreamTrait,
+    QuerySelect, QueryTrait as _, RelationTrait as _, StreamTrait,
     prelude::Expr,
     sea_query::{Asterisk, Func, Query},
 };
@@ -607,8 +607,7 @@ async fn edition(
                         Expr::col(("p", players::Column::Name)),
                     ]);
 
-                let next_opponent_query =
-                    StatementBuilder::build(&*next_opponent_query, &conn.get_database_backend());
+                let next_opponent_query = conn.get_database_backend().build(&*next_opponent_query);
 
                 let next_opponent = conn
                     .query_one(next_opponent_query)

@@ -166,7 +166,7 @@ async fn get_rank<C: ConnectionTrait + StreamTrait>(
         )
         .expr(Expr::col(("r", records::Column::Time)));
 
-    match event.event {
+    match event.get() {
         Some((ev, ed)) => {
             query.from_as(global_event_records::Entity, "r").and_where(
                 Expr::col(("r", global_event_records::Column::EventId))

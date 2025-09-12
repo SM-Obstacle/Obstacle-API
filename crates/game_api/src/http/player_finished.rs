@@ -152,7 +152,7 @@ async fn get_old_record<C: ConnectionTrait>(
         )
         .order_by_asc(records::Column::Time)
         .limit(1)
-        .apply_if(event.event, |q, (ev, ed)| {
+        .apply_if(event.get(), |q, (ev, ed)| {
             q.reverse_join(event_edition_records::Entity).filter(
                 event_edition_records::Column::EventId
                     .eq(ev.id)
