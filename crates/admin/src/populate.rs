@@ -66,6 +66,8 @@ struct Row {
     original_map_uid: Option<String>,
     original_mx_id: Option<i64>,
     transitive_save: Option<bool>,
+    source: Option<String>,
+    thumbnail_source: Option<String>,
 }
 
 fn get_id_impl(uid: Option<&str>, mx_id: Option<i64>) -> Option<Id<'_>> {
@@ -480,6 +482,8 @@ async fn populate_from_csv<C: ConnectionTrait>(
             silver_time: Set(silver_time),
             gold_time: Set(gold_time),
             author_time: Set(author_time),
+            source: Set(row.source),
+            thumbnail_source: Set(row.thumbnail_source),
         };
 
         maps_to_insert.push(new_map);

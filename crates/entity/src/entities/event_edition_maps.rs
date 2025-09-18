@@ -36,6 +36,14 @@ pub struct Model {
     pub gold_time: Option<i32>,
     /// The time of the author medal.
     pub author_time: Option<i32>,
+    /// The source of the map.
+    ///
+    /// This is an optional URL to the map file. By default, the map file is retrieved from SMX.
+    pub source: Option<String>,
+    /// The source of the thumbnail of the map.
+    ///
+    /// This is an optional URL to the map thumbnail file. By default, the file is retrieved from SMX.
+    pub thumbnail_source: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
