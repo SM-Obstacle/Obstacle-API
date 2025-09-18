@@ -44,6 +44,17 @@ pub struct Model {
     ///
     /// This is an optional URL to the map thumbnail file. By default, the file is retrieved from SMX.
     pub thumbnail_source: Option<String>,
+    /// Whether the map is available or not to play.
+    ///
+    /// Most of the time, this is true, but it might be false if the map is hidden from MX, and the
+    /// author explicitly wants it to not be playable.
+    pub is_available: bool,
+    /// Whether the map should be disabled.
+    ///
+    /// The difference with the [`is_available`](Model::is_available) field, is that the latter is
+    /// only used for UI stuff, whereas this one is a guard to avoid saving records on the map if
+    /// this flag is on.
+    pub is_disabled: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

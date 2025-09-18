@@ -4,6 +4,8 @@ mod m20250806_191954_create_views;
 mod m20250806_202048_populate;
 mod m20250918_132016_add_event_edition_maps_source;
 mod m20250918_135135_add_event_edition_maps_thumbnail_source;
+mod m20250918_215914_add_event_edition_maps_availability;
+mod m20250918_222203_add_event_edition_maps_disability;
 
 use sea_orm_migration::prelude::*;
 
@@ -21,6 +23,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20250806_202048_populate::Migration),
             Box::new(m20250918_132016_add_event_edition_maps_source::Migration),
             Box::new(m20250918_135135_add_event_edition_maps_thumbnail_source::Migration),
+            Box::new(m20250918_215914_add_event_edition_maps_availability::Migration),
+            Box::new(m20250918_222203_add_event_edition_maps_disability::Migration),
         ]
     }
 }

@@ -310,6 +310,7 @@ pub async fn get_editions_which_contain<C: ConnectionTrait + StreamTrait>(
             event_edition::Column::SaveNonEventRecord
                 .ne(0)
                 .and(event_edition::Column::IsTransparent.eq(0))
+                .and(event_edition_maps::Column::IsDisabled.eq(0))
                 .and(event_edition_maps::Column::MapId.eq(map_id)),
         )
         .select_only()
@@ -385,7 +386,8 @@ pub async fn get_map_in_edition<C: ConnectionTrait>(
                     Expr::col(("map", maps::Column::Id))
                         .equals(("original_map", maps::Column::Id))
                         .or(event_edition_maps::Column::TransitiveSave.ne(0)),
-                ),
+                )
+                .and(event_edition_maps::Column::IsDisabled.eq(0)),
         )
         .select_only()
         .expr(Expr::col(("map", Asterisk)))

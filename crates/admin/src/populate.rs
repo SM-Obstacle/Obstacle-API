@@ -17,7 +17,10 @@ use records_lib::{
     time::Time,
     transaction,
 };
-use sea_orm::{ActiveValue::Set, ConnectionTrait, EntityTrait, QueryTrait, TransactionTrait};
+use sea_orm::{
+    ActiveValue::{NotSet, Set},
+    ConnectionTrait, EntityTrait, QueryTrait, TransactionTrait,
+};
 
 use crate::clear;
 
@@ -68,6 +71,8 @@ struct Row {
     transitive_save: Option<bool>,
     source: Option<String>,
     thumbnail_source: Option<String>,
+    is_available: Option<bool>,
+    is_disabled: Option<bool>,
 }
 
 fn get_id_impl(uid: Option<&str>, mx_id: Option<i64>) -> Option<Id<'_>> {
@@ -420,6 +425,12 @@ async fn populate_from_csv<C: ConnectionTrait>(
     let mut maps_to_insert = Vec::with_capacity(rows.len());
 
     for (row, i) in rows {
+        if let Some(true) = row.is_available
+            && let Some(true) = row.is_disabled
+        {
+            anyhow::bail!("Cannot set both flags is_available and is_disabled on line {i}");
+        }
+
         let (mx_id, map) = match row.get_id().with_context(|| format!("Parsing row {i}"))? {
             Id::MapUid { map_uid } => (None, must::have_map(conn, map_uid).await?),
             Id::MxId { mx_id } => (
@@ -484,6 +495,14 @@ async fn populate_from_csv<C: ConnectionTrait>(
             author_time: Set(author_time),
             source: Set(row.source),
             thumbnail_source: Set(row.thumbnail_source),
+            is_available: match row.is_available {
+                Some(v) => Set(v),
+                None => NotSet,
+            },
+            is_disabled: match row.is_disabled {
+                Some(v) => Set(v),
+                None => NotSet,
+            },
         };
 
         maps_to_insert.push(new_map);
