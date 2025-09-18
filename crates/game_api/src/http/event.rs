@@ -68,6 +68,7 @@ struct MapWithCategory {
     original_map_id: Option<u32>,
     source: Option<String>,
     thumbnail_source: Option<String>,
+    is_available: bool,
 }
 
 async fn get_maps_by_edition_id<C: ConnectionTrait>(
@@ -93,6 +94,7 @@ async fn get_maps_by_edition_id<C: ConnectionTrait>(
             event_edition_maps::Column::OriginalMapId,
             event_edition_maps::Column::Source,
             event_edition_maps::Column::ThumbnailSource,
+            event_edition_maps::Column::IsAvailable,
         ])
         .into_model()
         .all(conn)
@@ -164,6 +166,7 @@ struct Map {
     original_map: OriginalMap,
     source: NullableText,
     thumbnail_source: NullableText,
+    is_available: bool,
 }
 
 #[derive(Serialize, Default)]
@@ -467,6 +470,7 @@ async fn edition(
                 original_map_id,
                 source,
                 thumbnail_source,
+                is_available,
                 ..
             } = cat_map;
 
@@ -666,6 +670,7 @@ async fn edition(
                 next_opponent: next_opponent.unwrap_or_default(),
                 source: source.into(),
                 thumbnail_source: thumbnail_source.into(),
+                is_available,
             });
         }
 
