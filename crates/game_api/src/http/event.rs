@@ -66,6 +66,8 @@ struct MapWithCategory {
     category_id: Option<u32>,
     mx_id: Option<i64>,
     original_map_id: Option<u32>,
+    source: Option<String>,
+    thumbnail_source: Option<String>,
 }
 
 async fn get_maps_by_edition_id<C: ConnectionTrait>(
@@ -89,6 +91,8 @@ async fn get_maps_by_edition_id<C: ConnectionTrait>(
             event_edition_maps::Column::CategoryId,
             event_edition_maps::Column::MxId,
             event_edition_maps::Column::OriginalMapId,
+            event_edition_maps::Column::Source,
+            event_edition_maps::Column::ThumbnailSource,
         ])
         .into_model()
         .all(conn)
@@ -158,6 +162,8 @@ struct Map {
     personal_best: NullableInteger,
     next_opponent: NextOpponent,
     original_map: OriginalMap,
+    source: NullableText,
+    thumbnail_source: NullableText,
 }
 
 #[derive(Serialize, Default)]
@@ -454,13 +460,16 @@ async fn edition(
 
         let mut maps = Vec::with_capacity(cat_maps.size_hint().0);
 
-        for MapWithCategory {
-            map,
-            mx_id,
-            original_map_id,
-            ..
-        } in cat_maps
-        {
+        for cat_map in cat_maps {
+            let MapWithCategory {
+                map,
+                mx_id,
+                original_map_id,
+                source,
+                thumbnail_source,
+                ..
+            } = cat_map;
+
             let main_author = players::Entity::find_by_id(map.player_id)
                 .select_only()
                 .columns([
@@ -655,6 +664,8 @@ async fn edition(
                 original_map,
                 personal_best,
                 next_opponent: next_opponent.unwrap_or_default(),
+                source: source.into(),
+                thumbnail_source: thumbnail_source.into(),
             });
         }
 

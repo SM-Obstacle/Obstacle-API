@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use actix_http::StatusCode;
 use actix_web::test;
 use entity::{

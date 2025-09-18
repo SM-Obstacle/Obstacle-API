@@ -309,6 +309,7 @@ pub async fn get_editions_which_contain<C: ConnectionTrait + StreamTrait>(
         .filter(
             event_edition::Column::SaveNonEventRecord
                 .ne(0)
+                .and(event_edition::Column::IsTransparent.eq(0))
                 .and(event_edition_maps::Column::MapId.eq(map_id)),
         )
         .select_only()
