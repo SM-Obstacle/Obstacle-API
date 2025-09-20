@@ -8,7 +8,7 @@ use sea_orm::{
 
 use crate::objects::{
     event_edition::EventEdition, event_edition_map_ext::EventEditionMapExt,
-    event_edition_player_categorized_rank::EventEditionPlayerCategorizedRank, mappack,
+    event_edition_player_categorized_rank::EventEditionPlayerCategorizedRank, mappack_player,
     player::Player,
 };
 
@@ -24,7 +24,7 @@ impl EventEditionPlayer<'_> {
     }
 
     async fn rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
-        mappack::player_rank(
+        mappack_player::player_rank(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,
@@ -33,7 +33,7 @@ impl EventEditionPlayer<'_> {
     }
 
     async fn rank_avg(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<f64> {
-        mappack::player_rank_avg(
+        mappack_player::player_rank_avg(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,
@@ -42,7 +42,7 @@ impl EventEditionPlayer<'_> {
     }
 
     async fn map_finished(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
-        mappack::player_map_finished(
+        mappack_player::player_map_finished(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,
@@ -51,7 +51,7 @@ impl EventEditionPlayer<'_> {
     }
 
     async fn worst_rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i32> {
-        mappack::player_worst_rank(
+        mappack_player::player_worst_rank(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
             self.player.id,

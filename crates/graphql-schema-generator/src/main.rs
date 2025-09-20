@@ -41,9 +41,7 @@ fn main() -> anyhow::Result<()> {
             open_file(&filename).with_context(|| format!("cannot open file {filename}"))?;
         file.write_all(schema_str.as_bytes())
             .with_context(|| format!("cannot write to file {filename}"))?;
-        if !args.stdout {
-            println!("✔ Generated GraphQL schema at {filename}");
-        }
+        println!("✔ Generated GraphQL schema at {filename}");
     }
 
     if let Some(dir) = args.directory {

@@ -9,8 +9,7 @@ use records_lib::{
     must, player,
     redis_key::{
         mappack_key, mappack_lb_key, mappack_mx_created_key, mappack_mx_name_key,
-        mappack_mx_username_key, mappack_nb_map_key, mappack_player_map_finished_key,
-        mappack_player_rank_avg_key, mappack_player_worst_rank_key, mappack_time_key,
+        mappack_mx_username_key, mappack_nb_map_key, mappack_time_key,
     },
 };
 use sea_orm::{ConnectionTrait, DbConn};
@@ -75,58 +74,6 @@ async fn fill_mappack<C: ConnectionTrait>(
         .await?;
 
     Ok(())
-}
-
-pub(super) async fn player_rank(
-    ctx: &async_graphql::Context<'_>,
-    mappack: AnyMappackId<'_>,
-    player_id: u32,
-) -> async_graphql::Result<usize> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let rank = redis_conn
-        .zscore(mappack_lb_key(mappack), player_id)
-        .await?;
-    Ok(rank)
-}
-
-pub(super) async fn player_rank_avg(
-    ctx: &async_graphql::Context<'_>,
-    mappack: AnyMappackId<'_>,
-    player_id: u32,
-) -> async_graphql::Result<f64> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let rank = redis_conn
-        .get(mappack_player_rank_avg_key(mappack, player_id))
-        .await?;
-    Ok(rank)
-}
-
-pub(super) async fn player_map_finished(
-    ctx: &async_graphql::Context<'_>,
-    mappack: AnyMappackId<'_>,
-    player_id: u32,
-) -> async_graphql::Result<usize> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let map_finished = redis_conn
-        .get(mappack_player_map_finished_key(mappack, player_id))
-        .await?;
-    Ok(map_finished)
-}
-
-pub(super) async fn player_worst_rank(
-    ctx: &async_graphql::Context<'_>,
-    mappack: AnyMappackId<'_>,
-    player_id: u32,
-) -> async_graphql::Result<i32> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let worst_rank = redis_conn
-        .get(mappack_player_worst_rank_key(mappack, player_id))
-        .await?;
-    Ok(worst_rank)
 }
 
 pub struct Mappack {
