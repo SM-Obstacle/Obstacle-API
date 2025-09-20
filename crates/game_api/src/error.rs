@@ -59,8 +59,6 @@ pub enum RecordsErrorKind {
     EndpointNotFound,
     #[error("player not banned: `{0}`")]
     PlayerNotBanned(String),
-    #[error("unknown role with id `{0}` and name `{1}`")]
-    UnknownRole(u8, String),
     #[error("unknown rating kind with id `{0}` and name `{1}`")]
     UnknownRatingKind(u8, String),
     #[error("no rating found to update for player with login: `{0}` and map with uid: `{1}`")]
@@ -69,8 +67,6 @@ pub enum RecordsErrorKind {
     InvalidRates,
     #[error("invalid times")]
     InvalidTimes,
-    #[error("map pack id should be an integer, got `{0}`")]
-    InvalidMappackId(String),
     #[error("event `{0}` {1} has expired")]
     EventHasExpired(String, u32),
 
@@ -138,7 +134,7 @@ impl RecordsErrorKind {
             E::Lib(LE::PlayerNotFound(_)) => (302, S::BAD_REQUEST),
             E::PlayerNotBanned(_) => (303, S::BAD_REQUEST),
             E::Lib(LE::MapNotFound(_)) => (304, S::BAD_REQUEST),
-            E::UnknownRole(_, _) => (305, S::INTERNAL_SERVER_ERROR),
+            E::Lib(LE::UnknownRole(_, _)) => (305, S::INTERNAL_SERVER_ERROR),
             E::UnknownRatingKind(_, _) => (307, S::INTERNAL_SERVER_ERROR),
             E::NoRatingFound(_, _) => (308, S::BAD_REQUEST),
             E::InvalidRates => (309, S::BAD_REQUEST),
@@ -146,7 +142,7 @@ impl RecordsErrorKind {
             E::Lib(LE::EventEditionNotFound(_, _)) => (311, S::BAD_REQUEST),
             E::Lib(LE::MapNotInEventEdition(_, _, _)) => (312, S::BAD_REQUEST),
             E::InvalidTimes => (313, S::BAD_REQUEST),
-            E::InvalidMappackId(_) => (314, S::BAD_REQUEST),
+            E::Lib(LE::InvalidMappackId(_)) => (314, S::BAD_REQUEST),
             E::EventHasExpired(_, _) => (315, S::BAD_REQUEST),
         }
     }

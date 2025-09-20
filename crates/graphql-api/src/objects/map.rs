@@ -1,37 +1,37 @@
-use std::{collections::HashMap, sync::Arc};
-
-use async_graphql::{
-    ID,
-    dataloader::{DataLoader, Loader},
-};
-use deadpool_redis::redis::AsyncCommands;
+use async_graphql::{ID, dataloader::DataLoader};
+use deadpool_redis::redis::AsyncCommands as _;
 use entity::{
     event_edition, event_edition_maps, global_event_records, global_records, maps, player_rating,
     records,
 };
 use records_lib::{
-    Database, RedisConnection,
+    Database, RedisConnection, internal,
     opt_event::OptEvent,
     ranks::{get_rank, update_leaderboard},
     redis_key::map_key,
     transaction,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DatabaseConnection, DbConn, DbErr, EntityTrait,
-    FromQueryResult, QueryFilter, QueryOrder, QuerySelect, StreamTrait,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
+    QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
-    sea_query::{Asterisk, ExprTrait, Func, Query},
+    sea_query::{Asterisk, ExprTrait as _, Func, Query},
 };
 
-use crate::internal;
-
-use super::{
-    SortState,
-    event::EventEdition,
-    player::{Player, PlayerLoader},
-    rating::PlayerRating,
-    record::RankedRecord,
+use crate::{
+    loaders::{map::MapLoader, player::PlayerLoader},
+    objects::{
+        event_edition::EventEdition, player::Player, player_rating::PlayerRating,
+        ranked_record::RankedRecord, related_edition::RelatedEdition, sort_state::SortState,
+    },
 };
+
+#[derive(FromQueryResult)]
+struct RawRelatedEdition {
+    map_id: u32,
+    #[sea_orm(nested)]
+    edition: event_edition::Model,
+}
 
 #[derive(Debug, Clone, FromQueryResult)]
 pub struct Map {
@@ -163,25 +163,6 @@ impl Map {
     }
 }
 
-#[derive(async_graphql::SimpleObject)]
-struct RelatedEdition<'a> {
-    map: Map,
-    /// Tells the website to redirect to the event map page instead of the regular map page.
-    ///
-    /// This avoids to have access to the `/map/X_benchmark` page for example, because a Benchmark
-    /// map won't have any record in this context. Thus, it should be redirected to
-    /// `/event/benchmark/2/map/X_benchmark`.
-    redirect_to_event: bool,
-    edition: EventEdition<'a>,
-}
-
-#[derive(FromQueryResult)]
-struct RawRelatedEdition {
-    map_id: u32,
-    #[sea_orm(nested)]
-    edition: event_edition::Model,
-}
-
 #[async_graphql::Object]
 impl Map {
     pub async fn id(&self) -> ID {
@@ -261,7 +242,7 @@ impl Map {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<PlayerRating>> {
-        let conn = ctx.data_unchecked::<DatabaseConnection>();
+        let conn = ctx.data_unchecked::<DbConn>();
         let all = player_rating::Entity::find()
             .filter(player_rating::Column::MapId.eq(self.inner.id))
             .group_by(player_rating::Column::Kind)
@@ -287,24 +268,5 @@ impl Map {
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         self.get_records(ctx, Default::default(), rank_sort_by, date_sort_by)
             .await
-    }
-}
-
-pub struct MapLoader(pub DbConn);
-
-impl Loader<u32> for MapLoader {
-    type Value = Map;
-    type Error = Arc<DbErr>;
-
-    async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
-        let hashmap = maps::Entity::find()
-            .filter(maps::Column::Id.is_in(keys.iter().copied()))
-            .all(&self.0)
-            .await?
-            .into_iter()
-            .map(|map| (map.id, map.into()))
-            .collect();
-
-        Ok(hashmap)
     }
 }

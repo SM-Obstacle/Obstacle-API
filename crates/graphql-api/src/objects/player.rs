@@ -1,16 +1,15 @@
-use std::{collections::HashMap, sync::Arc};
-
-use async_graphql::{Enum, ID, dataloader::Loader};
+use async_graphql::{Enum, ID};
 use entity::{global_records, players, records, role};
-use records_lib::{RedisConnection, RedisPool, opt_event::OptEvent, transaction};
+use records_lib::{
+    RedisConnection, RedisPool, error::RecordsError, internal, opt_event::OptEvent,
+    ranks::get_rank, transaction,
+};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, DbErr, EntityTrait, FromQueryResult, QueryFilter,
-    QueryOrder, QuerySelect, StreamTrait,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
+    QueryOrder as _, QuerySelect as _, StreamTrait,
 };
 
-use crate::{RecordsErrorKind, internal};
-
-use super::{SortState, get_rank, record::RankedRecord};
+use crate::objects::{ranked_record::RankedRecord, sort_state::SortState};
 
 #[derive(Copy, Clone, Eq, PartialEq, Enum)]
 #[repr(u8)]
@@ -21,14 +20,14 @@ enum PlayerRole {
 }
 
 impl TryFrom<role::Model> for PlayerRole {
-    type Error = RecordsErrorKind;
+    type Error = RecordsError;
 
     fn try_from(role: role::Model) -> Result<Self, Self::Error> {
         if role.id < 3 {
             // SAFETY: enum is repr(u8) and role id is in range
             Ok(unsafe { std::mem::transmute::<u8, PlayerRole>(role.id) })
         } else {
-            Err(RecordsErrorKind::UnknownRole(role.id, role.role_name))
+            Err(RecordsError::UnknownRole(role.id, role.role_name))
         }
     }
 }
@@ -142,23 +141,4 @@ async fn get_player_records<C: ConnectionTrait + StreamTrait>(
     }
 
     Ok(ranked_records)
-}
-
-pub struct PlayerLoader(pub DbConn);
-
-impl Loader<u32> for PlayerLoader {
-    type Value = Player;
-    type Error = Arc<DbErr>;
-
-    async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
-        let hashmap = players::Entity::find()
-            .filter(players::Column::Id.is_in(keys.iter().copied()))
-            .all(&self.0)
-            .await?
-            .into_iter()
-            .map(|player| (player.id, player.into()))
-            .collect();
-
-        Ok(hashmap)
-    }
 }

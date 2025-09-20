@@ -1,12 +1,11 @@
 use entity::{player_rating, rating_kind, types};
-use sea_orm::{DbConn, EntityTrait, FromQueryResult};
-
-use crate::internal;
+use records_lib::internal;
+use sea_orm::{DbConn, EntityTrait as _, FromQueryResult};
 
 #[derive(Debug, Clone, FromQueryResult)]
 pub struct PlayerRating {
     #[sea_orm(nested)]
-    inner: player_rating::Model,
+    pub inner: player_rating::Model,
 }
 
 impl From<player_rating::Model> for PlayerRating {

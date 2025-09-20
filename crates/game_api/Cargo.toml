@@ -43,6 +43,7 @@ dsc_webhook = { path = "../dsc_webhook", features = ["actix-web"] }
 sea-orm = { workspace = true }
 migration = { path = "../migration" }
 entity = { path = "../entity" }
+graphql-api = { path = "../graphql-api" }
 
 [dev-dependencies]
 records-lib = { path = "../records_lib" }
@@ -50,7 +51,6 @@ serde_json = { workspace = true }
 
 [features]
 default = ["request_filter"]
-gql_schema = []
 request_filter = ["dep:pin-project-lite", "dep:request_filter"]
 auth = []
 mysql = ["records-lib/mysql"]

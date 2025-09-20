@@ -1,20 +1,19 @@
 use async_graphql::{Context, dataloader::DataLoader};
 use entity::{checkpoint_times, records};
+use records_lib::internal;
 use sea_orm::{
-    ColumnTrait as _, DbConn, EntityTrait, QueryFilter, QueryOrder, QuerySelect, prelude::Expr,
-    sea_query::Func,
+    ColumnTrait as _, DbConn, EntityTrait as _, QueryFilter as _, QueryOrder as _,
+    QuerySelect as _, prelude::Expr, sea_query::Func,
 };
 
-use crate::internal;
-
-use super::{
-    map::{Map, MapLoader},
-    player::{Player, PlayerLoader},
+use crate::{
+    loaders::{map::MapLoader, player::PlayerLoader},
+    objects::{checkpoint_time::CheckpointTime, map::Map, player::Player},
 };
 
 #[derive(Debug, Clone)]
 pub struct RankedRecord {
-    inner: records::RankedRecord,
+    pub inner: records::RankedRecord,
 }
 
 impl From<records::RankedRecord> for RankedRecord {
@@ -50,7 +49,7 @@ impl RankedRecord {
     async fn average_cps_times(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<checkpoint_times::Model>> {
+    ) -> async_graphql::Result<Vec<CheckpointTime>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let times = checkpoint_times::Entity::find()
@@ -77,7 +76,7 @@ impl RankedRecord {
     async fn cps_times(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<checkpoint_times::Model>> {
+    ) -> async_graphql::Result<Vec<CheckpointTime>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let times = checkpoint_times::Entity::find()
@@ -87,6 +86,7 @@ impl RankedRecord {
                     .and(checkpoint_times::Column::MapId.eq(self.inner.record.map_id)),
             )
             .order_by_asc(checkpoint_times::Column::CpNum)
+            .into_model()
             .all(conn)
             .await?;
 

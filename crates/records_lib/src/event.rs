@@ -196,7 +196,7 @@ pub async fn get_categories_by_edition_id<C: ConnectionTrait>(
 }
 
 /// Represents the medal times, in milliseconds.
-#[derive(async_graphql::SimpleObject, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct MedalTimes {
     /// The time of the bronze medal.
     pub bronze_time: i32,

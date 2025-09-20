@@ -12,7 +12,7 @@ use entity::{
 use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{
-    Database, NullableInteger, NullableReal, NullableText, RedisConnection,
+    Database, Expirable as _, NullableInteger, NullableReal, NullableText, RedisConnection,
     error::RecordsError,
     event::{self, EventMap},
     opt_event::OptEvent,
@@ -740,39 +740,12 @@ async fn edition(
     json(res)
 }
 
-pub trait HasExpireTime {
-    /// Returns the UTC expire date.
-    fn expire_date(&self) -> Option<chrono::NaiveDateTime>;
-
-    /// Returns the number of seconds until the edition expires from now.
-    ///
-    /// If the edition doesn't expire (it hasn't a TTL), it returns `None`.
-    fn expires_in(&self) -> Option<i64> {
-        self.expire_date()
-            .map(|d| (d - chrono::Utc::now().naive_utc()).num_seconds())
-    }
-
-    /// Returns whether the edition has expired or not.
-    fn has_expired(&self) -> bool {
-        self.expires_in().filter(|n| *n < 0).is_some()
-    }
-}
-
 trait EventEditionTraitExt {
     /// Returns the additional in-game parameters of the provided event edition.
     async fn get_ingame_params<C: ConnectionTrait>(
         &self,
         conn: &C,
     ) -> RecordsResult<Option<in_game_event_edition_params::Model>>;
-}
-
-impl HasExpireTime for event_edition::Model {
-    fn expire_date(&self) -> Option<chrono::NaiveDateTime> {
-        self.ttl.and_then(|ttl| {
-            self.start_date
-                .checked_add_signed(chrono::Duration::seconds(ttl as _))
-        })
-    }
 }
 
 impl EventEditionTraitExt for event_edition::Model {

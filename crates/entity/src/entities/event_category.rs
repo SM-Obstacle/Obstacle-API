@@ -1,14 +1,11 @@
-use async_graphql::SimpleObject;
 use sea_orm::entity::prelude::*;
 
 /// An event category in an event.
-#[derive(Clone, Debug, Default, PartialEq, DeriveEntityModel, SimpleObject, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, DeriveEntityModel, Eq)]
 #[sea_orm(table_name = "event_category")]
-#[graphql(name = "EventCategory")]
 pub struct Model {
     /// The ID of the category.
     #[sea_orm(primary_key)]
-    #[graphql(skip)]
     pub id: u32,
     /// The handle of the category.
     pub handle: String,
