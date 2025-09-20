@@ -9,6 +9,8 @@ members = [
   "crates/dsc_webhook",
   "crates/migration",
   "crates/entity",
+  "crates/graphql-api",
+  "crates/graphql-schema-generator",
 ]
 
 [workspace.dependencies]

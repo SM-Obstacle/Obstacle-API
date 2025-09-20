@@ -83,6 +83,12 @@ pub enum RecordsError {
         /// The event edition ID.
         u32,
     ),
+    /// Parsing error for the ID of a mappack.
+    #[error("mappack id should be an integer, got `{0}`")]
+    InvalidMappackId(String),
+    /// The provided player role is unknown.
+    #[error("unknown role with id `{0}` and name `{1}`")]
+    UnknownRole(u8, String),
 }
 
 /// Shortcut for creating an internal error, by formatting a message.

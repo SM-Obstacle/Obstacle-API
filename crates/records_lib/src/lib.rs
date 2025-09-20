@@ -10,6 +10,7 @@
 #![cfg_attr(nightly, feature(doc_cfg))]
 
 mod env;
+mod expirable;
 mod mptypes;
 
 pub mod error;
@@ -38,6 +39,7 @@ pub type RedisConnection = deadpool_redis::Connection;
 use std::future::Future;
 
 pub use env::*;
+pub use expirable::Expirable;
 pub use mptypes::*;
 pub use pool::Database;
 use rand::Rng as _;

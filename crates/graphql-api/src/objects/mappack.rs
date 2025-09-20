@@ -1,27 +1,22 @@
 use std::time::SystemTime;
 
-use async_graphql::SimpleObject;
-use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::redis::AsyncCommands as _;
 use records_lib::{
-    Database, RedisConnection, RedisPool, map,
+    Database, RedisConnection, RedisPool,
+    error::{RecordsError, RecordsResult},
+    map,
     mappack::{AnyMappackId, update_mappack},
     must, player,
     redis_key::{
-        mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_mx_created_key,
-        mappack_mx_name_key, mappack_mx_username_key, mappack_nb_map_key,
-        mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
-        mappack_player_worst_rank_key, mappack_time_key,
+        mappack_key, mappack_lb_key, mappack_mx_created_key, mappack_mx_name_key,
+        mappack_mx_username_key, mappack_nb_map_key, mappack_time_key,
     },
 };
-use reqwest::Client;
 use sea_orm::{ConnectionTrait, DbConn};
-use serde::Deserialize;
 
-use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
+use crate::objects::mappack_player::MappackPlayer;
 
-use super::{map::Map, player::Player};
-
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 #[allow(non_snake_case)]
 struct MXMappackInfoResponse {
     Username: String,
@@ -32,7 +27,7 @@ struct MXMappackInfoResponse {
 async fn fill_mappack<C: ConnectionTrait>(
     conn: &C,
     redis_conn: &mut RedisConnection,
-    client: &Client,
+    client: &reqwest::Client,
     mappack: AnyMappackId<'_>,
     mappack_id: u32,
 ) -> RecordsResult<()> {
@@ -45,11 +40,9 @@ async fn fill_mappack<C: ConnectionTrait>(
             ))
             .header("User-Agent", "obstacle (discord @ahmadbky)")
             .send()
-            .await
-            .with_api_err()?
+            .await?
             .json()
-            .await
-            .with_api_err()?;
+            .await?;
         RecordsResult::Ok(res)
     };
 
@@ -61,8 +54,7 @@ async fn fill_mappack<C: ConnectionTrait>(
         let _ = must::have_map(conn, &mx_map.TrackUID).await?;
         let _: () = redis_conn
             .sadd(mappack_key(mappack), mx_map.TrackUID)
-            .await
-            .with_api_err()?;
+            .await?;
     }
 
     // --------
@@ -71,18 +63,15 @@ async fn fill_mappack<C: ConnectionTrait>(
 
     let _: () = redis_conn
         .set(mappack_mx_username_key(mappack), info.Username)
-        .await
-        .with_api_err()?;
+        .await?;
 
     let _: () = redis_conn
         .set(mappack_mx_name_key(mappack), info.Name)
-        .await
-        .with_api_err()?;
+        .await?;
 
     let _: () = redis_conn
         .set(mappack_mx_created_key(mappack), info.Created)
-        .await
-        .with_api_err()?;
+        .await?;
 
     Ok(())
 }
@@ -98,154 +87,6 @@ impl From<String> for Mappack {
             mappack_id,
             event_has_expired: false,
         }
-    }
-}
-
-#[derive(SimpleObject)]
-struct MappackMap {
-    rank: i32,
-    last_rank: i32,
-    map: Map,
-}
-
-struct MappackPlayer<'a> {
-    mappack: &'a Mappack,
-    inner: Player,
-}
-
-pub(super) async fn player_rank(
-    ctx: &async_graphql::Context<'_>,
-    mappack: AnyMappackId<'_>,
-    player_id: u32,
-) -> async_graphql::Result<usize> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let rank = redis_conn
-        .zscore(mappack_lb_key(mappack), player_id)
-        .await?;
-    Ok(rank)
-}
-
-pub(super) async fn player_rank_avg(
-    ctx: &async_graphql::Context<'_>,
-    mappack: AnyMappackId<'_>,
-    player_id: u32,
-) -> async_graphql::Result<f64> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let rank = redis_conn
-        .get(mappack_player_rank_avg_key(mappack, player_id))
-        .await?;
-    Ok(rank)
-}
-
-pub(super) async fn player_map_finished(
-    ctx: &async_graphql::Context<'_>,
-    mappack: AnyMappackId<'_>,
-    player_id: u32,
-) -> async_graphql::Result<usize> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let map_finished = redis_conn
-        .get(mappack_player_map_finished_key(mappack, player_id))
-        .await?;
-    Ok(map_finished)
-}
-
-pub(super) async fn player_worst_rank(
-    ctx: &async_graphql::Context<'_>,
-    mappack: AnyMappackId<'_>,
-    player_id: u32,
-) -> async_graphql::Result<i32> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let worst_rank = redis_conn
-        .get(mappack_player_worst_rank_key(mappack, player_id))
-        .await?;
-    Ok(worst_rank)
-}
-
-#[async_graphql::Object]
-impl MappackPlayer<'_> {
-    async fn rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
-        player_rank(
-            ctx,
-            AnyMappackId::Id(&self.mappack.mappack_id),
-            self.inner.inner.id,
-        )
-        .await
-    }
-
-    async fn player(&self) -> &Player {
-        &self.inner
-    }
-
-    async fn ranks(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<MappackMap>> {
-        let db = ctx.data_unchecked::<Database>();
-        let mut redis_conn = db.redis_pool.get().await?;
-
-        let maps_uids: Vec<String> = redis_conn
-            .zrange_withscores(
-                mappack_player_ranks_key(
-                    AnyMappackId::Id(&self.mappack.mappack_id),
-                    self.inner.inner.id,
-                ),
-                0,
-                -1,
-            )
-            .await?;
-        let (maps_uids, _) = maps_uids.as_chunks::<2>();
-
-        let mut out = Vec::with_capacity(maps_uids.len());
-
-        for [game_id, rank] in maps_uids {
-            let rank = rank.parse()?;
-            let last_rank = redis_conn
-                .get(mappack_map_last_rank(
-                    AnyMappackId::Id(&self.mappack.mappack_id),
-                    game_id,
-                ))
-                .await?;
-            let map = must::have_map(&db.sql_conn, game_id).await?;
-
-            out.push(MappackMap {
-                map: map.into(),
-                rank,
-                last_rank,
-            });
-        }
-
-        Ok(out)
-    }
-
-    async fn rank_avg(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<f64> {
-        player_rank_avg(
-            ctx,
-            AnyMappackId::Id(&self.mappack.mappack_id),
-            self.inner.inner.id,
-        )
-        .await
-    }
-
-    async fn map_finished(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
-        player_map_finished(
-            ctx,
-            AnyMappackId::Id(&self.mappack.mappack_id),
-            self.inner.inner.id,
-        )
-        .await
-    }
-
-    async fn worst_rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i32> {
-        player_worst_rank(
-            ctx,
-            AnyMappackId::Id(&self.mappack.mappack_id),
-            self.inner.inner.id,
-        )
-        .await
     }
 }
 
@@ -365,22 +206,19 @@ pub async fn get_mappack(
 ) -> RecordsResult<Mappack> {
     let db = ctx.data_unchecked::<Database>();
     let conn = ctx.data_unchecked::<DbConn>();
-    let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
+    let mut redis_conn = db.redis_pool.get().await?;
 
     let mappack = AnyMappackId::Id(&mappack_id);
 
-    let mappack_uids: Vec<String> = redis_conn
-        .smembers(mappack_key(mappack))
-        .await
-        .with_api_err()?;
+    let mappack_uids: Vec<String> = redis_conn.smembers(mappack_key(mappack)).await?;
 
     // We load the campaign, and update it, before retrieving the scores from it
     if mappack_uids.is_empty() {
         let Ok(mappack_id_int) = mappack_id.parse() else {
-            return Err(RecordsErrorKind::InvalidMappackId(mappack_id));
+            return Err(RecordsError::InvalidMappackId(mappack_id));
         };
 
-        let client = ctx.data_unchecked::<Client>();
+        let client = ctx.data_unchecked::<reqwest::Client>();
 
         // We fill the mappack
         fill_mappack(conn, &mut redis_conn, client, mappack, mappack_id_int).await?;
@@ -392,8 +230,7 @@ pub async fn get_mappack(
             AnyMappackId::Id(&mappack_id),
             Default::default(),
         )
-        .await
-        .with_api_err()?;
+        .await?;
     }
 
     Ok(From::from(mappack_id))
