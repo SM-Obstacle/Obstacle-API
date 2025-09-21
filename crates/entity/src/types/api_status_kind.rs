@@ -3,7 +3,7 @@ use sea_orm::{DbErr, FromQueryResult};
 use crate::api_status;
 
 /// The various status of the API.
-#[derive(serde::Serialize, PartialEq, Eq, Clone, Copy, Debug, async_graphql::Enum)]
+#[derive(serde::Serialize, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ApiStatusKind {
     /// The API is running normally.
     Normal,

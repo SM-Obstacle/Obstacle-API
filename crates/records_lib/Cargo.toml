@@ -4,7 +4,6 @@ version = "1.2.0"
 edition = "2024"
 
 [dependencies]
-async-graphql = { workspace = true, features = ["chrono"] }
 chrono = { workspace = true }
 deadpool-redis = { workspace = true }
 once_cell = { workspace = true }
