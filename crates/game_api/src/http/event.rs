@@ -68,7 +68,7 @@ struct MapWithCategory {
     original_map_id: Option<u32>,
     source: Option<String>,
     thumbnail_source: Option<String>,
-    is_available: bool,
+    is_available: Option<bool>,
 }
 
 async fn get_maps_by_edition_id<C: ConnectionTrait>(
@@ -670,7 +670,7 @@ async fn edition(
                 next_opponent: next_opponent.unwrap_or_default(),
                 source: source.into(),
                 thumbnail_source: thumbnail_source.into(),
-                is_available,
+                is_available: is_available.unwrap_or(true),
             });
         }
 
