@@ -7,9 +7,7 @@ use actix_web::{
 };
 use entity::{banishments, current_bans, maps, players, records, role, types};
 use futures::TryStreamExt;
-use records_lib::{
-    Database, RedisConnection, event, must, opt_event::OptEvent, player, transaction,
-};
+use records_lib::{Database, RedisConnection, must, player, transaction};
 use reqwest::Client;
 use sea_orm::{
     ActiveValue::{Set, Unchanged},
@@ -309,34 +307,7 @@ async fn pb(
     ExtractDbConn(conn): ExtractDbConn,
     web::Query(body): pb::PbReq,
 ) -> RecordsResult<impl Responder> {
-    let map = must::have_map(&conn, &body.map_uid).await.with_api_err()?;
-
-    let mut editions = event::get_editions_which_contain(&conn, map.id)
-        .await
-        .with_api_err()?;
-    let edition = editions.try_next().await.with_api_err()?;
-    let single_edition = editions.try_next().await.with_api_err()?.is_none();
-
-    drop(editions);
-
-    // FIXME: is this intended? if the player has a PB not in an event that is better than the one in the event,
-    // it doesn't return the good one.
-    let res = match edition {
-        Some((event_id, edition_id, _)) if single_edition => {
-            let (event, edition) = must::have_event_edition_from_ids(&conn, event_id, edition_id)
-                .await
-                .with_api_err()?;
-            pb::pb(
-                &conn,
-                &login,
-                &body.map_uid,
-                OptEvent::new(&event, &edition),
-            )
-            .await
-        }
-        _ => pb::pb(&conn, &login, &body.map_uid, Default::default()).await,
-    }?;
-
+    let res = pb::pb(&conn, &login, &body.map_uid, Default::default()).await?;
     utils::json(res)
 }
 
