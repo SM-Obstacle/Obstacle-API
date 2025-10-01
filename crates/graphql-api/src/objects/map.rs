@@ -2,7 +2,7 @@ use async_graphql::{ID, connection, dataloader::DataLoader};
 use deadpool_redis::redis::AsyncCommands as _;
 use entity::{
     event_edition, event_edition_maps, global_event_records, global_records, maps, player_rating,
-    records,
+    players, records,
 };
 use records_lib::{
     Database, RedisConnection, internal,
@@ -13,7 +13,7 @@ use records_lib::{
 };
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, StreamTrait,
+    QueryOrder as _, QuerySelect as _, StreamTrait, JoinType,
     prelude::Expr,
     sea_query::{Asterisk, ExprTrait as _, Func, Query},
 };
@@ -22,7 +22,8 @@ use crate::{
     loaders::{map::MapLoader, player::PlayerLoader},
     objects::{
         event_edition::EventEdition, player::Player, player_rating::PlayerRating,
-        ranked_record::RankedRecord, related_edition::RelatedEdition, sort_state::SortState,
+        ranked_record::RankedRecord, records_filter::RecordsFilter, related_edition::RelatedEdition,
+        sort_state::SortState,
     },
     records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
 };
@@ -151,6 +152,7 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     }: ConnectionParameters,
     rank_sort_by: Option<SortState>,
     date_sort_by: Option<SortState>,
+    filter: Option<RecordsFilter>,
 ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
         if !(1..=100).contains(&first) {
@@ -202,6 +204,49 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     }
     .column(Asterisk)
     .and_where(Expr::col(("r", records::Column::MapId)).eq(map_id));
+
+    // Apply filters if provided
+    if let Some(filter) = &filter {
+        // For player filters, we need to join with players table
+        if filter.player_login.is_some() || filter.player_name.is_some() {
+            select.join(
+                JoinType::InnerJoin,
+                players::Entity,
+                Expr::col(("r", records::Column::RecordPlayerId))
+                    .equals(("p", players::Column::Id)),
+            );
+
+            if let Some(ref login) = filter.player_login {
+                select.and_where(Expr::col(("p", players::Column::Login)).eq(login.as_str()));
+            }
+
+            if let Some(ref name) = filter.player_name {
+                select.and_where(Expr::col(("p", players::Column::Name)).eq(name.as_str()));
+            }
+        }
+
+        // Apply date filters
+        if let Some(before_date) = filter.before_date {
+            select.and_where(Expr::col(("r", records::Column::RecordDate)).lt(before_date));
+        }
+
+        if let Some(after_date) = filter.after_date {
+            select.and_where(Expr::col(("r", records::Column::RecordDate)).gt(after_date));
+        }
+
+        // Apply time filters
+        if let Some(time_gt) = filter.time_gt {
+            select.and_where(Expr::col(("r", records::Column::Time)).gt(time_gt));
+        }
+
+        if let Some(time_lt) = filter.time_lt {
+            select.and_where(Expr::col(("r", records::Column::Time)).lt(time_lt));
+        }
+
+        if let Some(time_eq) = filter.time_eq {
+            select.and_where(Expr::col(("r", records::Column::Time)).eq(time_eq));
+        }
+    }
 
     // Apply cursor filters
     if let Some(timestamp) = after_timestamp {
@@ -329,6 +374,7 @@ impl Map {
         last: Option<i32>,
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
+        filter: Option<RecordsFilter>,
     ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
@@ -353,6 +399,7 @@ impl Map {
                         },
                         rank_sort_by,
                         date_sort_by,
+                        filter,
                     )
                     .await
                 },
@@ -483,6 +530,7 @@ impl Map {
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
+        #[graphql(desc = "Filter options for records")] filter: Option<RecordsFilter>,
     ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
         self.get_records_connection(
             ctx,
@@ -493,6 +541,7 @@ impl Map {
             last,
             rank_sort_by,
             date_sort_by,
+            filter,
         )
         .await
     }

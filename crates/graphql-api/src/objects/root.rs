@@ -1,11 +1,11 @@
 use async_graphql::{ID, connection};
-use entity::{event as event_entity, event_edition, global_records, players, records};
+use entity::{event as event_entity, event_edition, global_records, maps, players, records};
 use records_lib::{
     Database, RedisConnection, must, opt_event::OptEvent, ranks::get_rank, transaction,
 };
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, QueryFilter as _, QueryOrder as _,
-    QuerySelect as _, StreamTrait,
+    QuerySelect as _, StreamTrait, JoinType, RelationTrait,
     prelude::Expr,
     sea_query::{ExprTrait as _, Func},
 };
@@ -18,6 +18,7 @@ use crate::{
         mappack::{self, Mappack},
         player::Player,
         ranked_record::RankedRecord,
+        records_filter::RecordsFilter,
         sort_state::SortState,
     },
     records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
@@ -107,6 +108,7 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
         last,
     }: ConnectionParameters,
     date_sort_by: Option<SortState>,
+    filter: Option<RecordsFilter>,
     event: OptEvent<'_>,
 ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
@@ -146,6 +148,63 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
 
     // Build query with appropriate ordering
     let mut query = global_records::Entity::find();
+
+    // Apply filters if provided
+    if let Some(filter) = filter {
+        // Join with players table if needed for player filters
+        if filter.player_login.is_some() || filter.player_name.is_some() {
+            query = query
+                .join(JoinType::InnerJoin, global_records::Relation::Players.def());
+        }
+
+        // Join with maps table if needed for map filters
+        if filter.map_uid.is_some() || filter.map_name.is_some() {
+            query = query
+                .join(JoinType::InnerJoin, global_records::Relation::Maps.def());
+        }
+
+        // Apply player login filter
+        if let Some(login) = filter.player_login {
+            query = query.filter(players::Column::Login.eq(login));
+        }
+
+        // Apply player name filter
+        if let Some(name) = filter.player_name {
+            query = query.filter(players::Column::Name.eq(name));
+        }
+
+        // Apply map UID filter
+        if let Some(uid) = filter.map_uid {
+            query = query.filter(maps::Column::GameId.eq(uid));
+        }
+
+        // Apply map name filter
+        if let Some(name) = filter.map_name {
+            query = query.filter(maps::Column::Name.eq(name));
+        }
+
+        // Apply date filters
+        if let Some(before_date) = filter.before_date {
+            query = query.filter(global_records::Column::RecordDate.lt(before_date));
+        }
+
+        if let Some(after_date) = filter.after_date {
+            query = query.filter(global_records::Column::RecordDate.gt(after_date));
+        }
+
+        // Apply time filters
+        if let Some(time_gt) = filter.time_gt {
+            query = query.filter(global_records::Column::Time.gt(time_gt));
+        }
+
+        if let Some(time_lt) = filter.time_lt {
+            query = query.filter(global_records::Column::Time.lt(time_lt));
+        }
+
+        if let Some(time_eq) = filter.time_eq {
+            query = query.filter(global_records::Column::Time.eq(time_eq));
+        }
+    }
 
     // Apply cursor filters
     if let Some(timestamp) = after_timestamp {
@@ -346,6 +405,7 @@ impl QueryRoot {
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
         date_sort_by: Option<SortState>,
+        #[graphql(desc = "Filter options for records")] filter: Option<RecordsFilter>,
     ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let conn = ctx.data_unchecked::<DbConn>();
@@ -368,6 +428,7 @@ impl QueryRoot {
                             last,
                         },
                         date_sort_by,
+                        filter,
                         Default::default(),
                     )
                     .await
