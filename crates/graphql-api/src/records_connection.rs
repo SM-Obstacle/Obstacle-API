@@ -1,3 +1,4 @@
+use async_graphql::ID;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 /// Encode a cursor from record_date timestamp
@@ -23,4 +24,11 @@ pub fn decode_cursor(cursor: &str) -> Result<i64, String> {
     timestamp_str
         .parse::<i64>()
         .map_err(|_| "Invalid cursor: not a valid timestamp".to_string())
+}
+
+pub struct ConnectionParameters {
+    pub before: Option<ID>,
+    pub after: Option<ID>,
+    pub first: Option<usize>,
+    pub last: Option<usize>,
 }

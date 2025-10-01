@@ -21,14 +21,10 @@ use sea_orm::{
 use crate::{
     loaders::{map::MapLoader, player::PlayerLoader},
     objects::{
-        event_edition::EventEdition,
-        player::Player,
-        player_rating::PlayerRating,
-        ranked_record::RankedRecord,
-        records_connection::{decode_cursor, encode_cursor},
-        related_edition::RelatedEdition,
-        sort_state::SortState,
+        event_edition::EventEdition, player::Player, player_rating::PlayerRating,
+        ranked_record::RankedRecord, related_edition::RelatedEdition, sort_state::SortState,
     },
+    records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
 };
 
 #[derive(FromQueryResult)]
@@ -147,22 +143,24 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     redis_conn: &mut RedisConnection,
     map_id: u32,
     event: OptEvent<'_>,
-    after: Option<ID>,
-    before: Option<ID>,
-    first: Option<usize>,
-    last: Option<usize>,
+    ConnectionParameters {
+        before,
+        after,
+        first,
+        last,
+    }: ConnectionParameters,
     rank_sort_by: Option<SortState>,
     date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
-        if first < 1 || first > 100 {
+        if !(1..=100).contains(&first) {
             return Err(async_graphql::Error::new(
                 "'first' must be between 1 and 100",
             ));
         }
         first
     } else if let Some(last) = last {
-        if last < 1 || last > 100 {
+        if !(1..=100).contains(&last) {
             return Err(async_graphql::Error::new(
                 "'last' must be between 1 and 100",
             ));
@@ -320,6 +318,7 @@ impl Map {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn get_records_connection(
         &self,
         gql_ctx: &async_graphql::Context<'_>,
@@ -346,10 +345,12 @@ impl Map {
                         &mut redis_conn,
                         self.inner.id,
                         event,
-                        after,
-                        before,
-                        first,
-                        last,
+                        ConnectionParameters {
+                            after,
+                            before,
+                            first,
+                            last,
+                        },
                         rank_sort_by,
                         date_sort_by,
                     )
@@ -469,6 +470,7 @@ impl Map {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn records_connection(
         &self,
         ctx: &async_graphql::Context<'_>,

@@ -9,10 +9,9 @@ use sea_orm::{
     QueryOrder as _, QuerySelect as _, StreamTrait,
 };
 
-use crate::objects::{
-    ranked_record::RankedRecord,
-    records_connection::{decode_cursor, encode_cursor},
-    sort_state::SortState,
+use crate::{
+    objects::{ranked_record::RankedRecord, sort_state::SortState},
+    records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Enum)]
@@ -126,10 +125,12 @@ impl Player {
                         &mut redis_conn,
                         self.inner.id,
                         Default::default(),
-                        after,
-                        before,
-                        first,
-                        last,
+                        ConnectionParameters {
+                            after,
+                            before,
+                            first,
+                            last,
+                        },
                         date_sort_by,
                     )
                     .await
@@ -193,21 +194,23 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
     redis_conn: &mut RedisConnection,
     player_id: u32,
     event: OptEvent<'_>,
-    after: Option<ID>,
-    before: Option<ID>,
-    first: Option<usize>,
-    last: Option<usize>,
+    ConnectionParameters {
+        after,
+        before,
+        first,
+        last,
+    }: ConnectionParameters,
     date_sort_by: Option<SortState>,
 ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
-        if first < 1 || first > 100 {
+        if !(1..=100).contains(&first) {
             return Err(async_graphql::Error::new(
                 "'first' must be between 1 and 100",
             ));
         }
         first
     } else if let Some(last) = last {
-        if last < 1 || last > 100 {
+        if !(1..=100).contains(&last) {
             return Err(async_graphql::Error::new(
                 "'last' must be between 1 and 100",
             ));

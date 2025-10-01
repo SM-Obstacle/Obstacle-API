@@ -1,7 +1,6 @@
 pub mod checkpoint_time;
 pub mod medal_times;
 pub mod ranked_record;
-pub mod records_connection;
 pub mod root;
 pub mod sort_state;
 

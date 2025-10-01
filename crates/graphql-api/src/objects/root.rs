@@ -10,15 +10,17 @@ use sea_orm::{
     sea_query::{ExprTrait as _, Func},
 };
 
-use crate::objects::{
-    event::Event,
-    event_edition::EventEdition,
-    map::Map,
-    mappack::{self, Mappack},
-    player::Player,
-    ranked_record::RankedRecord,
-    records_connection::{decode_cursor, encode_cursor},
-    sort_state::SortState,
+use crate::{
+    objects::{
+        event::Event,
+        event_edition::EventEdition,
+        map::Map,
+        mappack::{self, Mappack},
+        player::Player,
+        ranked_record::RankedRecord,
+        sort_state::SortState,
+    },
+    records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
 };
 
 pub struct QueryRoot;
@@ -98,22 +100,24 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
 async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
     conn: &C,
     redis_conn: &mut RedisConnection,
-    after: Option<ID>,
-    before: Option<ID>,
-    first: Option<usize>,
-    last: Option<usize>,
+    ConnectionParameters {
+        after,
+        before,
+        first,
+        last,
+    }: ConnectionParameters,
     date_sort_by: Option<SortState>,
     event: OptEvent<'_>,
 ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
-        if first < 1 || first > 100 {
+        if !(1..=100).contains(&first) {
             return Err(async_graphql::Error::new(
                 "'first' must be between 1 and 100",
             ));
         }
         first
     } else if let Some(last) = last {
-        if last < 1 || last > 100 {
+        if !(1..=100).contains(&last) {
             return Err(async_graphql::Error::new(
                 "'last' must be between 1 and 100",
             ));
@@ -357,10 +361,12 @@ impl QueryRoot {
                     get_records_connection(
                         txn,
                         &mut redis_conn,
-                        after,
-                        before,
-                        first,
-                        last,
+                        ConnectionParameters {
+                            after,
+                            before,
+                            first,
+                            last,
+                        },
                         date_sort_by,
                         Default::default(),
                     )
