@@ -4,13 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-async-graphql = { workspace = true }
+async-graphql = { workspace = true, features = ["dataloader", "apollo_tracing", ] }
 entity = { path = "../entity" }
 records-lib = { path = "../records_lib" }
 sea-orm = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
 deadpool-redis = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
+base64 = "0.22"

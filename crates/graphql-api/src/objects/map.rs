@@ -1,4 +1,4 @@
-use async_graphql::{ID, dataloader::DataLoader};
+use async_graphql::{ID, connection, dataloader::DataLoader};
 use deadpool_redis::redis::AsyncCommands as _;
 use entity::{
     event_edition, event_edition_maps, global_event_records, global_records, maps, player_rating,
@@ -24,6 +24,7 @@ use crate::{
         event_edition::EventEdition, player::Player, player_rating::PlayerRating,
         ranked_record::RankedRecord, related_edition::RelatedEdition, sort_state::SortState,
     },
+    records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
 };
 
 #[derive(FromQueryResult)]
@@ -137,6 +138,161 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
     Ok(ranked_records)
 }
 
+async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
+    map_id: u32,
+    event: OptEvent<'_>,
+    ConnectionParameters {
+        before,
+        after,
+        first,
+        last,
+    }: ConnectionParameters,
+    rank_sort_by: Option<SortState>,
+    date_sort_by: Option<SortState>,
+) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+    let limit = if let Some(first) = first {
+        if !(1..=100).contains(&first) {
+            return Err(async_graphql::Error::new(
+                "'first' must be between 1 and 100",
+            ));
+        }
+        first
+    } else if let Some(last) = last {
+        if !(1..=100).contains(&last) {
+            return Err(async_graphql::Error::new(
+                "'last' must be between 1 and 100",
+            ));
+        }
+        last
+    } else {
+        50 // Default limit
+    };
+
+    // Decode cursors if provided
+    let after_timestamp = if let Some(cursor) = after.as_ref() {
+        Some(decode_cursor(cursor).map_err(async_graphql::Error::new)?)
+    } else {
+        None
+    };
+
+    let before_timestamp = if let Some(cursor) = before.as_ref() {
+        Some(decode_cursor(cursor).map_err(async_graphql::Error::new)?)
+    } else {
+        None
+    };
+
+    // Determine if we're going forward or backward
+    let is_backward = last.is_some() || before.is_some();
+    let has_previous_page = after.is_some();
+
+    let _key = map_key(map_id, event);
+    update_leaderboard(conn, redis_conn, map_id, event).await?;
+
+    let mut select = Query::select();
+
+    let select = match event.get() {
+        Some((ev, ed)) => select.from_as(global_event_records::Entity, "r").and_where(
+            Expr::col(("r", global_event_records::Column::EventId))
+                .eq(ev.id)
+                .and(Expr::col(("r", global_event_records::Column::EditionId)).eq(ed.id)),
+        ),
+        None => select.from_as(global_records::Entity, "r"),
+    }
+    .column(Asterisk)
+    .and_where(Expr::col(("r", records::Column::MapId)).eq(map_id));
+
+    // Apply cursor filters
+    if let Some(timestamp) = after_timestamp {
+        let dt = chrono::DateTime::from_timestamp_millis(timestamp)
+            .ok_or_else(|| async_graphql::Error::new("Invalid timestamp in cursor"))?
+            .naive_utc();
+
+        select.and_where(Expr::col(("r", records::Column::RecordDate)).lt(dt));
+    }
+
+    if let Some(timestamp) = before_timestamp {
+        let dt = chrono::DateTime::from_timestamp_millis(timestamp)
+            .ok_or_else(|| async_graphql::Error::new("Invalid timestamp in cursor"))?
+            .naive_utc();
+
+        select.and_where(Expr::col(("r", records::Column::RecordDate)).gt(dt));
+    }
+
+    // Apply ordering based on date_sort_by and pagination direction
+    if let Some(ref s) = date_sort_by {
+        let order = match (s, is_backward) {
+            (SortState::Sort, false) => sea_orm::Order::Desc,
+            (SortState::Sort, true) => sea_orm::Order::Asc,
+            (SortState::Reverse, false) => sea_orm::Order::Asc,
+            (SortState::Reverse, true) => sea_orm::Order::Desc,
+        };
+        select.order_by_expr(Expr::col(("r", records::Column::RecordDate)).into(), order);
+    } else if rank_sort_by.is_some() {
+        // For rank-based sorting with pagination, we need to fetch player IDs from Redis
+        // This is complex and may not work well with cursors
+        // For now, we'll order by time which correlates with rank
+        let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
+        let order = match (to_reverse, is_backward) {
+            (false, false) => sea_orm::Order::Asc, // Best times first
+            (false, true) => sea_orm::Order::Desc,
+            (true, false) => sea_orm::Order::Desc, // Worst times first
+            (true, true) => sea_orm::Order::Asc,
+        };
+        select.order_by_expr(Expr::col(("r", records::Column::Time)).into(), order);
+        select.order_by_expr(
+            Expr::col(("r", records::Column::RecordDate)).into(),
+            sea_orm::Order::Asc,
+        );
+    } else {
+        // Default ordering by record date
+        let order = if is_backward {
+            sea_orm::Order::Asc
+        } else {
+            sea_orm::Order::Desc
+        };
+        select.order_by_expr(Expr::col(("r", records::Column::RecordDate)).into(), order);
+    }
+
+    // Fetch one extra to determine if there's a next/previous page
+    select.limit((limit + 1) as u64);
+
+    let stmt = conn.get_database_backend().build(&*select);
+    let mut records = conn
+        .query_all(stmt)
+        .await?
+        .into_iter()
+        .map(|result| records::Model::from_query_result(&result, ""))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // If backward pagination, reverse the results
+    if is_backward {
+        records.reverse();
+    }
+
+    let mut connection = connection::Connection::new(has_previous_page, records.len() > limit);
+
+    for record in records {
+        let rank = get_rank(
+            conn,
+            redis_conn,
+            map_id,
+            record.record_player_id,
+            record.time,
+            event,
+        )
+        .await?;
+
+        connection.edges.push(connection::Edge::new(
+            ID(encode_cursor(&record.record_date.and_utc())),
+            records::RankedRecord { rank, record }.into(),
+        ));
+    }
+
+    Ok(connection)
+}
+
 impl Map {
     pub(super) async fn get_records(
         &self,
@@ -156,6 +312,50 @@ impl Map {
                 event,
                 rank_sort_by,
                 date_sort_by,
+            )
+            .await
+        }))
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn get_records_connection(
+        &self,
+        gql_ctx: &async_graphql::Context<'_>,
+        event: OptEvent<'_>,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+        rank_sort_by: Option<SortState>,
+        date_sort_by: Option<SortState>,
+    ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+        let db = gql_ctx.data_unchecked::<Database>();
+        let mut redis_conn = db.redis_pool.get().await?;
+
+        records_lib::assert_future_send(transaction::within(&db.sql_conn, async |txn| {
+            connection::query(
+                after,
+                before,
+                first,
+                last,
+                |after, before, first, last| async move {
+                    get_map_records_connection(
+                        txn,
+                        &mut redis_conn,
+                        self.inner.id,
+                        event,
+                        ConnectionParameters {
+                            after,
+                            before,
+                            first,
+                            last,
+                        },
+                        rank_sort_by,
+                        date_sort_by,
+                    )
+                    .await
+                },
             )
             .await
         }))
@@ -268,5 +468,32 @@ impl Map {
     ) -> async_graphql::Result<Vec<RankedRecord>> {
         self.get_records(ctx, Default::default(), rank_sort_by, date_sort_by)
             .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn records_connection(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        #[graphql(desc = "Cursor to fetch records after (for forward pagination)")] after: Option<
+            String,
+        >,
+        #[graphql(desc = "Cursor to fetch records before (for backward pagination)")]
+        before: Option<String>,
+        #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
+        #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
+        rank_sort_by: Option<SortState>,
+        date_sort_by: Option<SortState>,
+    ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+        self.get_records_connection(
+            ctx,
+            Default::default(),
+            after,
+            before,
+            first,
+            last,
+            rank_sort_by,
+            date_sort_by,
+        )
+        .await
     }
 }

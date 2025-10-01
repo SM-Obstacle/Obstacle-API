@@ -1,3 +1,4 @@
+use async_graphql::{ID, connection};
 use entity::{event as event_entity, event_edition, global_records, players, records};
 use records_lib::{
     Database, RedisConnection, must, opt_event::OptEvent, ranks::get_rank, transaction,
@@ -9,14 +10,17 @@ use sea_orm::{
     sea_query::{ExprTrait as _, Func},
 };
 
-use crate::objects::{
-    event::Event,
-    event_edition::EventEdition,
-    map::Map,
-    mappack::{self, Mappack},
-    player::Player,
-    ranked_record::RankedRecord,
-    sort_state::SortState,
+use crate::{
+    objects::{
+        event::Event,
+        event_edition::EventEdition,
+        map::Map,
+        mappack::{self, Mappack},
+        player::Player,
+        ranked_record::RankedRecord,
+        sort_state::SortState,
+    },
+    records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
 };
 
 pub struct QueryRoot;
@@ -91,6 +95,120 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
     }
 
     Ok(ranked_records)
+}
+
+async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
+    ConnectionParameters {
+        after,
+        before,
+        first,
+        last,
+    }: ConnectionParameters,
+    date_sort_by: Option<SortState>,
+    event: OptEvent<'_>,
+) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+    let limit = if let Some(first) = first {
+        if !(1..=100).contains(&first) {
+            return Err(async_graphql::Error::new(
+                "'first' must be between 1 and 100",
+            ));
+        }
+        first
+    } else if let Some(last) = last {
+        if !(1..=100).contains(&last) {
+            return Err(async_graphql::Error::new(
+                "'last' must be between 1 and 100",
+            ));
+        }
+        last
+    } else {
+        50 // Default limit
+    };
+
+    // Decode cursors if provided
+    let after_timestamp = if let Some(cursor) = after.as_ref() {
+        Some(decode_cursor(cursor).map_err(async_graphql::Error::new)?)
+    } else {
+        None
+    };
+
+    let before_timestamp = if let Some(cursor) = before.as_ref() {
+        Some(decode_cursor(cursor).map_err(async_graphql::Error::new)?)
+    } else {
+        None
+    };
+
+    // Determine if we're going forward or backward
+    let is_backward = last.is_some() || before.is_some();
+    let has_previous_page = after.is_some();
+
+    // Build query with appropriate ordering
+    let mut query = global_records::Entity::find();
+
+    // Apply cursor filters
+    if let Some(timestamp) = after_timestamp {
+        let dt = chrono::DateTime::from_timestamp_millis(timestamp)
+            .ok_or_else(|| async_graphql::Error::new("Invalid timestamp in cursor"))?
+            .naive_utc();
+
+        query = query.filter(global_records::Column::RecordDate.lt(dt));
+    }
+
+    if let Some(timestamp) = before_timestamp {
+        let dt = chrono::DateTime::from_timestamp_millis(timestamp)
+            .ok_or_else(|| async_graphql::Error::new("Invalid timestamp in cursor"))?
+            .naive_utc();
+
+        query = query.filter(global_records::Column::RecordDate.gt(dt));
+    }
+
+    // Apply ordering based on date_sort_by and pagination direction
+    let order = match (date_sort_by, is_backward) {
+        (Some(SortState::Reverse), false) => sea_orm::Order::Asc,
+        (Some(SortState::Reverse), true) => sea_orm::Order::Desc,
+        (_, false) => sea_orm::Order::Desc, // Default: newest first
+        (_, true) => sea_orm::Order::Asc,   // Backward pagination: reverse order
+    };
+
+    query = query.order_by(global_records::Column::RecordDate, order);
+
+    // Fetch one extra to determine if there's a next/previous page
+    query = query.limit((limit + 1) as u64);
+
+    let mut records = query.all(conn).await?;
+
+    // If backward pagination, reverse the results
+    if is_backward {
+        records.reverse();
+    }
+
+    let mut connection = connection::Connection::new(has_previous_page, records.len() > limit);
+    connection.edges.reserve(records.len());
+
+    for record in records {
+        let rank = get_rank(
+            conn,
+            redis_conn,
+            record.map_id,
+            record.record_player_id,
+            record.time,
+            event,
+        )
+        .await?;
+
+        connection.edges.push(connection::Edge::new(
+            ID(encode_cursor(&record.record_date.and_utc())),
+            records::RankedRecord {
+                rank,
+                record: record.into(),
+            }
+            .into(),
+        ));
+    }
+
+    Ok(connection)
 }
 
 #[async_graphql::Object]
@@ -213,6 +331,49 @@ impl QueryRoot {
 
         transaction::within(conn, async |txn| {
             get_records(txn, &mut redis_conn, date_sort_by, Default::default()).await
+        })
+        .await
+    }
+
+    async fn records_connection(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        #[graphql(desc = "Cursor to fetch records after (for forward pagination)")] after: Option<
+            String,
+        >,
+        #[graphql(desc = "Cursor to fetch records before (for backward pagination)")]
+        before: Option<String>,
+        #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
+        #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
+        date_sort_by: Option<SortState>,
+    ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+        let db = ctx.data_unchecked::<Database>();
+        let conn = ctx.data_unchecked::<DbConn>();
+        let mut redis_conn = db.redis_pool.get().await?;
+
+        transaction::within(conn, async |txn| {
+            connection::query(
+                after,
+                before,
+                first,
+                last,
+                |after, before, first, last| async move {
+                    get_records_connection(
+                        txn,
+                        &mut redis_conn,
+                        ConnectionParameters {
+                            after,
+                            before,
+                            first,
+                            last,
+                        },
+                        date_sort_by,
+                        Default::default(),
+                    )
+                    .await
+                },
+            )
+            .await
         })
         .await
     }
