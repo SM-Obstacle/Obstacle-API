@@ -9,10 +9,7 @@ name = "game_api_lib"
 [dependencies]
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-async-graphql = { workspace = true, features = [
-    "dataloader",
-    "apollo_tracing",
-] }
+async-graphql = { workspace = true }
 sqlx = { workspace = true }
 chrono = { workspace = true }
 deadpool = { workspace = true }
