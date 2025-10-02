@@ -1,16 +1,21 @@
 use async_graphql::{Enum, ID, connection};
-use entity::{global_records, players, records, role};
+use entity::{global_records, maps, players, records, role};
 use records_lib::{
     RedisConnection, RedisPool, error::RecordsError, internal, opt_event::OptEvent,
     ranks::get_rank, transaction,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, StreamTrait,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, JoinType,
+    QueryFilter as _, QueryOrder as _, QuerySelect as _, RelationTrait, StreamTrait,
+    prelude::Expr,
+    sea_query::{ExprTrait as _, Func},
 };
 
 use crate::{
-    objects::{ranked_record::RankedRecord, sort_state::SortState},
+    objects::{
+        ranked_record::RankedRecord, records_filter::RecordsFilter, sort::UnorderedRecordSort,
+        sort_order::SortOrder, sort_state::SortState,
+    },
     records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
 };
 
@@ -98,6 +103,7 @@ impl Player {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn records_connection(
         &self,
         ctx: &async_graphql::Context<'_>,
@@ -108,7 +114,8 @@ impl Player {
         before: Option<String>,
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
-        date_sort_by: Option<SortState>,
+        sort: Option<UnorderedRecordSort>,
+        #[graphql(desc = "Filter options for records")] filter: Option<RecordsFilter>,
     ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
@@ -131,7 +138,8 @@ impl Player {
                             first,
                             last,
                         },
-                        date_sort_by,
+                        sort,
+                        filter,
                     )
                     .await
                 },
@@ -200,7 +208,8 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
         first,
         last,
     }: ConnectionParameters,
-    date_sort_by: Option<SortState>,
+    sort: Option<UnorderedRecordSort>,
+    filter: Option<RecordsFilter>,
 ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
         if !(1..=100).contains(&first) {
@@ -241,6 +250,50 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
     let mut query =
         global_records::Entity::find().filter(global_records::Column::RecordPlayerId.eq(player_id));
 
+    // Apply filters if provided
+    if let Some(filter) = filter {
+        // Join with maps table if needed for map filters
+        if filter.map_uid.is_some() || filter.map_name.is_some() {
+            query = query.join_as(
+                JoinType::InnerJoin,
+                global_records::Relation::Maps.def(),
+                "m",
+            );
+        }
+
+        // Apply map UID filter
+        if let Some(uid) = filter.map_uid {
+            query = query.filter(Expr::col(("m", maps::Column::GameId)).like(format!("%{uid}%")));
+        }
+
+        // Apply map name filter
+        if let Some(name) = filter.map_name {
+            query = query.filter(
+                Func::cust("rm_mp_style")
+                    .arg(Expr::col(("m", maps::Column::Name)))
+                    .like(format!("%{name}%")),
+            );
+        }
+
+        // Apply date filters
+        if let Some(before_date) = filter.before_date {
+            query = query.filter(global_records::Column::RecordDate.lt(before_date));
+        }
+
+        if let Some(after_date) = filter.after_date {
+            query = query.filter(global_records::Column::RecordDate.gt(after_date));
+        }
+
+        // Apply time filters
+        if let Some(time_gt) = filter.time_gt {
+            query = query.filter(global_records::Column::Time.gt(time_gt));
+        }
+
+        if let Some(time_lt) = filter.time_lt {
+            query = query.filter(global_records::Column::Time.lt(time_lt));
+        }
+    }
+
     // Apply cursor filters
     if let Some(timestamp) = after_timestamp {
         let dt = chrono::DateTime::from_timestamp_millis(timestamp)
@@ -259,9 +312,9 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
     }
 
     // Apply ordering based on date_sort_by and pagination direction
-    let order = match (date_sort_by, is_backward) {
-        (Some(SortState::Reverse), false) => sea_orm::Order::Asc,
-        (Some(SortState::Reverse), true) => sea_orm::Order::Desc,
+    let order = match (sort.and_then(|s| s.order), is_backward) {
+        (Some(SortOrder::Descending), false) => sea_orm::Order::Asc,
+        (Some(SortOrder::Descending), true) => sea_orm::Order::Desc,
         (_, false) => sea_orm::Order::Desc, // Default: newest first
         (_, true) => sea_orm::Order::Asc,   // Backward pagination: reverse order
     };
