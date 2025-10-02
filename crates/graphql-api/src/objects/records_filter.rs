@@ -27,7 +27,4 @@ pub struct RecordsFilter {
 
     /// Filter records with time less than this value (in milliseconds)
     pub time_lt: Option<i32>,
-
-    /// Filter records with time equal to this value (in milliseconds)
-    pub time_eq: Option<i32>,
 }

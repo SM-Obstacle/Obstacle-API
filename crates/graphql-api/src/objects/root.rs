@@ -4,8 +4,8 @@ use records_lib::{
     Database, RedisConnection, must, opt_event::OptEvent, ranks::get_rank, transaction,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, QueryFilter as _, QueryOrder as _,
-    QuerySelect as _, StreamTrait, JoinType, RelationTrait,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, JoinType, QueryFilter as _,
+    QueryOrder as _, QuerySelect as _, RelationTrait, StreamTrait,
     prelude::Expr,
     sea_query::{ExprTrait as _, Func},
 };
@@ -153,34 +153,49 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
     if let Some(filter) = filter {
         // Join with players table if needed for player filters
         if filter.player_login.is_some() || filter.player_name.is_some() {
-            query = query
-                .join(JoinType::InnerJoin, global_records::Relation::Players.def());
+            query = query.join_as(
+                JoinType::InnerJoin,
+                global_records::Relation::Players.def(),
+                "p",
+            );
         }
 
         // Join with maps table if needed for map filters
         if filter.map_uid.is_some() || filter.map_name.is_some() {
-            query = query
-                .join(JoinType::InnerJoin, global_records::Relation::Maps.def());
+            query = query.join_as(
+                JoinType::InnerJoin,
+                global_records::Relation::Maps.def(),
+                "m",
+            );
         }
 
         // Apply player login filter
         if let Some(login) = filter.player_login {
-            query = query.filter(players::Column::Login.eq(login));
+            query =
+                query.filter(Expr::col(("p", players::Column::Login)).like(format!("%{login}%")));
         }
 
         // Apply player name filter
         if let Some(name) = filter.player_name {
-            query = query.filter(players::Column::Name.eq(name));
+            query = query.filter(
+                Func::cust("rm_mp_style")
+                    .arg(Expr::col(("p", players::Column::Name)))
+                    .like(format!("%{name}%")),
+            );
         }
 
         // Apply map UID filter
         if let Some(uid) = filter.map_uid {
-            query = query.filter(maps::Column::GameId.eq(uid));
+            query = query.filter(Expr::col(("p", maps::Column::GameId)).like(format!("%{uid}%")));
         }
 
         // Apply map name filter
         if let Some(name) = filter.map_name {
-            query = query.filter(maps::Column::Name.eq(name));
+            query = query.filter(
+                Func::cust("rm_mp_style")
+                    .arg(Expr::col(("m", maps::Column::Name)))
+                    .like(format!("%{name}%")),
+            );
         }
 
         // Apply date filters
@@ -199,10 +214,6 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
 
         if let Some(time_lt) = filter.time_lt {
             query = query.filter(global_records::Column::Time.lt(time_lt));
-        }
-
-        if let Some(time_eq) = filter.time_eq {
-            query = query.filter(global_records::Column::Time.eq(time_eq));
         }
     }
 

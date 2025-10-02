@@ -12,8 +12,8 @@ use records_lib::{
     transaction,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, StreamTrait, JoinType,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, JoinType,
+    QueryFilter as _, QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
     sea_query::{Asterisk, ExprTrait as _, Func, Query},
 };
@@ -22,8 +22,8 @@ use crate::{
     loaders::{map::MapLoader, player::PlayerLoader},
     objects::{
         event_edition::EventEdition, player::Player, player_rating::PlayerRating,
-        ranked_record::RankedRecord, records_filter::RecordsFilter, related_edition::RelatedEdition,
-        sort_state::SortState,
+        ranked_record::RankedRecord, records_filter::RecordsFilter,
+        related_edition::RelatedEdition, sort_state::SortState,
     },
     records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
 };
@@ -209,19 +209,25 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     if let Some(filter) = &filter {
         // For player filters, we need to join with players table
         if filter.player_login.is_some() || filter.player_name.is_some() {
-            select.join(
+            select.join_as(
                 JoinType::InnerJoin,
                 players::Entity,
+                "p",
                 Expr::col(("r", records::Column::RecordPlayerId))
                     .equals(("p", players::Column::Id)),
             );
 
             if let Some(ref login) = filter.player_login {
-                select.and_where(Expr::col(("p", players::Column::Login)).eq(login.as_str()));
+                select
+                    .and_where(Expr::col(("p", players::Column::Login)).like(format!("%{login}%")));
             }
 
             if let Some(ref name) = filter.player_name {
-                select.and_where(Expr::col(("p", players::Column::Name)).eq(name.as_str()));
+                select.and_where(
+                    Func::cust("rm_mp_style")
+                        .arg(Expr::col(("p", players::Column::Name)))
+                        .like(format!("%{name}%")),
+                );
             }
         }
 
@@ -241,10 +247,6 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
 
         if let Some(time_lt) = filter.time_lt {
             select.and_where(Expr::col(("r", records::Column::Time)).lt(time_lt));
-        }
-
-        if let Some(time_eq) = filter.time_eq {
-            select.and_where(Expr::col(("r", records::Column::Time)).eq(time_eq));
         }
     }
 
