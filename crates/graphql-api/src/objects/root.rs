@@ -186,7 +186,7 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
 
         // Apply map UID filter
         if let Some(uid) = filter.map_uid {
-            query = query.filter(Expr::col(("p", maps::Column::GameId)).like(format!("%{uid}%")));
+            query = query.filter(Expr::col(("m", maps::Column::GameId)).like(format!("%{uid}%")));
         }
 
         // Apply map name filter
