@@ -3,7 +3,11 @@ pub mod medal_times;
 pub mod ranked_record;
 pub mod records_filter;
 pub mod root;
+
+pub mod sort;
+pub mod sort_order;
 pub mod sort_state;
+pub mod sortable_fields;
 
 pub mod event;
 pub mod event_category;

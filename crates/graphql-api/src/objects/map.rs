@@ -23,7 +23,8 @@ use crate::{
     objects::{
         event_edition::EventEdition, player::Player, player_rating::PlayerRating,
         ranked_record::RankedRecord, records_filter::RecordsFilter,
-        related_edition::RelatedEdition, sort_state::SortState,
+        related_edition::RelatedEdition, sort::MapRecordSort, sort_order::SortOrder,
+        sort_state::SortState, sortable_fields::MapRecordSortableField,
     },
     records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
 };
@@ -150,8 +151,7 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
         first,
         last,
     }: ConnectionParameters,
-    rank_sort_by: Option<SortState>,
-    date_sort_by: Option<SortState>,
+    sort: Option<MapRecordSort>,
     filter: Option<RecordsFilter>,
 ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
@@ -268,30 +268,37 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     }
 
     // Apply ordering based on date_sort_by and pagination direction
-    if let Some(ref s) = date_sort_by {
-        let order = match (s, is_backward) {
-            (SortState::Sort, false) => sea_orm::Order::Desc,
-            (SortState::Sort, true) => sea_orm::Order::Asc,
-            (SortState::Reverse, false) => sea_orm::Order::Asc,
-            (SortState::Reverse, true) => sea_orm::Order::Desc,
-        };
-        select.order_by_expr(Expr::col(("r", records::Column::RecordDate)).into(), order);
-    } else if rank_sort_by.is_some() {
-        // For rank-based sorting with pagination, we need to fetch player IDs from Redis
-        // This is complex and may not work well with cursors
-        // For now, we'll order by time which correlates with rank
-        let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
-        let order = match (to_reverse, is_backward) {
-            (false, false) => sea_orm::Order::Asc, // Best times first
-            (false, true) => sea_orm::Order::Desc,
-            (true, false) => sea_orm::Order::Desc, // Worst times first
-            (true, true) => sea_orm::Order::Asc,
-        };
-        select.order_by_expr(Expr::col(("r", records::Column::Time)).into(), order);
-        select.order_by_expr(
-            Expr::col(("r", records::Column::RecordDate)).into(),
-            sea_orm::Order::Asc,
-        );
+    if let Some(sort) = sort {
+        match sort.field {
+            MapRecordSortableField::Date => {
+                let order = match (sort.order, is_backward) {
+                    (Some(SortOrder::Descending), false) => sea_orm::Order::Asc,
+                    (Some(SortOrder::Descending), true) => sea_orm::Order::Desc,
+                    (_, false) => sea_orm::Order::Desc,
+                    (_, true) => sea_orm::Order::Asc,
+                };
+
+                select.order_by_expr(Expr::col(("r", records::Column::RecordDate)).into(), order);
+            }
+            MapRecordSortableField::Rank => {
+                // For rank-based sorting with pagination, we need to fetch player IDs from Redis
+                // This is complex and may not work well with cursors
+                // For now, we'll order by time which correlates with rank
+
+                let order = match (sort.order, is_backward) {
+                    (Some(SortOrder::Descending), false) => sea_orm::Order::Desc,
+                    (Some(SortOrder::Ascending), true) => sea_orm::Order::Asc,
+                    (_, false) => sea_orm::Order::Asc,
+                    (_, true) => sea_orm::Order::Desc,
+                };
+
+                select.order_by_expr(Expr::col(("r", records::Column::Time)).into(), order);
+                select.order_by_expr(
+                    Expr::col(("r", records::Column::RecordDate)).into(),
+                    sea_orm::Order::Asc,
+                );
+            }
+        }
     } else {
         // Default ordering by record date
         let order = if is_backward {
@@ -374,8 +381,7 @@ impl Map {
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
-        rank_sort_by: Option<SortState>,
-        date_sort_by: Option<SortState>,
+        sort: Option<MapRecordSort>,
         filter: Option<RecordsFilter>,
     ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
@@ -399,8 +405,7 @@ impl Map {
                             first,
                             last,
                         },
-                        rank_sort_by,
-                        date_sort_by,
+                        sort,
                         filter,
                     )
                     .await
@@ -530,8 +535,7 @@ impl Map {
         before: Option<String>,
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
-        rank_sort_by: Option<SortState>,
-        date_sort_by: Option<SortState>,
+        sort: Option<MapRecordSort>,
         #[graphql(desc = "Filter options for records")] filter: Option<RecordsFilter>,
     ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
         self.get_records_connection(
@@ -541,8 +545,7 @@ impl Map {
             before,
             first,
             last,
-            rank_sort_by,
-            date_sort_by,
+            sort,
             filter,
         )
         .await
