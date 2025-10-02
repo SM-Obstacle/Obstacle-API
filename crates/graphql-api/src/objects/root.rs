@@ -19,6 +19,8 @@ use crate::{
         mappack::{self, Mappack},
         player::Player,
         ranked_record::RankedRecord,
+        sort::UnorderedRecordSort,
+        sort_order::SortOrder,
         sort_state::SortState,
     },
     records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
@@ -107,7 +109,7 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
         first,
         last,
     }: ConnectionParameters,
-    date_sort_by: Option<SortState>,
+    sort: Option<UnorderedRecordSort>,
     event: OptEvent<'_>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
@@ -172,9 +174,9 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
     }
 
     // Apply ordering based on date_sort_by and pagination direction
-    let order = match (date_sort_by, is_backward) {
-        (Some(SortState::Reverse), false) => sea_orm::Order::Asc,
-        (Some(SortState::Reverse), true) => sea_orm::Order::Desc,
+    let order = match (sort.and_then(|s| s.order), is_backward) {
+        (Some(SortOrder::Descending), false) => sea_orm::Order::Asc,
+        (Some(SortOrder::Descending), true) => sea_orm::Order::Desc,
         (_, false) => sea_orm::Order::Desc, // Default: newest first
         (_, true) => sea_orm::Order::Asc,   // Backward pagination: reverse order
     };
@@ -332,6 +334,7 @@ impl QueryRoot {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn records_connection(
         &self,
         ctx: &async_graphql::Context<'_>,
@@ -342,7 +345,7 @@ impl QueryRoot {
         before: Option<String>,
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
-        date_sort_by: Option<SortState>,
+        sort: Option<UnorderedRecordSort>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let conn = ctx.data_unchecked::<DbConn>();
@@ -364,7 +367,7 @@ impl QueryRoot {
                             first,
                             last,
                         },
-                        date_sort_by,
+                        sort,
                         Default::default(),
                     )
                     .await

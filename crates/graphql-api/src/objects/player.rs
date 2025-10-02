@@ -11,7 +11,10 @@ use sea_orm::{
 
 use crate::{
     error::{ApiGqlError, GqlResult},
-    objects::{ranked_record::RankedRecord, sort_state::SortState},
+    objects::{
+        ranked_record::RankedRecord, sort::UnorderedRecordSort, sort_order::SortOrder,
+        sort_state::SortState,
+    },
     records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
 };
 
@@ -99,6 +102,7 @@ impl Player {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn records_connection(
         &self,
         ctx: &async_graphql::Context<'_>,
@@ -109,7 +113,7 @@ impl Player {
         before: Option<String>,
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
-        date_sort_by: Option<SortState>,
+        sort: Option<UnorderedRecordSort>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
@@ -132,7 +136,7 @@ impl Player {
                             first,
                             last,
                         },
-                        date_sort_by,
+                        sort,
                     )
                     .await
                 },
@@ -202,7 +206,7 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
         first,
         last,
     }: ConnectionParameters,
-    date_sort_by: Option<SortState>,
+    sort: Option<UnorderedRecordSort>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
         if !(1..=100).contains(&first) {
@@ -267,9 +271,9 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
     }
 
     // Apply ordering based on date_sort_by and pagination direction
-    let order = match (date_sort_by, is_backward) {
-        (Some(SortState::Reverse), false) => sea_orm::Order::Asc,
-        (Some(SortState::Reverse), true) => sea_orm::Order::Desc,
+    let order = match (sort.and_then(|s| s.order), is_backward) {
+        (Some(SortOrder::Descending), false) => sea_orm::Order::Asc,
+        (Some(SortOrder::Descending), true) => sea_orm::Order::Desc,
         (_, false) => sea_orm::Order::Desc, // Default: newest first
         (_, true) => sea_orm::Order::Asc,   // Backward pagination: reverse order
     };
