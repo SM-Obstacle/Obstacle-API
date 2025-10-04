@@ -52,6 +52,9 @@ fn update_active_model_medal_times(
     active_model: &mut maps::ActiveModel,
     medal_times: Option<MedalTimes>,
 ) {
+    // If the request body contains medal times, it doesn't mean that the map has medal times saved.
+    // This is because ManiaScript can't encode null values when serializing to JSON. So it encodes
+    // 0 for integers by default.
     if let Some(medal_times) = medal_times
         && medal_times.author_time > 0
         && medal_times.bronze_time > medal_times.silver_time
