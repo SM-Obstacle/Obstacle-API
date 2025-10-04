@@ -48,6 +48,23 @@ struct UpdateMapBody {
     medal_times: Option<MedalTimes>,
 }
 
+fn update_active_model_medal_times(
+    active_model: &mut maps::ActiveModel,
+    medal_times: Option<MedalTimes>,
+) {
+    if let Some(medal_times) = medal_times
+        && medal_times.author_time > 0
+        && medal_times.bronze_time > medal_times.silver_time
+        && medal_times.silver_time > medal_times.gold_time
+        && medal_times.gold_time > medal_times.author_time
+    {
+        active_model.bronze_time = Set(Some(medal_times.bronze_time));
+        active_model.silver_time = Set(Some(medal_times.silver_time));
+        active_model.gold_time = Set(Some(medal_times.gold_time));
+        active_model.author_time = Set(Some(medal_times.author_time));
+    }
+}
+
 async fn insert(
     _: ApiAvailable,
     ExtractDbConn(conn): ExtractDbConn,
@@ -69,17 +86,8 @@ async fn insert(
             updated_map.cps_number = Set(Some(body.cps_number));
         }
 
-        if is_map_medals_empty
-            && let Some(medal_times) = body.medal_times
-            && medal_times.author_time > 0
-            && medal_times.bronze_time > medal_times.silver_time
-            && medal_times.silver_time > medal_times.gold_time
-            && medal_times.gold_time > medal_times.author_time
-        {
-            updated_map.bronze_time = Set(Some(medal_times.bronze_time));
-            updated_map.silver_time = Set(Some(medal_times.silver_time));
-            updated_map.gold_time = Set(Some(medal_times.gold_time));
-            updated_map.author_time = Set(Some(medal_times.author_time));
+        if is_map_medals_empty {
+            update_active_model_medal_times(&mut updated_map, body.medal_times);
         }
 
         if updated_map.is_changed() {
@@ -99,12 +107,7 @@ async fn insert(
             ..Default::default()
         };
 
-        if let Some(medal_times) = body.medal_times {
-            new_map.bronze_time = Set(Some(medal_times.bronze_time));
-            new_map.silver_time = Set(Some(medal_times.silver_time));
-            new_map.gold_time = Set(Some(medal_times.gold_time));
-            new_map.author_time = Set(Some(medal_times.author_time));
-        }
+        update_active_model_medal_times(&mut new_map, body.medal_times);
 
         maps::Entity::insert(new_map)
             .exec(&conn)
