@@ -12,8 +12,8 @@ use entity::{maps, player_rating, players, rating, rating_kind};
 use futures::{StreamExt, future::try_join_all};
 use records_lib::Database;
 use sea_orm::{
-    ActiveValue::Set, ColumnTrait as _, EntityTrait as _, FromQueryResult, PaginatorTrait,
-    QueryFilter, QuerySelect, prelude::Expr, sea_query::Func,
+    ActiveModelTrait as _, ActiveValue::Set, ColumnTrait as _, EntityTrait as _, FromQueryResult,
+    PaginatorTrait, QueryFilter, QuerySelect, prelude::Expr, sea_query::Func,
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,11 +31,21 @@ pub fn map_scope() -> Scope {
 
 #[derive(Deserialize)]
 #[cfg_attr(test, derive(Serialize))]
+struct MedalTimes {
+    bronze_time: i32,
+    silver_time: i32,
+    gold_time: i32,
+    author_time: i32,
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
 struct UpdateMapBody {
     name: String,
     map_uid: String,
     cps_number: u32,
     author: PlayerInfoNetBody,
+    medal_times: Option<MedalTimes>,
 }
 
 async fn insert(
@@ -46,23 +56,55 @@ async fn insert(
     let map = records_lib::map::get_map_from_uid(&conn, &body.map_uid).await?;
 
     if let Some(map) = map {
-        if map.cps_number.is_none() {
-            let map = maps::ActiveModel {
-                cps_number: Set(Some(body.cps_number)),
-                ..From::from(map)
-            };
-            maps::Entity::update(map).exec(&conn).await.with_api_err()?;
+        let is_map_medals_empty = map.bronze_time.is_none()
+            && map.silver_time.is_none()
+            && map.gold_time.is_none()
+            && map.author_time.is_none();
+
+        let is_map_cps_number_empty = map.cps_number.is_none();
+
+        let mut updated_map = maps::ActiveModel::from(map);
+
+        if is_map_cps_number_empty {
+            updated_map.cps_number = Set(Some(body.cps_number));
+        }
+
+        if is_map_medals_empty
+            && let Some(medal_times) = body.medal_times
+            && medal_times.author_time > 0
+            && medal_times.bronze_time > medal_times.silver_time
+            && medal_times.silver_time > medal_times.gold_time
+            && medal_times.gold_time > medal_times.author_time
+        {
+            updated_map.bronze_time = Set(Some(medal_times.bronze_time));
+            updated_map.silver_time = Set(Some(medal_times.silver_time));
+            updated_map.gold_time = Set(Some(medal_times.gold_time));
+            updated_map.author_time = Set(Some(medal_times.author_time));
+        }
+
+        if updated_map.is_changed() {
+            maps::Entity::update(updated_map)
+                .exec(&conn)
+                .await
+                .with_api_err()?;
         }
     } else {
         let player = player::get_or_insert(&conn, &body.author).await?;
 
-        let new_map = maps::ActiveModel {
+        let mut new_map = maps::ActiveModel {
             game_id: Set(body.map_uid),
             player_id: Set(player.id),
             name: Set(body.name),
             cps_number: Set(Some(body.cps_number)),
             ..Default::default()
         };
+
+        if let Some(medal_times) = body.medal_times {
+            new_map.bronze_time = Set(Some(medal_times.bronze_time));
+            new_map.silver_time = Set(Some(medal_times.silver_time));
+            new_map.gold_time = Set(Some(medal_times.gold_time));
+            new_map.author_time = Set(Some(medal_times.author_time));
+        }
 
         maps::Entity::insert(new_map)
             .exec(&conn)
