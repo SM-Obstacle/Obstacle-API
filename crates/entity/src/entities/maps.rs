@@ -23,6 +23,15 @@ pub struct Model {
     ///
     /// This was created for future features.
     pub linked_map: Option<u32>,
+
+    /// The bronze time of the map.
+    pub bronze_time: Option<i32>,
+    /// The silver time of the map.
+    pub silver_time: Option<i32>,
+    /// The gold time of the map.
+    pub gold_time: Option<i32>,
+    /// The author time of the map.
+    pub author_time: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
