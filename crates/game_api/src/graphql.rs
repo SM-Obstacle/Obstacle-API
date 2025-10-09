@@ -43,22 +43,22 @@ async fn index_graphql(
             .get_or_insert_with(ErrorExtensionValues::default);
 
         // Don't expose internal server errors
-        if let Some(err) = api_error {
-            if let ApiGqlErrorKind::Lib(err) = err.kind() {
-                let err = ApiErrorKind::Lib(err);
-                let (err_type, status_code) = err.get_err_type_and_status_code();
+        if let Some(err) = api_error
+            && let ApiGqlErrorKind::Lib(err) = err.kind()
+        {
+            let err = ApiErrorKind::Lib(err);
+            let (err_type, status_code) = err.get_err_type_and_status_code();
 
-                let mapped_err_type =
-                    if (100..200).contains(&err_type) || status_code.is_server_error() {
-                        error.message = "Internal server error".to_owned();
-                        // TODO: notify internal error
-                        105 // Unknown type
-                    } else {
-                        err_type
-                    };
+            let mapped_err_type = if (100..200).contains(&err_type) || status_code.is_server_error()
+            {
+                error.message = "Internal server error".to_owned();
+                // TODO: notify internal error
+                105 // Unknown type
+            } else {
+                err_type
+            };
 
-                extensions.set("error_code", mapped_err_type);
-            }
+            extensions.set("error_code", mapped_err_type);
         }
 
         extensions.set("request_id", request_id.to_string());
