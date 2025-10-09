@@ -1,4 +1,4 @@
-use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt};
+use crate::{ApiErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
 use entity::{checkpoint_times, event_edition_records, maps, records, types};
 use records_lib::{NullableInteger, RedisConnection, opt_event::OptEvent, ranks};
@@ -179,14 +179,14 @@ pub async fn finished<C: ConnectionTrait + StreamTrait>(
 
     // Return an error if the player was banned at the time.
     if let Some(ban) = super::player::get_ban_during(conn, player_id, params.at).await? {
-        return Err(RecordsErrorKind::BannedPlayer(ban));
+        return Err(ApiErrorKind::BannedPlayer(ban));
     }
 
     // We check that the cps times are coherent to the final time
     if matches!(map.cps_number, Some(num) if num + 1 != params.body.cps.len() as u32)
         || params.body.cps.iter().sum::<i32>() != params.body.time
     {
-        return Err(RecordsErrorKind::InvalidTimes);
+        return Err(ApiErrorKind::InvalidTimes);
     }
 
     let old_record = get_old_record(conn, player_id, map.id, params.event).await?;

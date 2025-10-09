@@ -2,8 +2,11 @@ use deadpool_redis::redis::AsyncCommands as _;
 use records_lib::{RedisPool, mappack::AnyMappackId, must, redis_key::mappack_player_ranks_key};
 use sea_orm::DbConn;
 
-use crate::objects::{
-    event_edition_map_ext::EventEditionMapExt, event_edition_player::EventEditionPlayer,
+use crate::{
+    error::GqlResult,
+    objects::{
+        event_edition_map_ext::EventEditionMapExt, event_edition_player::EventEditionPlayer,
+    },
 };
 
 pub struct EventEditionPlayerRank<'a> {
@@ -14,7 +17,7 @@ pub struct EventEditionPlayerRank<'a> {
 
 #[async_graphql::Object]
 impl EventEditionPlayerRank<'_> {
-    async fn rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
+    async fn rank(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<usize> {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
         let rank = redis_conn
@@ -36,10 +39,7 @@ impl EventEditionPlayerRank<'_> {
         self.record_time
     }
 
-    async fn map(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<EventEditionMapExt<'_>> {
+    async fn map(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<EventEditionMapExt<'_>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let map = must::have_map(conn, &self.map_game_id).await?;
         Ok(EventEditionMapExt {

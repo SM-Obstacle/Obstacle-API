@@ -1,19 +1,22 @@
 use actix_session::Session;
-use actix_web::web;
+use actix_web::{HttpRequest, web};
 use actix_web::{HttpResponse, Resource, Responder};
+use async_graphql::ErrorExtensionValues;
 use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
-use async_graphql::{ErrorExtensionValues, Value};
 use async_graphql_actix_web::GraphQLRequest;
+use graphql_api::error::{ApiGqlError, ApiGqlErrorKind};
 use graphql_api::schema::{Schema, create_schema};
 use records_lib::Database;
 use reqwest::Client;
 use tracing_actix_web::RequestId;
 
 use crate::auth::{WEB_TOKEN_SESS_KEY, WebToken};
-use crate::{RecordsErrorKind, RecordsResult, Res, internal};
+use crate::{ApiErrorKind, RecordsResult, Res, configure, internal};
 
 async fn index_graphql(
     request_id: RequestId,
+    client: Res<reqwest::Client>,
+    req: HttpRequest,
     session: Session,
     schema: Res<Schema>,
     GraphQLRequest(request): GraphQLRequest,
@@ -35,19 +38,36 @@ async fn index_graphql(
     for error in &mut result.errors {
         tracing::error!("Error encountered when processing GraphQL request: {error:?}");
 
-        // Don't expose internal server errors
-        if let Some(err) = error.source::<RecordsErrorKind>() {
-            let (err_type, status_code) = err.get_err_type_and_status_code();
-            if (100..200).contains(&err_type) || status_code.is_server_error() {
-                error.message = "Internal server error".to_owned();
-            }
-        }
+        let api_error = error.source::<ApiGqlError>().cloned();
 
-        let ex = error
+        let extensions = error
             .extensions
             .get_or_insert_with(ErrorExtensionValues::default);
 
-        ex.set("request_id", Value::String(request_id.to_string()));
+        // Don't expose internal server errors
+        if let Some(err) = api_error
+            && let ApiGqlErrorKind::Lib(err) = err.kind()
+        {
+            let err = ApiErrorKind::Lib(err);
+            let (err_type, status_code) = err.get_err_type_and_status_code();
+
+            let mapped_err_type = if (100..200).contains(&err_type) || status_code.is_server_error()
+            {
+                error.message = "Internal server error".to_owned();
+                configure::send_internal_err_msg_detached(
+                    client.0.clone(),
+                    req.head().clone(),
+                    err,
+                );
+                105 // Unknown type
+            } else {
+                err_type
+            };
+
+            extensions.set("error_code", mapped_err_type);
+        }
+
+        extensions.set("request_id", request_id.to_string());
     }
 
     Ok(web::Json(result))

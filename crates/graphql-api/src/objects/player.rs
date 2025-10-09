@@ -10,6 +10,7 @@ use sea_orm::{
 };
 
 use crate::{
+    error::{ApiGqlError, GqlResult},
     objects::{ranked_record::RankedRecord, sort_state::SortState},
     records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
 };
@@ -65,7 +66,7 @@ impl Player {
         self.inner.zone_path.as_deref()
     }
 
-    async fn role(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<PlayerRole> {
+    async fn role(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<PlayerRole> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let r = role::Entity::find_by_id(self.inner.role)
@@ -81,7 +82,7 @@ impl Player {
         &self,
         ctx: &async_graphql::Context<'_>,
         date_sort_by: Option<SortState>,
-    ) -> async_graphql::Result<Vec<RankedRecord>> {
+    ) -> GqlResult<Vec<RankedRecord>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
 
@@ -109,7 +110,7 @@ impl Player {
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
         date_sort_by: Option<SortState>,
-    ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+    ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
 
@@ -137,6 +138,7 @@ impl Player {
                 },
             )
             .await
+            .map_err(ApiGqlError::from_gql_error)
         }))
         .await
     }
@@ -148,7 +150,7 @@ async fn get_player_records<C: ConnectionTrait + StreamTrait>(
     player_id: u32,
     event: OptEvent<'_>,
     date_sort_by: Option<SortState>,
-) -> async_graphql::Result<Vec<RankedRecord>> {
+) -> GqlResult<Vec<RankedRecord>> {
     // Query the records with these ids
 
     let records = global_records::Entity::find()
@@ -201,41 +203,47 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
         last,
     }: ConnectionParameters,
     date_sort_by: Option<SortState>,
-) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
         if !(1..=100).contains(&first) {
-            return Err(async_graphql::Error::new(
-                "'first' must be between 1 and 100",
+            return Err(ApiGqlError::from_cursor_range_error(
+                "first",
+                1..=100,
+                first,
             ));
         }
         first
     } else if let Some(last) = last {
         if !(1..=100).contains(&last) {
-            return Err(async_graphql::Error::new(
-                "'last' must be between 1 and 100",
-            ));
+            return Err(ApiGqlError::from_cursor_range_error("last", 1..=100, last));
         }
         last
     } else {
         50 // Default limit
     };
 
-    // Decode cursors if provided
-    let after_timestamp = if let Some(cursor) = after.as_ref() {
-        Some(decode_cursor(cursor).map_err(async_graphql::Error::new)?)
-    } else {
-        None
-    };
-
-    let before_timestamp = if let Some(cursor) = before.as_ref() {
-        Some(decode_cursor(cursor).map_err(async_graphql::Error::new)?)
-    } else {
-        None
-    };
-
     // Determine if we're going forward or backward
     let is_backward = last.is_some() || before.is_some();
     let has_previous_page = after.is_some();
+
+    // Decode cursors if provided
+    let after_timestamp = match after {
+        Some(cursor) => {
+            let decoded = decode_cursor(&cursor)
+                .map_err(|e| ApiGqlError::from_cursor_decode_error("after", cursor.0, e))?;
+            Some(decoded)
+        }
+        None => None,
+    };
+
+    let before_timestamp = match before {
+        Some(cursor) => {
+            let decoded = decode_cursor(&cursor)
+                .map_err(|e| ApiGqlError::from_cursor_decode_error("before", cursor.0, e))?;
+            Some(decoded)
+        }
+        None => None,
+    };
 
     // Build query with appropriate ordering
     let mut query =
@@ -244,7 +252,7 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
     // Apply cursor filters
     if let Some(timestamp) = after_timestamp {
         let dt = chrono::DateTime::from_timestamp_millis(timestamp)
-            .ok_or_else(|| async_graphql::Error::new("Invalid timestamp in cursor"))?
+            .ok_or_else(|| ApiGqlError::from_invalid_timestamp("after", timestamp))?
             .naive_utc();
 
         query = query.filter(global_records::Column::RecordDate.lt(dt));
@@ -252,7 +260,7 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
 
     if let Some(timestamp) = before_timestamp {
         let dt = chrono::DateTime::from_timestamp_millis(timestamp)
-            .ok_or_else(|| async_graphql::Error::new("Invalid timestamp in cursor"))?
+            .ok_or_else(|| ApiGqlError::from_invalid_timestamp("before", timestamp))?
             .naive_utc();
 
         query = query.filter(global_records::Column::RecordDate.gt(dt));

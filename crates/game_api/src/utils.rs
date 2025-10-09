@@ -14,7 +14,7 @@ use sea_orm::{
 };
 use serde::Serialize;
 
-use crate::{RecordsErrorKind, RecordsResult, RecordsResultExt, internal};
+use crate::{ApiErrorKind, RecordsResult, RecordsResultExt, internal};
 
 /// Converts the provided body to a `200 OK` JSON responses.
 pub fn json<T: Serialize, E>(obj: T) -> Result<HttpResponse, E> {
@@ -99,7 +99,7 @@ impl<T> DerefMut for Res<T> {
 }
 
 impl<T: Clone + 'static> FromRequest for Res<T> {
-    type Error = RecordsErrorKind;
+    type Error = ApiErrorKind;
 
     type Future = Ready<RecordsResult<Self>>;
 
@@ -145,7 +145,7 @@ impl DerefMut for ExtractDbConn {
 }
 
 impl FromRequest for ExtractDbConn {
-    type Error = RecordsErrorKind;
+    type Error = ApiErrorKind;
 
     type Future = Ready<RecordsResult<Self>>;
 

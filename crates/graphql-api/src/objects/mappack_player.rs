@@ -1,6 +1,6 @@
 use deadpool_redis::redis::AsyncCommands as _;
 use records_lib::{
-    Database, RedisPool,
+    Database, RedisPool, internal,
     mappack::AnyMappackId,
     must,
     redis_key::{
@@ -9,7 +9,10 @@ use records_lib::{
     },
 };
 
-use crate::objects::{mappack::Mappack, mappack_map::MappackMap, player::Player};
+use crate::{
+    error::GqlResult,
+    objects::{mappack::Mappack, mappack_map::MappackMap, player::Player},
+};
 
 pub struct MappackPlayer<'a> {
     pub mappack: &'a Mappack,
@@ -20,7 +23,7 @@ pub(super) async fn player_rank(
     ctx: &async_graphql::Context<'_>,
     mappack: AnyMappackId<'_>,
     player_id: u32,
-) -> async_graphql::Result<usize> {
+) -> GqlResult<usize> {
     let redis_pool = ctx.data_unchecked::<RedisPool>();
     let redis_conn = &mut redis_pool.get().await?;
     let rank = redis_conn
@@ -33,7 +36,7 @@ pub(super) async fn player_rank_avg(
     ctx: &async_graphql::Context<'_>,
     mappack: AnyMappackId<'_>,
     player_id: u32,
-) -> async_graphql::Result<f64> {
+) -> GqlResult<f64> {
     let redis_pool = ctx.data_unchecked::<RedisPool>();
     let redis_conn = &mut redis_pool.get().await?;
     let rank = redis_conn
@@ -46,7 +49,7 @@ pub(super) async fn player_map_finished(
     ctx: &async_graphql::Context<'_>,
     mappack: AnyMappackId<'_>,
     player_id: u32,
-) -> async_graphql::Result<usize> {
+) -> GqlResult<usize> {
     let redis_pool = ctx.data_unchecked::<RedisPool>();
     let redis_conn = &mut redis_pool.get().await?;
     let map_finished = redis_conn
@@ -59,7 +62,7 @@ pub(super) async fn player_worst_rank(
     ctx: &async_graphql::Context<'_>,
     mappack: AnyMappackId<'_>,
     player_id: u32,
-) -> async_graphql::Result<i32> {
+) -> GqlResult<i32> {
     let redis_pool = ctx.data_unchecked::<RedisPool>();
     let redis_conn = &mut redis_pool.get().await?;
     let worst_rank = redis_conn
@@ -70,7 +73,7 @@ pub(super) async fn player_worst_rank(
 
 #[async_graphql::Object]
 impl MappackPlayer<'_> {
-    async fn rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
+    async fn rank(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<usize> {
         player_rank(
             ctx,
             AnyMappackId::Id(&self.mappack.mappack_id),
@@ -83,10 +86,7 @@ impl MappackPlayer<'_> {
         &self.inner
     }
 
-    async fn ranks(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<MappackMap>> {
+    async fn ranks(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Vec<MappackMap>> {
         let db = ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
 
@@ -105,7 +105,12 @@ impl MappackPlayer<'_> {
         let mut out = Vec::with_capacity(maps_uids.len());
 
         for [game_id, rank] in maps_uids {
-            let rank = rank.parse()?;
+            let rank = rank.parse().map_err(|e| {
+                internal!(
+                    "error when parsing rank to int for map UID `{game_id}` for mappack {}: {e}",
+                    self.mappack.mappack_id
+                )
+            })?;
             let last_rank = redis_conn
                 .get(mappack_map_last_rank(
                     AnyMappackId::Id(&self.mappack.mappack_id),
@@ -124,7 +129,7 @@ impl MappackPlayer<'_> {
         Ok(out)
     }
 
-    async fn rank_avg(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<f64> {
+    async fn rank_avg(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<f64> {
         player_rank_avg(
             ctx,
             AnyMappackId::Id(&self.mappack.mappack_id),
@@ -133,7 +138,7 @@ impl MappackPlayer<'_> {
         .await
     }
 
-    async fn map_finished(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
+    async fn map_finished(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<usize> {
         player_map_finished(
             ctx,
             AnyMappackId::Id(&self.mappack.mappack_id),
@@ -142,7 +147,7 @@ impl MappackPlayer<'_> {
         .await
     }
 
-    async fn worst_rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i32> {
+    async fn worst_rank(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<i32> {
         player_worst_rank(
             ctx,
             AnyMappackId::Id(&self.mappack.mappack_id),

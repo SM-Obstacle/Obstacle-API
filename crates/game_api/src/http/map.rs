@@ -1,5 +1,5 @@
 use crate::{
-    RecordsErrorKind, RecordsResult, RecordsResultExt, Res,
+    ApiErrorKind, RecordsResult, RecordsResultExt, Res,
     auth::{self, ApiAvailable, AuthHeader, MPAuthGuard, privilege},
     internal,
     utils::{ExtractDbConn, any_repeated, json},
@@ -340,7 +340,7 @@ pub async fn rating(
         .with_api_err()?;
 
     let Some((map_name, author_login)) = info else {
-        return Err(RecordsErrorKind::from(
+        return Err(ApiErrorKind::from(
             records_lib::error::RecordsError::MapNotFound(body.map_uid),
         ));
     };
@@ -427,7 +427,7 @@ pub async fn rate(
         .with_api_err()?;
 
     if body.ratings.len() as u64 > rate_count || any_repeated(&body.ratings) {
-        return Err(RecordsErrorKind::InvalidRates);
+        return Err(ApiErrorKind::InvalidRates);
     }
 
     if body.ratings.is_empty() {
@@ -445,7 +445,7 @@ pub async fn rate(
             .with_api_err()?;
 
         let Some(rating_date) = rating_date else {
-            return Err(RecordsErrorKind::NoRatingFound(login, body.map_id));
+            return Err(ApiErrorKind::NoRatingFound(login, body.map_id));
         };
 
         json(RateResponse {
@@ -598,7 +598,7 @@ pub async fn reset_ratings(
         .with_api_err()?;
 
     let Some((map_id, map_name, author_login)) = info else {
-        return Err(RecordsErrorKind::from(
+        return Err(ApiErrorKind::from(
             records_lib::error::RecordsError::MapNotFound(body.map_id),
         ));
     };

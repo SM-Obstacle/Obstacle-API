@@ -6,7 +6,7 @@ use serde::Serialize;
 #[cfg(feature = "actix-web")]
 pub use format_req_head::*;
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct WebhookBodyEmbedField {
     pub name: String,
     pub value: String,
@@ -14,7 +14,7 @@ pub struct WebhookBodyEmbedField {
     pub inline: Option<bool>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct WebhookBodyEmbed {
     pub title: String,
     pub description: Option<String>,
@@ -24,7 +24,7 @@ pub struct WebhookBodyEmbed {
     pub fields: Option<Vec<WebhookBodyEmbedField>>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct WebhookBody {
     pub content: String,
     pub embeds: Vec<WebhookBodyEmbed>,
