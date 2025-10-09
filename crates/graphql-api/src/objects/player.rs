@@ -12,6 +12,7 @@ use sea_orm::{
 };
 
 use crate::{
+    error::{ApiGqlError, GqlResult},
     objects::{
         ranked_record::RankedRecord, records_filter::RecordsFilter, sort::UnorderedRecordSort,
         sort_order::SortOrder, sort_state::SortState,
@@ -116,7 +117,7 @@ impl Player {
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
         sort: Option<UnorderedRecordSort>,
         #[graphql(desc = "Filter options for records")] filter: Option<RecordsFilter>,
-    ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+    ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
 
@@ -211,7 +212,7 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
     }: ConnectionParameters,
     sort: Option<UnorderedRecordSort>,
     filter: Option<RecordsFilter>,
-) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
         if !(1..=100).contains(&first) {
             return Err(ApiGqlError::from_cursor_range_error(

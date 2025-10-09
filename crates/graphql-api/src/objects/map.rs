@@ -154,7 +154,7 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     }: ConnectionParameters,
     sort: Option<MapRecordSort>,
     filter: Option<RecordsFilter>,
-) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
         if !(1..=100).contains(&first) {
             return Err(ApiGqlError::from_cursor_range_error(
@@ -392,7 +392,7 @@ impl Map {
         last: Option<i32>,
         sort: Option<MapRecordSort>,
         filter: Option<RecordsFilter>,
-    ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+    ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
 
@@ -553,7 +553,7 @@ impl Map {
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
         sort: Option<MapRecordSort>,
         #[graphql(desc = "Filter options for records")] filter: Option<RecordsFilter>,
-    ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
+    ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         self.get_records_connection(
             ctx,
             Default::default(),

@@ -417,8 +417,6 @@ impl QueryRoot {
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
         sort: Option<UnorderedRecordSort>,
         #[graphql(desc = "Filter options for records")] filter: Option<RecordsFilter>,
-    ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
-        date_sort_by: Option<SortState>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let conn = ctx.data_unchecked::<DbConn>();
