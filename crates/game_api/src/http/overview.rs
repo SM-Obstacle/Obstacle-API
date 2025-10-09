@@ -155,7 +155,7 @@ async fn get_rank<C: ConnectionTrait + StreamTrait>(
     map: &maps::Model,
     event: OptEvent<'_>,
     p: &entity::players::Model,
-) -> Result<Option<i32>, crate::RecordsErrorKind> {
+) -> Result<Option<i32>, crate::ApiErrorKind> {
     let mut query = Query::select();
 
     query

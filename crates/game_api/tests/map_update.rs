@@ -19,6 +19,23 @@ struct Request {
     author: MapAuthor,
 }
 
+#[derive(serde::Serialize)]
+struct MedalTimes {
+    bronze_time: i32,
+    silver_time: i32,
+    gold_time: i32,
+    author_time: i32,
+}
+
+#[derive(serde::Serialize)]
+struct RequestWithMedalTimes {
+    name: String,
+    map_uid: String,
+    cps_number: u32,
+    author: MapAuthor,
+    medal_times: MedalTimes,
+}
+
 #[tokio::test]
 async fn insert_map_existing_player() -> anyhow::Result<()> {
     let player = players::ActiveModel {
@@ -161,6 +178,69 @@ async fn update_map_cps_number() -> anyhow::Result<()> {
         assert_eq!(map.name, "map_name");
         assert_eq!(map.player_id, 1);
         assert_eq!(map.cps_number, Some(5));
+
+        anyhow::Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn update_map_medal_times() -> anyhow::Result<()> {
+    let player = players::ActiveModel {
+        id: Set(1),
+        login: Set("player_login".to_owned()),
+        name: Set("player_name".to_owned()),
+        role: Set(0),
+        ..Default::default()
+    };
+
+    let map = maps::ActiveModel {
+        id: Set(1),
+        game_id: Set("map_uid".to_owned()),
+        name: Set("map_name".to_owned()),
+        player_id: Set(1),
+        ..Default::default()
+    };
+
+    base::with_db(async |db| {
+        players::Entity::insert(player).exec(&db.sql_conn).await?;
+        maps::Entity::insert(map).exec(&db.sql_conn).await?;
+
+        let app = base::get_app(db.clone()).await;
+
+        let req = test::TestRequest::post()
+            .uri("/map/insert")
+            .set_json(RequestWithMedalTimes {
+                map_uid: "map_uid".to_owned(),
+                name: Default::default(),
+                cps_number: 5,
+                author: Default::default(),
+                medal_times: MedalTimes {
+                    bronze_time: 5000,
+                    silver_time: 4000,
+                    gold_time: 3000,
+                    author_time: 2000,
+                },
+            })
+            .to_request();
+
+        let res = test::call_service(&app, req).await;
+        assert_eq!(res.status(), 200);
+
+        let map = maps::Entity::find_by_id(1u32)
+            .one(&db.sql_conn)
+            .await?
+            .unwrap_or_else(|| panic!("Map should exist in database"));
+
+        assert_eq!(map.game_id, "map_uid");
+        assert_eq!(map.name, "map_name");
+        assert_eq!(map.player_id, 1);
+        assert_eq!(map.cps_number, Some(5));
+
+        assert_eq!(map.bronze_time, Some(5000));
+        assert_eq!(map.silver_time, Some(4000));
+        assert_eq!(map.gold_time, Some(3000));
+        assert_eq!(map.author_time, Some(2000));
 
         anyhow::Ok(())
     })

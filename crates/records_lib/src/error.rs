@@ -91,6 +91,12 @@ pub enum RecordsError {
     UnknownRole(u8, String),
 }
 
+impl AsRef<RecordsError> for RecordsError {
+    fn as_ref(&self) -> &RecordsError {
+        self
+    }
+}
+
 /// Shortcut for creating an internal error, by formatting a message.
 ///
 /// See [`RecordsError::Internal`].
@@ -115,16 +121,6 @@ where
             TransactionError::Connection(db_err) => From::from(db_err),
             TransactionError::Transaction(e) => From::from(e),
         }
-    }
-}
-
-impl RecordsError {
-    /// Returns the associated code of the error.
-    ///
-    /// See the [documentation](RecordsError) for more information.
-    pub fn get_code(&self) -> i32 {
-        // SAFETY: Self is repr(i32).
-        unsafe { *(self as *const Self as *const _) }
     }
 }
 

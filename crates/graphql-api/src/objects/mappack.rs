@@ -4,7 +4,7 @@ use deadpool_redis::redis::AsyncCommands as _;
 use records_lib::{
     Database, RedisConnection, RedisPool,
     error::{RecordsError, RecordsResult},
-    map,
+    internal, map,
     mappack::{AnyMappackId, update_mappack},
     must, player,
     redis_key::{
@@ -14,7 +14,7 @@ use records_lib::{
 };
 use sea_orm::{ConnectionTrait, DbConn};
 
-use crate::objects::mappack_player::MappackPlayer;
+use crate::{error::GqlResult, objects::mappack_player::MappackPlayer};
 
 #[derive(serde::Deserialize)]
 #[allow(non_snake_case)]
@@ -92,7 +92,7 @@ impl From<String> for Mappack {
 
 #[async_graphql::Object]
 impl Mappack {
-    async fn nb_maps(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
+    async fn nb_maps(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<usize> {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
         let nb_map = redis_conn
@@ -101,10 +101,7 @@ impl Mappack {
         Ok(nb_map)
     }
 
-    async fn mx_author(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<String>> {
+    async fn mx_author(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<String>> {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
         let author = redis_conn
@@ -116,19 +113,27 @@ impl Mappack {
     async fn mx_created_at(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<chrono::NaiveDateTime>> {
+    ) -> GqlResult<Option<chrono::NaiveDateTime>> {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
         let created_at: Option<String> = redis_conn
             .get(mappack_mx_created_key(AnyMappackId::Id(&self.mappack_id)))
             .await?;
-        Ok(created_at.map(|s| s.parse()).transpose()?)
+        let parsed_date = created_at
+            .map(|s| {
+                s.parse().map_err(|e| {
+                    internal!(
+                        "create timestamp of mappack {} is an invalid timestamp: {e}. got `{s}`",
+                        self.mappack_id
+                    )
+                })
+            })
+            .transpose()?;
+
+        Ok(parsed_date)
     }
 
-    async fn mx_name(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<String>> {
+    async fn mx_name(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<String>> {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let redis_conn = &mut redis_pool.get().await?;
         let name = redis_conn
@@ -140,7 +145,7 @@ impl Mappack {
     async fn leaderboard<'a>(
         &'a self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<MappackPlayer<'a>>> {
+    ) -> GqlResult<Vec<MappackPlayer<'a>>> {
         let db = ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
 
@@ -165,7 +170,7 @@ impl Mappack {
         &'a self,
         ctx: &async_graphql::Context<'_>,
         login: String,
-    ) -> async_graphql::Result<MappackPlayer<'a>> {
+    ) -> GqlResult<MappackPlayer<'a>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let player = must::have_player(conn, &login).await?;
@@ -176,10 +181,7 @@ impl Mappack {
         })
     }
 
-    async fn next_update_in(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<u64>> {
+    async fn next_update_in(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<u64>> {
         if self.event_has_expired {
             return Ok(None);
         }

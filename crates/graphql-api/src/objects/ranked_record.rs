@@ -7,6 +7,7 @@ use sea_orm::{
 };
 
 use crate::{
+    error::GqlResult,
     loaders::{map::MapLoader, player::PlayerLoader},
     objects::{checkpoint_time::CheckpointTime, map::Map, player::Player},
 };
@@ -32,24 +33,44 @@ impl RankedRecord {
         self.inner.rank
     }
 
-    async fn map(&self, ctx: &Context<'_>) -> async_graphql::Result<Map> {
-        ctx.data_unchecked::<DataLoader<MapLoader>>()
+    async fn map(&self, ctx: &Context<'_>) -> GqlResult<Map> {
+        let opt_map = ctx
+            .data_unchecked::<DataLoader<MapLoader>>()
             .load_one(self.inner.record.map_id)
-            .await?
-            .ok_or_else(|| async_graphql::Error::new("Map not found."))
+            .await?;
+
+        let map = opt_map.ok_or_else(|| {
+            internal!(
+                "map of record {} not found: {}",
+                self.inner.record.record_id,
+                self.inner.record.map_id
+            )
+        })?;
+
+        Ok(map)
     }
 
-    async fn player(&self, ctx: &Context<'_>) -> async_graphql::Result<Player> {
-        ctx.data_unchecked::<DataLoader<PlayerLoader>>()
+    async fn player(&self, ctx: &Context<'_>) -> GqlResult<Player> {
+        let opt_player = ctx
+            .data_unchecked::<DataLoader<PlayerLoader>>()
             .load_one(self.inner.record.record_player_id)
-            .await?
-            .ok_or_else(|| async_graphql::Error::new("Player not found."))
+            .await?;
+
+        let player = opt_player.ok_or_else(|| {
+            internal!(
+                "player of record {} not found: {}",
+                self.inner.record.record_id,
+                self.inner.record.record_player_id
+            )
+        })?;
+
+        Ok(player)
     }
 
     async fn average_cps_times(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<CheckpointTime>> {
+    ) -> GqlResult<Vec<CheckpointTime>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let times = checkpoint_times::Entity::find()
@@ -73,10 +94,7 @@ impl RankedRecord {
         Ok(times)
     }
 
-    async fn cps_times(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<CheckpointTime>> {
+    async fn cps_times(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Vec<CheckpointTime>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let times = checkpoint_times::Entity::find()
@@ -101,7 +119,7 @@ impl RankedRecord {
         self.inner.record.respawn_count
     }
 
-    async fn try_count(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i32> {
+    async fn try_count(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<i32> {
         let conn = ctx.data_unchecked::<DbConn>();
         let sum: Option<_> = records::Entity::find()
             .filter(

@@ -14,7 +14,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    RecordsErrorKind, RecordsResult, RecordsResultExt,
+    ApiErrorKind, RecordsResult, RecordsResultExt,
     auth::{MPAuthGuard, privilege},
     internal,
     utils::{ExtractDbConn, json},
@@ -326,7 +326,7 @@ pub async fn unban(
         .id;
 
     let Some(ban) = get_ban_of(&conn, player_id).await? else {
-        return Err(RecordsErrorKind::PlayerNotBanned(body.player_login));
+        return Err(ApiErrorKind::PlayerNotBanned(body.player_login));
     };
 
     let mut query = Query::update();

@@ -1,16 +1,16 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use async_graphql::dataloader::Loader;
 use entity::maps;
-use sea_orm::{ColumnTrait as _, DbConn, DbErr, EntityTrait as _, QueryFilter as _};
+use sea_orm::{ColumnTrait as _, DbConn, EntityTrait as _, QueryFilter as _};
 
-use crate::objects::map::Map;
+use crate::{error::ApiGqlError, objects::map::Map};
 
 pub struct MapLoader(pub DbConn);
 
 impl Loader<u32> for MapLoader {
     type Value = Map;
-    type Error = Arc<DbErr>;
+    type Error = ApiGqlError;
 
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
         let hashmap = maps::Entity::find()

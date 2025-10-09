@@ -16,7 +16,7 @@ pub struct AccessTokenErr {
 
 #[derive(thiserror::Error, Debug)]
 #[rustfmt::skip]
-pub enum RecordsErrorKind {
+pub enum ApiErrorKind<E = records_lib::error::RecordsError> {
     // --------
     // --- Internal server errors
     // --------
@@ -71,7 +71,7 @@ pub enum RecordsErrorKind {
     EventHasExpired(String, u32),
 
     #[error(transparent)]
-    Lib(#[from] records_lib::error::RecordsError),
+    Lib(E),
 }
 
 #[derive(serde::Serialize)]
@@ -80,7 +80,7 @@ pub struct RecordsErrorKindResponse {
     pub message: String,
 }
 
-impl actix_web::ResponseError for RecordsErrorKind {
+impl actix_web::ResponseError for ApiErrorKind {
     fn error_response(&self) -> HttpResponse<actix_web::body::BoxBody> {
         let (r#type, status_code) = self.get_err_type_and_status_code();
         let mut res = HttpResponse::build(status_code);
@@ -98,28 +98,35 @@ impl actix_web::ResponseError for RecordsErrorKind {
 #[macro_export]
 macro_rules! internal {
     ($($t:tt)*) => {{
-        $crate::RecordsErrorKind::Lib($crate::__private::internal!($($t)*))
+        $crate::ApiErrorKind::Lib($crate::__private::internal!($($t)*))
     }};
 }
 
-impl RecordsErrorKind {
+impl<E> ApiErrorKind<E>
+where
+    E: AsRef<records_lib::error::RecordsError>,
+{
     pub fn get_err_type_and_status_code(&self) -> (i32, StatusCode) {
-        use RecordsErrorKind as E;
+        use ApiErrorKind as E;
         use StatusCode as S;
         use records_lib::error::RecordsError as LE;
 
         match self {
             E::IOError(_) => (101, S::INTERNAL_SERVER_ERROR),
-            E::Lib(LE::MySql(_)) => (102, S::INTERNAL_SERVER_ERROR),
-            E::Lib(LE::Redis(_)) => (103, S::INTERNAL_SERVER_ERROR),
-            E::Lib(LE::ExternalRequest(_)) => (104, S::INTERNAL_SERVER_ERROR),
+            E::Lib(e) if matches!(e.as_ref(), LE::MySql(_)) => (102, S::INTERNAL_SERVER_ERROR),
+            E::Lib(e) if matches!(e.as_ref(), LE::Redis(_)) => (103, S::INTERNAL_SERVER_ERROR),
+            E::Lib(e) if matches!(e.as_ref(), LE::ExternalRequest(_)) => {
+                (104, S::INTERNAL_SERVER_ERROR)
+            }
             E::Unknown(_) => (105, S::INTERNAL_SERVER_ERROR),
             E::Maintenance(_) => (106, S::INTERNAL_SERVER_ERROR),
             E::UnknownStatus(_, _) => (107, S::INTERNAL_SERVER_ERROR),
-            E::Lib(LE::PoolError(_)) => (108, S::INTERNAL_SERVER_ERROR),
-            E::Lib(LE::Internal(_)) => (109, S::INTERNAL_SERVER_ERROR),
-            E::Lib(LE::DbError(_)) => (110, S::INTERNAL_SERVER_ERROR),
-            E::Lib(LE::MaskedInternal) => (111, S::INTERNAL_SERVER_ERROR),
+            E::Lib(e) if matches!(e.as_ref(), LE::PoolError(_)) => (108, S::INTERNAL_SERVER_ERROR),
+            E::Lib(e) if matches!(e.as_ref(), LE::Internal(_)) => (109, S::INTERNAL_SERVER_ERROR),
+            E::Lib(e) if matches!(e.as_ref(), LE::DbError(_)) => (110, S::INTERNAL_SERVER_ERROR),
+            E::Lib(e) if matches!(e.as_ref(), LE::MaskedInternal) => {
+                (111, S::INTERNAL_SERVER_ERROR)
+            }
 
             E::Unauthorized => (201, S::UNAUTHORIZED),
             E::Forbidden => (202, S::FORBIDDEN),
@@ -131,38 +138,52 @@ impl RecordsErrorKind {
             E::Timeout(_) => (208, S::REQUEST_TIMEOUT),
 
             E::EndpointNotFound => (301, S::NOT_FOUND),
-            E::Lib(LE::PlayerNotFound(_)) => (302, S::BAD_REQUEST),
+            E::Lib(e) if matches!(e.as_ref(), LE::PlayerNotFound(_)) => (302, S::BAD_REQUEST),
             E::PlayerNotBanned(_) => (303, S::BAD_REQUEST),
-            E::Lib(LE::MapNotFound(_)) => (304, S::BAD_REQUEST),
-            E::Lib(LE::UnknownRole(_, _)) => (305, S::INTERNAL_SERVER_ERROR),
+            E::Lib(e) if matches!(e.as_ref(), LE::MapNotFound(_)) => (304, S::BAD_REQUEST),
+            E::Lib(e) if matches!(e.as_ref(), LE::UnknownRole(_, _)) => {
+                (305, S::INTERNAL_SERVER_ERROR)
+            }
             E::UnknownRatingKind(_, _) => (307, S::INTERNAL_SERVER_ERROR),
             E::NoRatingFound(_, _) => (308, S::BAD_REQUEST),
             E::InvalidRates => (309, S::BAD_REQUEST),
-            E::Lib(LE::EventNotFound(_)) => (310, S::BAD_REQUEST),
-            E::Lib(LE::EventEditionNotFound(_, _)) => (311, S::BAD_REQUEST),
-            E::Lib(LE::MapNotInEventEdition(_, _, _)) => (312, S::BAD_REQUEST),
+            E::Lib(e) if matches!(e.as_ref(), LE::EventNotFound(_)) => (310, S::BAD_REQUEST),
+            E::Lib(e) if matches!(e.as_ref(), LE::EventEditionNotFound(_, _)) => {
+                (311, S::BAD_REQUEST)
+            }
+            E::Lib(e) if matches!(e.as_ref(), LE::MapNotInEventEdition(_, _, _)) => {
+                (312, S::BAD_REQUEST)
+            }
             E::InvalidTimes => (313, S::BAD_REQUEST),
-            E::Lib(LE::InvalidMappackId(_)) => (314, S::BAD_REQUEST),
+            E::Lib(e) if matches!(e.as_ref(), LE::InvalidMappackId(_)) => (314, S::BAD_REQUEST),
             E::EventHasExpired(_, _) => (315, S::BAD_REQUEST),
+
+            E::Lib(_) => (199, S::INTERNAL_SERVER_ERROR),
         }
     }
 }
 
-impl From<DbErr> for RecordsErrorKind {
+impl From<DbErr> for ApiErrorKind {
     fn from(value: DbErr) -> Self {
         Self::Lib(value.into())
     }
 }
 
-impl From<sqlx::Error> for RecordsErrorKind {
+impl From<sqlx::Error> for ApiErrorKind {
     fn from(value: sqlx::Error) -> Self {
         Self::Lib(value.into())
     }
 }
 
-impl<T> From<SendError<T>> for RecordsErrorKind {
+impl<T> From<SendError<T>> for ApiErrorKind {
     fn from(value: SendError<T>) -> Self {
         Self::Unknown(format!("send error: {value:?}"))
+    }
+}
+
+impl From<records_lib::error::RecordsError> for ApiErrorKind {
+    fn from(value: records_lib::error::RecordsError) -> Self {
+        Self::Lib(value)
     }
 }
 
@@ -215,7 +236,7 @@ impl actix_web::ResponseError for TracedError {
     }
 }
 
-pub type RecordsResult<T> = Result<T, RecordsErrorKind>;
+pub type RecordsResult<T> = Result<T, ApiErrorKind>;
 
 /// Converts a `Result<T, E>` in which `E` is convertible to [`records_lib::error::RecordsError`]
 /// into a [`RecordsResult<T>`].

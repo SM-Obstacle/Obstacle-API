@@ -167,7 +167,12 @@ async fn event_finish_transitive_save() -> anyhow::Result<()> {
     };
 
     let original_map_id = rand::random_range(1..=100);
-    let map_id = rand::random_range(1..=100);
+    let map_id = loop {
+        let val = rand::random_range(1..=100);
+        if val != original_map_id {
+            break val;
+        }
+    };
 
     let maps = [original_map_id, map_id].map(|map_id| maps::ActiveModel {
         id: Set(map_id),
@@ -309,7 +314,12 @@ async fn event_finish_save_to_original() -> anyhow::Result<()> {
     };
 
     let original_map_id = rand::random_range(1..=100);
-    let map_id = rand::random_range(1..=100);
+    let map_id = loop {
+        let val = rand::random_range(1..=100);
+        if val != original_map_id {
+            break val;
+        }
+    };
 
     let maps = [original_map_id, map_id].map(|map_id| maps::ActiveModel {
         id: Set(map_id),
@@ -450,7 +460,12 @@ async fn event_finish_non_transitive_save() -> anyhow::Result<()> {
     };
 
     let original_map_id = rand::random_range(1..=100);
-    let map_id = rand::random_range(1..=100);
+    let map_id = loop {
+        let val = rand::random_range(1..=100);
+        if val != original_map_id {
+            break val;
+        }
+    };
 
     let maps = [original_map_id, map_id].map(|map_id| maps::ActiveModel {
         id: Set(map_id),
@@ -562,7 +577,12 @@ async fn event_finish_save_non_event_record() -> anyhow::Result<()> {
     };
 
     let original_map_id = rand::random_range(1..=100);
-    let map_id = rand::random_range(1..=100);
+    let map_id = loop {
+        let val = rand::random_range(1..=100);
+        if val != original_map_id {
+            break val;
+        }
+    };
 
     let maps = [original_map_id, map_id].map(|map_id| maps::ActiveModel {
         id: Set(map_id),

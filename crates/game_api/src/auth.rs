@@ -59,7 +59,7 @@ use records_lib::{Database, RedisPool};
 
 use crate::AccessTokenErr;
 use crate::utils::{ApiStatus, get_api_status};
-use crate::{RecordsErrorKind, RecordsResult};
+use crate::{ApiErrorKind, RecordsResult};
 use crate::{RecordsResultExt as _, internal};
 use actix_web::dev::Payload;
 use actix_web::{FromRequest, HttpRequest};
@@ -182,7 +182,7 @@ impl AuthState {
             let mut state_map = self.states_map.lock().await;
             let state_info = state.clone();
             if let Some(TokenState { instant, .. }) = state_map.get(&state) {
-                return Err(RecordsErrorKind::StateAlreadyReceived(*instant));
+                return Err(ApiErrorKind::StateAlreadyReceived(*instant));
             }
             state_map.insert(state.clone(), TokenState::new(tx2, rx1));
             tracing::event!(
@@ -213,25 +213,25 @@ impl AuthState {
 
         let web_token = if let Some(TokenState { tx, rx, .. }) = state_map.remove(&state) {
             if tx.send(Message::MPCode(code)).is_err() {
-                return Err(RecordsErrorKind::MissingGetTokenReq);
+                return Err(ApiErrorKind::MissingGetTokenReq);
             }
 
             match timeout(TIMEOUT, rx).await {
                 Ok(Ok(res)) => match res {
                     Message::Ok(web_token) => web_token,
-                    Message::InvalidMPCode => return Err(RecordsErrorKind::InvalidMPCode),
+                    Message::InvalidMPCode => return Err(ApiErrorKind::InvalidMPCode),
                     Message::AccessTokenErr(err) => {
-                        return Err(RecordsErrorKind::AccessTokenErr(err));
+                        return Err(ApiErrorKind::AccessTokenErr(err));
                     }
                     _ => unreachable!(),
                 },
                 _ => {
                     tracing::event!(Level::WARN, "Token state `{}` timed out", state);
-                    return Err(RecordsErrorKind::Timeout(TIMEOUT));
+                    return Err(ApiErrorKind::Timeout(TIMEOUT));
                 }
             }
         } else {
-            return Err(RecordsErrorKind::MissingGetTokenReq);
+            return Err(ApiErrorKind::MissingGetTokenReq);
         };
 
         tracing::event!(
@@ -268,7 +268,7 @@ pub struct MPAuthGuard<const ROLE: privilege::Flags = { privilege::PLAYER }> {
 }
 
 impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
-    type Error = RecordsErrorKind;
+    type Error = ApiErrorKind;
 
     type Future = future::Either<
         Pin<Box<dyn Future<Output = RecordsResult<Self>>>>,
@@ -283,7 +283,7 @@ impl<const MIN_ROLE: privilege::Flags> FromRequest for MPAuthGuard<MIN_ROLE> {
             token: Option<String>,
         ) -> RecordsResult<MPAuthGuard<ROLE>> {
             let Some(login) = login else {
-                return Err(RecordsErrorKind::Unauthorized);
+                return Err(ApiErrorKind::Unauthorized);
             };
 
             let mut redis_conn = redis_pool.get().await.with_api_err()?;
@@ -324,7 +324,7 @@ pub struct AuthHeader {
 }
 
 impl FromRequest for AuthHeader {
-    type Error = RecordsErrorKind;
+    type Error = ApiErrorKind;
 
     type Future = Ready<RecordsResult<Self>>;
 
@@ -335,13 +335,13 @@ impl FromRequest for AuthHeader {
         } = ext_auth_headers(req);
 
         let Some(login) = player_login else {
-            return ready(Err(RecordsErrorKind::Unauthorized));
+            return ready(Err(ApiErrorKind::Unauthorized));
         };
 
         #[cfg(auth)]
         {
             let Some(token) = authorization else {
-                return ready(Err(RecordsErrorKind::Unauthorized));
+                return ready(Err(ApiErrorKind::Unauthorized));
             };
 
             ready(Ok(Self { login, token }))
@@ -363,7 +363,7 @@ impl FromRequest for AuthHeader {
 pub struct ApiAvailable;
 
 impl FromRequest for ApiAvailable {
-    type Error = RecordsErrorKind;
+    type Error = ApiErrorKind;
 
     type Future = future::Either<
         Pin<Box<dyn Future<Output = RecordsResult<Self>>>>,
@@ -376,7 +376,7 @@ impl FromRequest for ApiAvailable {
                 ApiStatus {
                     at,
                     kind: types::ApiStatusKind::Maintenance,
-                } => Err(RecordsErrorKind::Maintenance(at)),
+                } => Err(ApiErrorKind::Maintenance(at)),
                 _ => Ok(ApiAvailable),
             }
         }

@@ -5,7 +5,7 @@ use entity::{event, event_category, event_edition, event_edition_categories};
 use futures::TryStreamExt as _;
 use records_lib::{
     Expirable as _, RedisPool,
-    error::RecordsResult,
+    error::{RecordsError, RecordsResult},
     event::{self as event_utils, EventMap},
     internal,
     mappack::AnyMappackId,
@@ -13,12 +13,16 @@ use records_lib::{
     redis_key::mappack_time_key,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, QueryFilter as _, sea_query::Query,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, QueryFilter as _,
+    QuerySelect as _, sea_query::Query,
 };
 
-use crate::objects::{
-    event::Event, event_category::EventCategory, event_edition_map::EventEditionMap,
-    event_edition_player::EventEditionPlayer, mappack::Mappack, player::Player,
+use crate::{
+    error::{ApiGqlError, GqlResult},
+    objects::{
+        event::Event, event_category::EventCategory, event_edition_map::EventEditionMap,
+        event_edition_player::EventEditionPlayer, mappack::Mappack, player::Player,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -50,10 +54,7 @@ impl EventEdition<'_> {
         self.inner.id
     }
 
-    async fn mappack(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<Mappack>> {
+    async fn mappack(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<Mappack>> {
         let redis_pool = ctx.data_unchecked::<RedisPool>();
         let mut redis_conn = redis_pool.get().await?;
 
@@ -66,7 +67,7 @@ impl EventEdition<'_> {
         }))
     }
 
-    async fn admins(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<Player>> {
+    async fn admins(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Vec<Player>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let a = event_utils::get_admins_of(conn, self.inner.event_id, self.inner.id)
             .await?
@@ -104,7 +105,7 @@ impl EventEdition<'_> {
         &self,
         ctx: &async_graphql::Context<'_>,
         login: String,
-    ) -> async_graphql::Result<EventEditionPlayer<'_>> {
+    ) -> GqlResult<EventEditionPlayer<'_>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let player = must::have_player(conn, &login).await?;
         Ok(EventEditionPlayer {
@@ -117,13 +118,39 @@ impl EventEdition<'_> {
         &self,
         ctx: &async_graphql::Context<'_>,
         game_id: String,
-    ) -> async_graphql::Result<EventEditionMap<'_>> {
+    ) -> GqlResult<EventEditionMap<'_>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
-        let EventMap { map, .. } =
-            event_utils::get_map_in_edition(conn, &game_id, self.inner.event_id, self.inner.id)
-                .await?
-                .ok_or_else(|| async_graphql::Error::new("Map not found in this edition"))?;
+        let EventMap { map, .. } = match event_utils::get_map_in_edition(
+            conn,
+            &game_id,
+            self.inner.event_id,
+            self.inner.id,
+        )
+        .await?
+        {
+            Some(map) => map,
+            None => {
+                let handle = event::Entity::find_by_id(self.inner.event_id)
+                    .select_only()
+                    .column(event::Column::Handle)
+                    .into_tuple()
+                    .one(conn)
+                    .await?
+                    .ok_or_else(|| {
+                        internal!(
+                            "Event with ID {} not found in database",
+                            self.inner.event_id
+                        )
+                    })?;
+
+                return Err(ApiGqlError::from(RecordsError::MapNotInEventEdition(
+                    game_id,
+                    handle,
+                    self.inner.id,
+                )));
+            }
+        };
 
         Ok(EventEditionMap {
             edition: self,
@@ -131,10 +158,7 @@ impl EventEdition<'_> {
         })
     }
 
-    async fn categories(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventCategory>> {
+    async fn categories(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Vec<EventCategory>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let q = event_category::Entity::find()
             .filter(

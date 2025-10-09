@@ -19,6 +19,7 @@ use sea_orm::{
 };
 
 use crate::{
+    error::{ApiGqlError, GqlResult},
     loaders::{map::MapLoader, player::PlayerLoader},
     objects::{
         event_edition::EventEdition, player::Player, player_rating::PlayerRating,
@@ -55,7 +56,7 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
     event: OptEvent<'_>,
     rank_sort_by: Option<SortState>,
     date_sort_by: Option<SortState>,
-) -> async_graphql::Result<Vec<RankedRecord>> {
+) -> GqlResult<Vec<RankedRecord>> {
     let key = map_key(map_id, event);
 
     update_leaderboard(conn, redis_conn, map_id, event).await?;
@@ -156,38 +157,46 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
 ) -> async_graphql::Result<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
         if !(1..=100).contains(&first) {
-            return Err(async_graphql::Error::new(
-                "'first' must be between 1 and 100",
+            return Err(ApiGqlError::from_cursor_range_error(
+                "first",
+                1..=100,
+                first,
             ));
         }
         first
     } else if let Some(last) = last {
         if !(1..=100).contains(&last) {
-            return Err(async_graphql::Error::new(
-                "'last' must be between 1 and 100",
-            ));
+            return Err(ApiGqlError::from_cursor_range_error("last", 1..=100, last));
         }
         last
     } else {
         50 // Default limit
     };
 
-    // Decode cursors if provided
-    let after_timestamp = if let Some(cursor) = after.as_ref() {
-        Some(decode_cursor(cursor).map_err(async_graphql::Error::new)?)
-    } else {
-        None
-    };
-
-    let before_timestamp = if let Some(cursor) = before.as_ref() {
-        Some(decode_cursor(cursor).map_err(async_graphql::Error::new)?)
-    } else {
-        None
-    };
-
     // Determine if we're going forward or backward
     let is_backward = last.is_some() || before.is_some();
     let has_previous_page = after.is_some();
+
+    // Decode cursors if provided
+    let after_timestamp = match after {
+        Some(cursor) => {
+            let decoded = decode_cursor(&cursor).map_err(|decode_err| {
+                ApiGqlError::from_cursor_decode_error("after", cursor.0, decode_err)
+            })?;
+            Some(decoded)
+        }
+        None => None,
+    };
+
+    let before_timestamp = match before {
+        Some(cursor) => {
+            let decoded = decode_cursor(&cursor).map_err(|decode_err| {
+                ApiGqlError::from_cursor_decode_error("before", cursor.0, decode_err)
+            })?;
+            Some(decoded)
+        }
+        None => None,
+    };
 
     let _key = map_key(map_id, event);
     update_leaderboard(conn, redis_conn, map_id, event).await?;
@@ -253,7 +262,7 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     // Apply cursor filters
     if let Some(timestamp) = after_timestamp {
         let dt = chrono::DateTime::from_timestamp_millis(timestamp)
-            .ok_or_else(|| async_graphql::Error::new("Invalid timestamp in cursor"))?
+            .ok_or_else(|| ApiGqlError::from_invalid_timestamp("after", timestamp))?
             .naive_utc();
 
         select.and_where(Expr::col(("r", records::Column::RecordDate)).lt(dt));
@@ -261,7 +270,7 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
 
     if let Some(timestamp) = before_timestamp {
         let dt = chrono::DateTime::from_timestamp_millis(timestamp)
-            .ok_or_else(|| async_graphql::Error::new("Invalid timestamp in cursor"))?
+            .ok_or_else(|| ApiGqlError::from_invalid_timestamp("before", timestamp))?
             .naive_utc();
 
         select.and_where(Expr::col(("r", records::Column::RecordDate)).gt(dt));
@@ -354,7 +363,7 @@ impl Map {
         event: OptEvent<'_>,
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
-    ) -> async_graphql::Result<Vec<RankedRecord>> {
+    ) -> GqlResult<Vec<RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
 
@@ -412,6 +421,7 @@ impl Map {
                 },
             )
             .await
+            .map_err(ApiGqlError::from_gql_error)
         }))
         .await
     }
@@ -435,11 +445,17 @@ impl Map {
         self.inner.cps_number
     }
 
-    async fn player(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Player> {
+    async fn player(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Player> {
         ctx.data_unchecked::<DataLoader<PlayerLoader>>()
             .load_one(self.inner.player_id)
             .await?
-            .ok_or_else(|| async_graphql::Error::new("Player not found."))
+            .ok_or_else(|| {
+                ApiGqlError::from(internal!(
+                    "author of map {} couldn't be found: {}",
+                    self.inner.id,
+                    self.inner.player_id
+                ))
+            })
     }
 
     async fn name(&self) -> &str {
@@ -449,7 +465,7 @@ impl Map {
     async fn related_event_editions(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<RelatedEdition<'_>>> {
+    ) -> GqlResult<Vec<RelatedEdition<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
 
@@ -495,7 +511,7 @@ impl Map {
     async fn average_rating(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<PlayerRating>> {
+    ) -> GqlResult<Vec<PlayerRating>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let all = player_rating::Entity::find()
             .filter(player_rating::Column::MapId.eq(self.inner.id))
@@ -519,7 +535,7 @@ impl Map {
         ctx: &async_graphql::Context<'_>,
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
-    ) -> async_graphql::Result<Vec<RankedRecord>> {
+    ) -> GqlResult<Vec<RankedRecord>> {
         self.get_records(ctx, Default::default(), rank_sort_by, date_sort_by)
             .await
     }
