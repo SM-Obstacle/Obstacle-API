@@ -1,5 +1,5 @@
 use actix_session::Session;
-use actix_web::web;
+use actix_web::{HttpRequest, web};
 use actix_web::{HttpResponse, Resource, Responder};
 use async_graphql::ErrorExtensionValues;
 use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
@@ -11,10 +11,12 @@ use reqwest::Client;
 use tracing_actix_web::RequestId;
 
 use crate::auth::{WEB_TOKEN_SESS_KEY, WebToken};
-use crate::{ApiErrorKind, RecordsResult, Res, internal};
+use crate::{ApiErrorKind, RecordsResult, Res, configure, internal};
 
 async fn index_graphql(
     request_id: RequestId,
+    client: Res<reqwest::Client>,
+    req: HttpRequest,
     session: Session,
     schema: Res<Schema>,
     GraphQLRequest(request): GraphQLRequest,
@@ -52,7 +54,11 @@ async fn index_graphql(
             let mapped_err_type = if (100..200).contains(&err_type) || status_code.is_server_error()
             {
                 error.message = "Internal server error".to_owned();
-                // TODO: notify internal error
+                configure::send_internal_err_msg_detached(
+                    client.0.clone(),
+                    req.head().clone(),
+                    err,
+                );
                 105 // Unknown type
             } else {
                 err_type

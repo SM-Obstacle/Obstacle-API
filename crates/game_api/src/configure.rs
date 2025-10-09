@@ -1,3 +1,5 @@
+use std::fmt;
+
 use actix_http::StatusCode;
 use actix_web::{
     Error, Responder,
@@ -87,47 +89,7 @@ pub async fn mask_internal_errors(
                 "[{request_id}] Got an internal error when processing a request: {err}"
             );
 
-            let wh_msg = WebhookBody {
-                content: "Got an internal error 🤕".to_owned(),
-                embeds: vec![
-                    WebhookBodyEmbed {
-                        title: "Request".to_owned(),
-                        description: None,
-                        color: 5814783,
-                        fields: Some(vec![WebhookBodyEmbedField {
-                            name: "Head".to_owned(),
-                            value: format!("```\n{}\n```", FormattedRequestHead::new(&head)),
-                            inline: None,
-                        }]),
-                        url: None,
-                    },
-                    WebhookBodyEmbed {
-                        title: "Error message".to_owned(),
-                        description: None,
-                        color: 5814783,
-                        fields: Some(vec![
-                            WebhookBodyEmbedField {
-                                name: "Raw (display)".to_owned(),
-                                value: format!("```\n{err}\n```"),
-                                inline: None,
-                            },
-                            WebhookBodyEmbedField {
-                                name: "Raw (debug)".to_owned(),
-                                value: format!("```\n{err:?}\n```"),
-                                inline: None,
-                            },
-                        ]),
-                        url: None,
-                    },
-                ],
-            };
-
-            let req_send = client
-                .post(&crate::env().wh_report_url)
-                .json(&wh_msg)
-                .send();
-
-            tokio::task::spawn(req_send);
+            send_internal_err_msg_detached(client.0, head, err);
 
             let new_err = TracedError {
                 error: ApiErrorKind::Lib(records_lib::error::RecordsError::MaskedInternal).into(),
@@ -147,6 +109,60 @@ pub async fn mask_internal_errors(
         }
         None => res.map(|res| res.map_into_boxed_body()),
     }
+}
+
+pub(crate) fn send_internal_err_msg_detached<E>(
+    client: reqwest::Client,
+    head: actix_http::RequestHead,
+    err: E,
+) where
+    E: fmt::Display + fmt::Debug,
+{
+    let wh_msg = WebhookBody {
+        content: "Got an internal error 🤕".to_owned(),
+        embeds: vec![
+            WebhookBodyEmbed {
+                title: "Request".to_owned(),
+                description: None,
+                color: 5814783,
+                fields: Some(vec![WebhookBodyEmbedField {
+                    name: "Head".to_owned(),
+                    value: format!("```\n{}\n```", FormattedRequestHead::new(&head)),
+                    inline: None,
+                }]),
+                url: None,
+            },
+            WebhookBodyEmbed {
+                title: "Error message".to_owned(),
+                description: None,
+                color: 5814783,
+                fields: Some(vec![
+                    WebhookBodyEmbedField {
+                        name: "Raw (display)".to_owned(),
+                        value: format!("```\n{err}\n```"),
+                        inline: None,
+                    },
+                    WebhookBodyEmbedField {
+                        name: "Raw (debug)".to_owned(),
+                        value: format!("```\n{err:?}\n```"),
+                        inline: None,
+                    },
+                ]),
+                url: None,
+            },
+        ],
+    };
+
+    tokio::task::spawn(async move {
+        if let Err(e) = client
+            .post(&crate::env().wh_report_url)
+            .json(&wh_msg)
+            .send()
+            .await
+        {
+            tracing::error!("couldn't send internal error to webhook: {e}. body:\n{wh_msg:#?}");
+        }
+    });
 }
 
 /// The actix route handler for the Not Found response.
