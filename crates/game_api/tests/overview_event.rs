@@ -41,7 +41,12 @@ async fn event_overview_original_maps_diff() -> anyhow::Result<()> {
     };
 
     let map_id = rand::random_range(1..=100);
-    let original_map_id = rand::random_range(1..=100);
+    let original_map_id = loop {
+        let val = rand::random_range(1..=100);
+        if val != map_id {
+            break val;
+        }
+    };
 
     let maps = [map_id, original_map_id].map(|map_id| maps::ActiveModel {
         id: Set(map_id),
