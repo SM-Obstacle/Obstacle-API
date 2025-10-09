@@ -2,7 +2,7 @@ use entity::{player_rating, rating_kind, types};
 use records_lib::internal;
 use sea_orm::{DbConn, EntityTrait as _, FromQueryResult};
 
-use crate::objects::rating_kind::RatingKind;
+use crate::{error::GqlResult, objects::rating_kind::RatingKind};
 
 #[derive(Debug, Clone, FromQueryResult)]
 pub struct PlayerRating {
@@ -18,7 +18,7 @@ impl From<player_rating::Model> for PlayerRating {
 
 #[async_graphql::Object]
 impl PlayerRating {
-    async fn kind(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<RatingKind> {
+    async fn kind(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<RatingKind> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let kind = rating_kind::Entity::find_by_id(self.inner.kind)

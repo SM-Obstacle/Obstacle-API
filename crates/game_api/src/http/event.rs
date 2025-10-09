@@ -28,7 +28,7 @@ use sea_orm::{
 use serde::Serialize;
 
 use crate::{
-    ModeVersion, RecordsErrorKind, RecordsResult, RecordsResultExt, Res,
+    ApiErrorKind, ModeVersion, RecordsResult, RecordsResultExt, Res,
     auth::MPAuthGuard,
     internal,
     utils::{self, ExtractDbConn, json},
@@ -785,7 +785,7 @@ async fn edition_overview(
     .with_api_err()?;
 
     if edition.has_expired() {
-        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id));
+        return Err(ApiErrorKind::EventHasExpired(event.handle, edition.id));
     }
 
     let res = overview::overview(
@@ -920,7 +920,7 @@ pub async fn edition_finished_at(
     if edition.has_expired()
         && !(edition.start_date <= at && edition.expire_date().filter(|date| at > *date).is_none())
     {
-        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id));
+        return Err(ApiErrorKind::EventHasExpired(event.handle, edition.id));
     }
 
     let res: pf::FinishedOutput = transaction::within(&db.sql_conn, async |txn| {
@@ -980,7 +980,7 @@ async fn edition_pb(
     .await?;
 
     if edition.has_expired() {
-        return Err(RecordsErrorKind::EventHasExpired(event.handle, edition.id));
+        return Err(ApiErrorKind::EventHasExpired(event.handle, edition.id));
     }
 
     let res = pb::pb(&conn, &login, &map.game_id, OptEvent::new(&event, &edition)).await?;

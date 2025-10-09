@@ -12,7 +12,10 @@ use sea_orm::{
     sea_query::{ExprTrait as _, Func, Query},
 };
 
-use crate::objects::{event_category::EventCategory, event_edition::EventEdition, player::Player};
+use crate::{
+    error::GqlResult,
+    objects::{event_category::EventCategory, event_edition::EventEdition, player::Player},
+};
 
 #[derive(Debug, Clone, FromQueryResult)]
 pub struct Event {
@@ -36,7 +39,7 @@ impl Event {
         self.inner.cooldown
     }
 
-    async fn admins(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<Player>> {
+    async fn admins(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Vec<Player>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let q = players::Entity::find()
@@ -56,10 +59,7 @@ impl Event {
         Ok(q)
     }
 
-    async fn categories(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventCategory>> {
+    async fn categories(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Vec<EventCategory>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let q = event_category::Entity::find()
@@ -79,10 +79,7 @@ impl Event {
         Ok(q)
     }
 
-    async fn editions(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventEdition<'_>>> {
+    async fn editions(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Vec<EventEdition<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let q = event_utils::event_editions_list(conn, &self.inner.handle).await?;
@@ -98,7 +95,7 @@ impl Event {
     async fn last_edition(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<EventEdition<'_>>> {
+    ) -> GqlResult<Option<EventEdition<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let edition = event_edition::Entity::find()
@@ -132,7 +129,7 @@ impl Event {
         &self,
         ctx: &async_graphql::Context<'_>,
         edition_id: u32,
-    ) -> async_graphql::Result<Option<EventEdition<'_>>> {
+    ) -> GqlResult<Option<EventEdition<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let edition = event_utils::get_edition_by_id(conn, self.inner.id, edition_id).await?;

@@ -6,10 +6,13 @@ use sea_orm::{
     RelationTrait as _, prelude::Expr, sea_query::IntoCondition as _,
 };
 
-use crate::objects::{
-    event_edition::EventEdition, event_edition_map_ext::EventEditionMapExt,
-    event_edition_player_categorized_rank::EventEditionPlayerCategorizedRank, mappack_player,
-    player::Player,
+use crate::{
+    error::GqlResult,
+    objects::{
+        event_edition::EventEdition, event_edition_map_ext::EventEditionMapExt,
+        event_edition_player_categorized_rank::EventEditionPlayerCategorizedRank, mappack_player,
+        player::Player,
+    },
 };
 
 pub struct EventEditionPlayer<'a> {
@@ -23,7 +26,7 @@ impl EventEditionPlayer<'_> {
         self.player.clone().into()
     }
 
-    async fn rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
+    async fn rank(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<usize> {
         mappack_player::player_rank(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
@@ -32,7 +35,7 @@ impl EventEditionPlayer<'_> {
         .await
     }
 
-    async fn rank_avg(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<f64> {
+    async fn rank_avg(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<f64> {
         mappack_player::player_rank_avg(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
@@ -41,7 +44,7 @@ impl EventEditionPlayer<'_> {
         .await
     }
 
-    async fn map_finished(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<usize> {
+    async fn map_finished(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<usize> {
         mappack_player::player_map_finished(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
@@ -50,7 +53,7 @@ impl EventEditionPlayer<'_> {
         .await
     }
 
-    async fn worst_rank(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<i32> {
+    async fn worst_rank(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<i32> {
         mappack_player::player_worst_rank(
             ctx,
             AnyMappackId::Event(&self.edition.event.inner, &self.edition.inner),
@@ -62,7 +65,7 @@ impl EventEditionPlayer<'_> {
     async fn categorized_ranks(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventEditionPlayerCategorizedRank<'_>>> {
+    ) -> GqlResult<Vec<EventEditionPlayerCategorizedRank<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let categories = event_utils::get_categories_by_edition_id(
             conn,
@@ -92,7 +95,7 @@ impl EventEditionPlayer<'_> {
     async fn unfinished_maps(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventEditionMapExt<'_>>> {
+    ) -> GqlResult<Vec<EventEditionMapExt<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let player_id = self.player.id;

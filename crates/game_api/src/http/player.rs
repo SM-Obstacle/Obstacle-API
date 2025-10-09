@@ -19,7 +19,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    RecordsErrorKind, RecordsResult, RecordsResultExt, Res,
+    ApiErrorKind, RecordsResult, RecordsResultExt, Res,
     auth::{ApiAvailable, AuthHeader, MPAuthGuard, privilege},
     internal,
     utils::{self, ExtractDbConn, json},
@@ -107,7 +107,7 @@ pub async fn update(
     Json(body): Json<PlayerInfoNetBody>,
 ) -> RecordsResult<impl Responder> {
     if body.login != login {
-        return Err(RecordsErrorKind::Unauthorized);
+        return Err(ApiErrorKind::Unauthorized);
     }
 
     let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
@@ -126,7 +126,7 @@ pub async fn update(
         // At this point, if Redis has registered a token with the login, it means that
         // the player is not yet added to the Obstacle database but effectively
         // has a ManiaPlanet account
-        Err(RecordsErrorKind::Lib(records_lib::error::RecordsError::PlayerNotFound(_))) => {
+        Err(ApiErrorKind::Lib(records_lib::error::RecordsError::PlayerNotFound(_))) => {
             let _ = insert_player(&db.sql_conn, &body).await?;
         }
         Err(e) => return Err(e),
@@ -186,7 +186,7 @@ pub async fn get_ban_during<C: ConnectionTrait>(
 pub async fn check_banned<C: ConnectionTrait>(
     conn: &C,
     player_id: u32,
-) -> Result<Option<banishments::Model>, RecordsErrorKind> {
+) -> Result<Option<banishments::Model>, ApiErrorKind> {
     let r = current_bans::Entity::find()
         .filter(current_bans::Column::PlayerId.eq(player_id))
         .one(conn)
@@ -385,7 +385,7 @@ pub async fn info(
         .with_api_err()?;
 
     let Some(info) = info else {
-        return Err(RecordsErrorKind::from(
+        return Err(ApiErrorKind::from(
             records_lib::error::RecordsError::PlayerNotFound(body.login),
         ));
     };

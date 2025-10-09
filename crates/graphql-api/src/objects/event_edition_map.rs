@@ -4,6 +4,7 @@ use records_lib::{event as event_utils, internal, opt_event::OptEvent};
 use sea_orm::{DbConn, EntityTrait as _, QuerySelect as _};
 
 use crate::{
+    error::GqlResult,
     loaders::map::MapLoader,
     objects::{
         event_edition::EventEdition, map::Map, medal_times::MedalTimes,
@@ -26,10 +27,7 @@ impl EventEditionMap<'_> {
             && self.edition.inner.is_transparent == 0
     }
 
-    async fn original_map(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<Map>> {
+    async fn original_map(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<Map>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
 
@@ -70,7 +68,7 @@ impl EventEditionMap<'_> {
         ctx: &async_graphql::Context<'_>,
         rank_sort_by: Option<SortState>,
         date_sort_by: Option<SortState>,
-    ) -> async_graphql::Result<Vec<RankedRecord>> {
+    ) -> GqlResult<Vec<RankedRecord>> {
         self.map
             .get_records(
                 ctx,
@@ -81,10 +79,7 @@ impl EventEditionMap<'_> {
             .await
     }
 
-    async fn medal_times(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Option<MedalTimes>> {
+    async fn medal_times(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<MedalTimes>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let medal_times = event_utils::get_medal_times_of(

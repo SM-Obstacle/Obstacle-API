@@ -7,8 +7,11 @@ use sea_orm::{
     QueryFilter as _, QuerySelect as _, prelude::Expr, sea_query::Query,
 };
 
-use crate::objects::{
-    event_edition_player::EventEditionPlayer, event_edition_player_rank::EventEditionPlayerRank,
+use crate::{
+    error::GqlResult,
+    objects::{
+        event_edition_player::EventEditionPlayer, event_edition_player_rank::EventEditionPlayerRank,
+    },
 };
 
 pub struct EventEditionPlayerCategorizedRank<'a> {
@@ -30,7 +33,7 @@ impl EventEditionPlayerCategorizedRank<'_> {
         self.category.hex_color.as_deref()
     }
 
-    async fn nb_maps(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<u64> {
+    async fn nb_maps(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<u64> {
         let conn = ctx.data_unchecked::<DbConn>();
         let edition = &self.player.edition.inner;
 
@@ -58,7 +61,7 @@ impl EventEditionPlayerCategorizedRank<'_> {
     async fn ranks(
         &self,
         ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<EventEditionPlayerRank<'_>>> {
+    ) -> GqlResult<Vec<EventEditionPlayerRank<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let mut select = Query::select();

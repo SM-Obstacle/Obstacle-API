@@ -10,7 +10,7 @@ use dsc_webhook::{FormattedRequestHead, WebhookBody, WebhookBodyEmbed, WebhookBo
 use records_lib::{Database, pool::clone_dbconn};
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId};
 
-use crate::{RecordsErrorKind, RecordsErrorKindResponse, RecordsResult, Res, TracedError};
+use crate::{ApiErrorKind, RecordsErrorKindResponse, RecordsResult, Res, TracedError};
 
 pub async fn fit_request_id(
     request_id: RequestId,
@@ -130,8 +130,7 @@ pub async fn mask_internal_errors(
             tokio::task::spawn(req_send);
 
             let new_err = TracedError {
-                error: RecordsErrorKind::Lib(records_lib::error::RecordsError::MaskedInternal)
-                    .into(),
+                error: ApiErrorKind::Lib(records_lib::error::RecordsError::MaskedInternal).into(),
                 request_id,
                 status_code: Some(StatusCode::INTERNAL_SERVER_ERROR),
                 r#type: None,
@@ -152,7 +151,7 @@ pub async fn mask_internal_errors(
 
 /// The actix route handler for the Not Found response.
 async fn not_found() -> RecordsResult<impl Responder> {
-    Err::<String, _>(RecordsErrorKind::EndpointNotFound)
+    Err::<String, _>(ApiErrorKind::EndpointNotFound)
 }
 
 pub struct RootSpanBuilder;

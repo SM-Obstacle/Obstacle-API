@@ -6,7 +6,7 @@ use tokio::time::timeout;
 use tracing::Level;
 
 use crate::{
-    AccessTokenErr, RecordsErrorKind, RecordsResult, RecordsResultExt as _, Res,
+    AccessTokenErr, ApiErrorKind, RecordsResult, RecordsResultExt as _, Res,
     auth::{self, ApiAvailable, Message, TIMEOUT, WEB_TOKEN_SESS_KEY, WebToken},
     internal,
     utils::json,
@@ -58,7 +58,7 @@ async fn test_access_token(
 
     let access_token = match res {
         MPAccessTokenResponse::AccessToken { access_token } => access_token,
-        MPAccessTokenResponse::Error(err) => return Err(RecordsErrorKind::AccessTokenErr(err)),
+        MPAccessTokenResponse::Error(err) => return Err(ApiErrorKind::AccessTokenErr(err)),
     };
 
     check_mp_token(client, login, access_token).await
@@ -104,7 +104,7 @@ pub async fn get_token(
                 body.state.clone()
             );
             state.remove_state(body.state).await;
-            return Err(RecordsErrorKind::Timeout(TIMEOUT));
+            return Err(ApiErrorKind::Timeout(TIMEOUT));
         }
     };
 
@@ -116,12 +116,12 @@ pub async fn get_token(
         Ok(false) => {
             tx.send(Message::InvalidMPCode)
                 .map_err(|_| internal!("{err_msg}"))?;
-            return Err(RecordsErrorKind::InvalidMPCode);
+            return Err(ApiErrorKind::InvalidMPCode);
         }
-        Err(RecordsErrorKind::AccessTokenErr(err)) => {
+        Err(ApiErrorKind::AccessTokenErr(err)) => {
             tx.send(Message::AccessTokenErr(err.clone()))
                 .map_err(|_| internal!("{err_msg}"))?;
-            return Err(RecordsErrorKind::AccessTokenErr(err));
+            return Err(ApiErrorKind::AccessTokenErr(err));
         }
         Err(e) => return Err(e),
     }
