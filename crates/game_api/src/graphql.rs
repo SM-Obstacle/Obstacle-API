@@ -57,6 +57,7 @@ async fn index_graphql(
                 configure::send_internal_err_msg_detached(
                     client.0.clone(),
                     req.head().clone(),
+                    request_id,
                     err,
                 );
                 105 // Unknown type

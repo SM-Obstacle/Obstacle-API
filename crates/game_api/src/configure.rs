@@ -89,7 +89,7 @@ pub async fn mask_internal_errors(
                 "[{request_id}] Got an internal error when processing a request: {err}"
             );
 
-            send_internal_err_msg_detached(client.0, head, err);
+            send_internal_err_msg_detached(client.0, head, request_id, err);
 
             let new_err = TracedError {
                 error: ApiErrorKind::Lib(records_lib::error::RecordsError::MaskedInternal).into(),
@@ -114,6 +114,7 @@ pub async fn mask_internal_errors(
 pub(crate) fn send_internal_err_msg_detached<E>(
     client: reqwest::Client,
     head: actix_http::RequestHead,
+    request_id: RequestId,
     err: E,
 ) where
     E: fmt::Display + fmt::Debug,
@@ -125,11 +126,18 @@ pub(crate) fn send_internal_err_msg_detached<E>(
                 title: "Request".to_owned(),
                 description: None,
                 color: 5814783,
-                fields: Some(vec![WebhookBodyEmbedField {
-                    name: "Head".to_owned(),
-                    value: format!("```\n{}\n```", FormattedRequestHead::new(&head)),
-                    inline: None,
-                }]),
+                fields: Some(vec![
+                    WebhookBodyEmbedField {
+                        name: "Head".to_owned(),
+                        value: format!("```\n{}\n```", FormattedRequestHead::new(&head)),
+                        inline: None,
+                    },
+                    WebhookBodyEmbedField {
+                        name: "Request ID".to_owned(),
+                        value: format!("```\n{}\n```", request_id),
+                        inline: None,
+                    },
+                ]),
                 url: None,
             },
             WebhookBodyEmbed {
