@@ -9,7 +9,14 @@ use actix_web::{
     web,
 };
 use dsc_webhook::{FormattedRequestHead, WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
-use records_lib::{Database, pool::clone_dbconn};
+use itertools::{EitherOrBoth, Itertools as _};
+use records_lib::{
+    Database,
+    error::RecordsError,
+    pool::clone_dbconn,
+    ranks::{DbLeaderboardItem, RankComputeError},
+};
+use reqwest::multipart::{Form, Part};
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId};
 
 use crate::{ApiErrorKind, RecordsErrorKindResponse, RecordsResult, Res, TracedError};
@@ -169,6 +176,166 @@ pub(crate) fn send_internal_err_msg_detached<E>(
             .await
         {
             tracing::error!("couldn't send internal error to webhook: {e}. body:\n{wh_msg:#?}");
+        }
+    });
+}
+
+pub async fn mask_rank_compute_error(
+    request_id: RequestId,
+    client: Res<reqwest::Client>,
+    req: ServiceRequest,
+    next: Next<impl MessageBody>,
+) -> Result<ServiceResponse<impl MessageBody>, Error> {
+    let res = next.call(req).await?;
+
+    if let Some(err) = res.response().error()
+        && let Some(err) = err.as_error::<ApiErrorKind>()
+        && let ApiErrorKind::Lib(RecordsError::RankCompute(err)) = err
+    {
+        send_compute_err_msg_detached(client.0, request_id, err.clone());
+    }
+
+    Ok(res)
+}
+
+struct CsvLeaderboard {
+    buf: String,
+}
+
+impl CsvLeaderboard {
+    fn new(lb_len: usize) -> Self {
+        const HEADER: &str = "player_id,time\n";
+        // Consider each player ID having 5 digits on average, and each time having 6.
+        // Add 2 for the comma and new line char
+        let mut buf = String::with_capacity(const { HEADER.len() } + lb_len * (5 + 6 + 2));
+        buf.push_str(HEADER);
+        Self { buf }
+    }
+
+    fn add_row(&mut self, player_id: u32, time: i32) {
+        use std::fmt::Write as _;
+        writeln!(self.buf, "{player_id},{time}").expect("couldn't format row when building CSV");
+    }
+}
+
+pub(crate) fn send_compute_err_msg_detached(
+    client: reqwest::Client,
+    request_id: RequestId,
+    err: RankComputeError,
+) {
+    tokio::task::spawn(async move {
+        let lb = err
+            .raw_redis_lb()
+            .as_chunks()
+            .0
+            .iter()
+            .map(|[player_id, score]| (*player_id as u32, *score as i32))
+            .zip_longest(err.sql_lb());
+
+        let mut redis_table = CsvLeaderboard::new(lb.len());
+        let mut sql_table = CsvLeaderboard::new(lb.len());
+
+        for row in lb {
+            match row {
+                EitherOrBoth::Both(
+                    (redis_player_id, redis_time),
+                    DbLeaderboardItem {
+                        record_player_id: sql_player_id,
+                        time: sql_time,
+                    },
+                ) => {
+                    redis_table.add_row(redis_player_id, redis_time);
+                    sql_table.add_row(*sql_player_id, *sql_time);
+                }
+                EitherOrBoth::Left((redis_player_id, redis_time)) => {
+                    redis_table.add_row(redis_player_id, redis_time);
+                }
+                EitherOrBoth::Right(DbLeaderboardItem {
+                    record_player_id: sql_player_id,
+                    time: sql_time,
+                }) => {
+                    sql_table.add_row(*sql_player_id, *sql_time);
+                }
+            }
+        }
+
+        let wh_msg = WebhookBody {
+            content: "Rank compute error 💢".to_owned(),
+            embeds: vec![WebhookBodyEmbed {
+                title: "Error info".to_owned(),
+                description: None,
+                color: 5814783,
+                fields: Some(vec![
+                    WebhookBodyEmbedField {
+                        name: "Request ID".to_owned(),
+                        value: request_id.to_string(),
+                        inline: None,
+                    },
+                    WebhookBodyEmbedField {
+                        name: "Player ID".to_owned(),
+                        value: err.player_id().to_string(),
+                        inline: None,
+                    },
+                    WebhookBodyEmbedField {
+                        name: "Map ID".to_owned(),
+                        value: err.map_id().to_string(),
+                        inline: None,
+                    },
+                    WebhookBodyEmbedField {
+                        name: "Time".to_owned(),
+                        value: err.time().to_string(),
+                        inline: None,
+                    },
+                    WebhookBodyEmbedField {
+                        name: "Tested time".to_owned(),
+                        value: match err.tested_time() {
+                            Some(time) => time.to_string(),
+                            None => "None".to_owned(),
+                        },
+                        inline: None,
+                    },
+                ]),
+                url: None,
+            }],
+        };
+
+        let wh_msg = match serde_json::to_string(&wh_msg) {
+            Ok(out) => out,
+            Err(_) => format!("{wh_msg:#?}"),
+        };
+
+        let send = client
+            .post(&crate::env().wh_rank_compute_err)
+            .multipart(
+                Form::new()
+                    .part(
+                        "payload_json",
+                        Part::bytes(wh_msg.clone().into_bytes())
+                            .mime_str("application/json")
+                            .unwrap(),
+                    )
+                    .part(
+                        "files[0]",
+                        Part::bytes(redis_table.buf.clone().into_bytes())
+                            .file_name("redis_table.txt")
+                            .mime_str("text/plain")
+                            .unwrap(),
+                    )
+                    .part(
+                        "files[1]",
+                        Part::bytes(sql_table.buf.clone().into_bytes())
+                            .file_name("sql_table.txt")
+                            .mime_str("text/plain")
+                            .unwrap(),
+                    ),
+            )
+            .send()
+            .await;
+
+        if let Err(err) = send {
+            tracing::error!(
+                "couldn't send rank compute error to webhook: {err}. body:\n{wh_msg:#?}"
+            );
         }
     });
 }

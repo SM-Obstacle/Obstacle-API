@@ -65,7 +65,6 @@ use crate::{
 use deadpool_redis::redis::{self, AsyncCommands};
 use entity::{event_edition_records, global_event_records, global_records, records};
 use futures::{StreamExt, TryStreamExt};
-use itertools::{EitherOrBoth, Itertools};
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, Order, PaginatorTrait,
     QueryFilter as _, QuerySelect, StreamTrait,
@@ -80,6 +79,61 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{Mutex, Semaphore};
+
+#[derive(Debug)]
+struct RankComputeErrorInner {
+    player_id: u32,
+    map_id: u32,
+    event: Option<(u32, u32)>,
+    raw_redis_lb: Vec<i64>,
+    sql_lb: Vec<DbLeaderboardItem>,
+    time: i32,
+    tested_time: Option<i32>,
+}
+
+/// Error returned when failing to compute a rank.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("rank compute error")]
+pub struct RankComputeError {
+    inner: Arc<RankComputeErrorInner>,
+}
+
+impl RankComputeError {
+    /// The ID of the player whose rank was attempted to be computed.
+    pub fn player_id(&self) -> u32 {
+        self.inner.player_id
+    }
+
+    /// The ID of the map on which the rank of the player was attempted to be computed.
+    pub fn map_id(&self) -> u32 {
+        self.inner.map_id
+    }
+
+    /// The current event when computing the rank.
+    pub fn event(&self) -> Option<(u32, u32)> {
+        self.inner.event
+    }
+
+    /// The raw content of the Redis leaderboard, i.e. computed with ZRANGEWITHSCORES.
+    pub fn raw_redis_lb(&self) -> &[i64] {
+        &self.inner.raw_redis_lb
+    }
+
+    /// The leaderboard of the SQL database.
+    pub fn sql_lb(&self) -> &[DbLeaderboardItem] {
+        &self.inner.sql_lb
+    }
+
+    /// The time of the player which was used to calculate the score.
+    pub fn time(&self) -> i32 {
+        self.inner.time
+    }
+
+    /// The initial time of the player on the Redis leaderboard, before updating it.
+    pub fn tested_time(&self) -> Option<i32> {
+        self.inner.tested_time
+    }
+}
 
 /// Wraps the execution of the provided closure to guarantee that it is executed by one task
 /// at a time, based on the provided ID.
@@ -211,10 +265,13 @@ pub async fn update_leaderboard<C: ConnectionTrait + StreamTrait>(
     Ok(mysql_count)
 }
 
-#[derive(sea_orm::FromQueryResult)]
-struct DbLeaderboardItem {
-    record_player_id: u32,
-    time: i32,
+/// A leaderboard row, used in [`RankComputeError`].
+#[derive(Debug, sea_orm::FromQueryResult)]
+pub struct DbLeaderboardItem {
+    /// The ID of the player who made the record.
+    pub record_player_id: u32,
+    /// The record time.
+    pub time: i32,
 }
 
 fn get_mariadb_lb_query(map_id: u32, event: OptEvent<'_>) -> SelectStatement {
@@ -349,8 +406,8 @@ async fn get_rank_failed<C: ConnectionTrait>(
     player_id: u32,
     map_id: u32,
     event: OptEvent<'_>,
-    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] time: i32,
-    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] tested_time: Option<i32>,
+    time: i32,
+    tested_time: Option<i32>,
 ) -> RecordsResult<RecordsError> {
     let key = &map_key(map_id, event);
     let redis_lb: Vec<i64> = redis_conn.zrange_withscores(key, 0, -1).await?;
@@ -364,64 +421,15 @@ async fn get_rank_failed<C: ConnectionTrait>(
         .map(|result| DbLeaderboardItem::from_query_result(&result, ""))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let lb = redis_lb
-        .as_chunks()
-        .0
-        .iter()
-        .map(|[player_id, score]| (*player_id as u32, *score as i32))
-        .zip_longest(mariadb_lb);
-
-    let mut table = prettytable::Table::init(vec![prettytable::row![
-        "Redis player",
-        "Redis time",
-        "SQL player",
-        "SQL time",
-    ]]);
-
-    for row in lb {
-        match row {
-            EitherOrBoth::Both(
-                (redis_player_id, redis_time),
-                DbLeaderboardItem {
-                    record_player_id: sql_player_id,
-                    time: sql_time,
-                },
-            ) => {
-                let color = if redis_player_id != sql_player_id || redis_time != sql_time {
-                    // Conflict
-                    "Fy"
-                } else if player_id == redis_player_id && player_id == sql_player_id {
-                    // Currently selected player
-                    "Fb"
-                } else {
-                    ""
-                };
-
-                table.add_row(prettytable::Row::new(vec![
-                    prettytable::Cell::from(&redis_player_id).style_spec(color),
-                    prettytable::Cell::from(&redis_time).style_spec(color),
-                    prettytable::Cell::from(&sql_player_id).style_spec(color),
-                    prettytable::Cell::from(&sql_time).style_spec(color),
-                ]));
-            }
-            EitherOrBoth::Left((redis_player_id, redis_time)) => {
-                table.add_row(prettytable::row![Fy => redis_player_id, redis_time, "", ""]);
-            }
-            EitherOrBoth::Right(DbLeaderboardItem {
-                record_player_id: sql_player_id,
-                time: sql_time,
-            }) => {
-                table.add_row(prettytable::row![Fy => "", "", sql_player_id, sql_time]);
-            }
-        }
-    }
-
-    #[cfg(feature = "tracing")]
-    tracing::error!(
-        "missing player rank ({player_id} on map {map_id} ({key}) with time {time}); tested time: {tested_time:?}\n{table}"
-    );
-
-    Ok(RecordsError::Internal(
-        "Error when retrieving the rank of a player".to_owned(),
-    ))
+    Err(RecordsError::RankCompute(RankComputeError {
+        inner: Arc::new(RankComputeErrorInner {
+            player_id,
+            map_id,
+            event: event.get().map(|(ev, ed)| (ev.id, ed.id)),
+            raw_redis_lb: redis_lb,
+            sql_lb: mariadb_lb,
+            time,
+            tested_time,
+        }),
+    }))
 }
