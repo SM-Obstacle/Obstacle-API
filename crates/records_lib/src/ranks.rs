@@ -74,13 +74,13 @@ use sea_orm::{
 
 use std::{
     collections::HashMap,
+    fmt,
     future::Future,
     sync::{Arc, LazyLock},
     time::Duration,
 };
 use tokio::sync::{Mutex, Semaphore};
 
-#[derive(Debug)]
 struct RankComputeErrorInner {
     player_id: u32,
     map_id: u32,
@@ -89,6 +89,18 @@ struct RankComputeErrorInner {
     sql_lb: Vec<DbLeaderboardItem>,
     time: i32,
     tested_time: Option<i32>,
+}
+
+impl fmt::Debug for RankComputeErrorInner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RankComputeErrorInner")
+            .field("player_id", &self.player_id)
+            .field("map_id", &self.map_id)
+            .field("event", &self.event)
+            .field("time", &self.time)
+            .field("tested_time", &self.tested_time)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Error returned when failing to compute a rank.
