@@ -22,7 +22,7 @@ actix-cors = { workspace = true }
 actix-http = "3.11.0"
 async-graphql-actix-web = { workspace = true }
 tracing-actix-web = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["multipart"] }
 rand = { workspace = true }
 futures = { workspace = true }
 sha256 = { workspace = true }
@@ -41,10 +41,10 @@ sea-orm = { workspace = true }
 migration = { path = "../migration" }
 entity = { path = "../entity" }
 graphql-api = { path = "../graphql-api" }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 records-lib = { path = "../records_lib" }
-serde_json = { workspace = true }
 
 [features]
 default = ["request_filter"]

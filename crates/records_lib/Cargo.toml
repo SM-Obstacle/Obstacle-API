@@ -20,7 +20,6 @@ nom = { workspace = true }
 rand = { workspace = true }
 sea-orm = { workspace = true }
 entity = { path = "../entity" }
-prettytable = { workspace = true }
 
 [features]
 default = []

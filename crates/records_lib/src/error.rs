@@ -3,17 +3,9 @@
 use deadpool_redis::PoolError;
 use sea_orm::TransactionError;
 
+use crate::ranks::RankComputeError;
+
 /// Represents any type of error that could happen when using this crate.
-///
-/// To be handled by the ShootMania Obstacle gamemode, each kind of error has an associated code.
-///
-/// * `100..=199` errors represent internal server errors.
-/// * `200..=299` errors represent authentication errors.
-/// * `300..=399` errors represent logical errors (for example, an invalid player login).
-///
-/// This semantic is only used by the `game_api` crate when returning errors. It also has its own
-/// error types that are not present here, with their associated code. These codes should not be
-/// in conflict.
 #[derive(thiserror::Error, Debug)]
 #[rustfmt::skip]
 pub enum RecordsError {
@@ -42,6 +34,9 @@ pub enum RecordsError {
     /// An error from the database.
     #[error(transparent)]
     DbError(#[from] sea_orm::DbErr),
+    /// An error when computing the rank of a player on a map.
+    #[error(transparent)]
+    RankCompute(#[from] RankComputeError),
 
     // --------
     // --- Logical errors
