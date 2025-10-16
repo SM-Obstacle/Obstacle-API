@@ -63,13 +63,12 @@ use crate::{
     redis_key::{MapKey, map_key},
 };
 use deadpool_redis::redis::{self, AsyncCommands};
-use entity::{event_edition_records, global_event_records, global_records, records};
-use futures::{StreamExt, TryStreamExt};
+use entity::{event_edition_records, records};
+use futures::TryStreamExt;
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, Order, PaginatorTrait,
-    QueryFilter as _, QuerySelect, StreamTrait,
-    prelude::Expr,
-    sea_query::{Query, SelectStatement},
+    ColumnTrait as _, ConnectionTrait, EntityTrait, Order, PaginatorTrait, QueryFilter as _,
+    QueryOrder as _, QuerySelect, QueryTrait as _, SelectModel, Selector, StreamTrait,
+    sea_query::expr,
 };
 
 use std::{
@@ -286,32 +285,26 @@ pub struct DbLeaderboardItem {
     pub time: i32,
 }
 
-fn get_mariadb_lb_query(map_id: u32, event: OptEvent<'_>) -> SelectStatement {
-    let mut query = Query::select();
-    query
-        .order_by_expr(Expr::col(("r", records::Column::Time)).into(), Order::Asc)
-        .order_by_expr(
-            Expr::col(("r", records::Column::RecordPlayerId)).into(),
-            Order::Asc,
-        )
-        .expr(Expr::col(("r", records::Column::RecordPlayerId)))
-        .expr(Expr::col(("r", records::Column::Time)))
-        .and_where(Expr::col(("r", records::Column::MapId)).eq(map_id));
-
-    match event.get() {
-        Some((ev, ed)) => {
-            query.from_as(global_event_records::Entity, "r").and_where(
-                Expr::col(("r", global_event_records::Column::EventId))
+fn get_mariadb_lb_query(
+    map_id: u32,
+    event: OptEvent<'_>,
+) -> Selector<SelectModel<DbLeaderboardItem>> {
+    records::Entity::find()
+        .filter(records::Column::MapId.eq(map_id))
+        .group_by(records::Column::RecordPlayerId)
+        .order_by(records::Column::Time, Order::Asc)
+        .order_by(records::Column::RecordPlayerId, Order::Asc)
+        .apply_if(event.get(), |builder, (ev, ed)| {
+            builder.reverse_join(event_edition_records::Entity).filter(
+                event_edition_records::Column::EventId
                     .eq(ev.id)
-                    .and(Expr::col(("r", global_event_records::Column::EditionId)).eq(ed.id)),
-            );
-        }
-        None => {
-            query.from_as(global_records::Entity, "r");
-        }
-    }
-
-    query
+                    .and(event_edition_records::Column::EditionId.eq(ed.id)),
+            )
+        })
+        .select_only()
+        .column(records::Column::RecordPlayerId)
+        .column_as(expr::Expr::col(records::Column::Time).min(), "time")
+        .into_model()
 }
 
 async fn force_update_locked<C: ConnectionTrait + StreamTrait>(
@@ -327,13 +320,9 @@ async fn force_update_locked<C: ConnectionTrait + StreamTrait>(
 
     pipe.del(&key);
 
-    let stmt = conn
-        .get_database_backend()
-        .build(&get_mariadb_lb_query(map_id, event));
-
-    conn.stream(stmt)
+    get_mariadb_lb_query(map_id, event)
+        .stream(conn)
         .await?
-        .map(|res| res.and_then(|result| DbLeaderboardItem::from_query_result(&result, "")))
         .map_ok(|item| {
             pipe.zadd(&key, item.record_player_id, item.time);
         })
@@ -423,15 +412,7 @@ async fn get_rank_failed<C: ConnectionTrait>(
 ) -> RecordsResult<RecordsError> {
     let key = &map_key(map_id, event);
     let redis_lb: Vec<i64> = redis_conn.zrange_withscores(key, 0, -1).await?;
-    let mariadb_lb = conn
-        .get_database_backend()
-        .build(&get_mariadb_lb_query(map_id, event));
-    let mariadb_lb = conn
-        .query_all(mariadb_lb)
-        .await?
-        .into_iter()
-        .map(|result| DbLeaderboardItem::from_query_result(&result, ""))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mariadb_lb = get_mariadb_lb_query(map_id, event).all(conn).await?;
 
     Err(RecordsError::RankCompute(RankComputeError {
         inner: Arc::new(RankComputeErrorInner {
