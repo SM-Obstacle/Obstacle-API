@@ -191,17 +191,14 @@ pub async fn finished<C: ConnectionTrait + StreamTrait>(
 
     let old_record = get_old_record(conn, player_id, map.id, params.event).await?;
 
-    let (old, new, has_improved, old_rank) = if let Some(records::Model { time: old, .. }) =
-        old_record
-    {
-        (
+    let (old, new, has_improved, old_rank) = match old_record {
+        Some(records::Model { time: old, .. }) => (
             old,
             params.body.time,
             params.body.time < old,
             Some(ranks::get_rank(conn, redis_conn, map.id, player_id, old, params.event).await?),
-        )
-    } else {
-        (params.body.time, params.body.time, true, None)
+        ),
+        None => (params.body.time, params.body.time, true, None),
     };
 
     let event = params.event;

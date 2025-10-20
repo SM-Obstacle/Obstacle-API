@@ -166,12 +166,9 @@ impl fmt::Display for ApiGqlError {
 }
 
 impl From<ApiGqlError> for async_graphql::Error {
+    #[inline(always)]
     fn from(value: ApiGqlError) -> Self {
-        Self {
-            message: value.to_string(),
-            extensions: None,
-            source: Some(value.inner),
-        }
+        async_graphql::Error::new_with_source(value)
     }
 }
 

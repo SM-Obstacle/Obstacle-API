@@ -147,7 +147,16 @@ impl Player {
                 },
             )
             .await
-            .map_err(ApiGqlError::from_gql_error)
+            .map_err(|e| {
+                match e
+                    .source
+                    .as_ref()
+                    .and_then(|source| source.downcast_ref::<ApiGqlError>())
+                {
+                    Some(err) => err.clone(),
+                    None => ApiGqlError::from_gql_error(e),
+                }
+            })
         }))
         .await
     }
