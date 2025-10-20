@@ -2,6 +2,17 @@ use std::{fmt, ops::RangeInclusive, sync::Arc};
 
 use records_lib::error::RecordsError;
 
+pub(crate) fn map_gql_err(e: async_graphql::Error) -> ApiGqlError {
+    match e
+        .source
+        .as_ref()
+        .and_then(|source| source.downcast_ref::<ApiGqlError>())
+    {
+        Some(err) => err.clone(),
+        None => ApiGqlError::from_gql_error(e),
+    }
+}
+
 #[derive(Debug)]
 pub enum CursorDecodeErrorKind {
     NotBase64,

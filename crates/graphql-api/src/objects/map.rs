@@ -23,7 +23,7 @@ use sea_orm::{
 };
 
 use crate::{
-    error::{ApiGqlError, GqlResult},
+    error::{self, ApiGqlError, GqlResult},
     loaders::{map::MapLoader, player::PlayerLoader},
     objects::{
         event_edition::EventEdition, player::Player, player_rating::PlayerRating,
@@ -407,16 +407,7 @@ impl Map {
                 },
             )
             .await
-            .map_err(|e| {
-                match e
-                    .source
-                    .as_ref()
-                    .and_then(|source| source.downcast_ref::<ApiGqlError>())
-                {
-                    Some(err) => err.clone(),
-                    None => ApiGqlError::from_gql_error(e),
-                }
-            })
+            .map_err(error::map_gql_err)
         }))
         .await
     }

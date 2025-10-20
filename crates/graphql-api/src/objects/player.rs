@@ -13,7 +13,7 @@ use sea_orm::{
 };
 
 use crate::{
-    error::{ApiGqlError, GqlResult},
+    error::{self, ApiGqlError, GqlResult},
     objects::{
         ranked_record::RankedRecord, sort::UnorderedRecordSort, sort_order::SortOrder,
         sort_state::SortState,
@@ -147,16 +147,7 @@ impl Player {
                 },
             )
             .await
-            .map_err(|e| {
-                match e
-                    .source
-                    .as_ref()
-                    .and_then(|source| source.downcast_ref::<ApiGqlError>())
-                {
-                    Some(err) => err.clone(),
-                    None => ApiGqlError::from_gql_error(e),
-                }
-            })
+            .map_err(error::map_gql_err)
         }))
         .await
     }

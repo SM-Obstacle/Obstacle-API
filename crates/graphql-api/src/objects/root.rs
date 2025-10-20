@@ -14,7 +14,7 @@ use sea_orm::{
 };
 
 use crate::{
-    error::{ApiGqlError, GqlResult},
+    error::{self, ApiGqlError, GqlResult},
     objects::{
         event::Event,
         event_edition::EventEdition,
@@ -368,16 +368,7 @@ impl QueryRoot {
                 },
             )
             .await
-            .map_err(|e| {
-                match e
-                    .source
-                    .as_ref()
-                    .and_then(|source| source.downcast_ref::<ApiGqlError>())
-                {
-                    Some(err) => err.clone(),
-                    None => ApiGqlError::from_gql_error(e),
-                }
-            })
+            .map_err(error::map_gql_err)
         })
         .await
     }
