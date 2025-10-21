@@ -2,13 +2,13 @@ use async_graphql::{
     ID,
     connection::{self, CursorType as _},
 };
-use entity::{event as event_entity, event_edition, global_records, players, records};
+use entity::{event as event_entity, event_edition, global_records, maps, players, records};
 use records_lib::{
     Database, RedisConnection, must, opt_event::OptEvent, ranks::get_rank, transaction,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, Order, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, StreamTrait,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, JoinType, Order, QueryFilter as _,
+    QueryOrder as _, QuerySelect as _, RelationTrait, StreamTrait,
     prelude::Expr,
     sea_query::{ExprTrait as _, Func},
 };
@@ -22,6 +22,7 @@ use crate::{
         mappack::{self, Mappack},
         player::Player,
         ranked_record::RankedRecord,
+        records_filter::RecordsFilter,
         sort_state::SortState,
     },
     records_connection::{
@@ -113,6 +114,7 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
         last,
     }: ConnectionParameters,
     event: OptEvent<'_>,
+    filter: Option<RecordsFilter>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
         if !CURSOR_LIMIT_RANGE.contains(&first) {
@@ -159,6 +161,74 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
 
     // Build query with appropriate ordering
     let mut query = global_records::Entity::find();
+
+    // Apply filters if provided
+    if let Some(filter) = filter {
+        // Join with players table if needed for player filters
+        if filter.player_login.is_some() || filter.player_name.is_some() {
+            query = query.join_as(
+                JoinType::InnerJoin,
+                global_records::Relation::Players.def(),
+                "p",
+            );
+        }
+
+        // Join with maps table if needed for map filters
+        if filter.map_uid.is_some() || filter.map_name.is_some() {
+            query = query.join_as(
+                JoinType::InnerJoin,
+                global_records::Relation::Maps.def(),
+                "m",
+            );
+        }
+
+        // Apply player login filter
+        if let Some(login) = filter.player_login {
+            query =
+                query.filter(Expr::col(("p", players::Column::Login)).like(format!("%{login}%")));
+        }
+
+        // Apply player name filter
+        if let Some(name) = filter.player_name {
+            query = query.filter(
+                Func::cust("rm_mp_style")
+                    .arg(Expr::col(("p", players::Column::Name)))
+                    .like(format!("%{name}%")),
+            );
+        }
+
+        // Apply map UID filter
+        if let Some(uid) = filter.map_uid {
+            query = query.filter(Expr::col(("m", maps::Column::GameId)).like(format!("%{uid}%")));
+        }
+
+        // Apply map name filter
+        if let Some(name) = filter.map_name {
+            query = query.filter(
+                Func::cust("rm_mp_style")
+                    .arg(Expr::col(("m", maps::Column::Name)))
+                    .like(format!("%{name}%")),
+            );
+        }
+
+        // Apply date filters
+        if let Some(before_date) = filter.before_date {
+            query = query.filter(global_records::Column::RecordDate.lt(before_date));
+        }
+
+        if let Some(after_date) = filter.after_date {
+            query = query.filter(global_records::Column::RecordDate.gt(after_date));
+        }
+
+        // Apply time filters
+        if let Some(time_gt) = filter.time_gt {
+            query = query.filter(global_records::Column::Time.gt(time_gt));
+        }
+
+        if let Some(time_lt) = filter.time_lt {
+            query = query.filter(global_records::Column::Time.lt(time_lt));
+        }
+    }
 
     // Apply cursor filters
     if let Some(timestamp) = after_timestamp {
@@ -336,6 +406,7 @@ impl QueryRoot {
         before: Option<String>,
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
+        filter: Option<RecordsFilter>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let conn = ctx.data_unchecked::<DbConn>();
@@ -358,6 +429,7 @@ impl QueryRoot {
                             last,
                         },
                         Default::default(),
+                        filter,
                     )
                     .await
                 },
