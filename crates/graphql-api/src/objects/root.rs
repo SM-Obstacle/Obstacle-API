@@ -7,8 +7,8 @@ use records_lib::{
     Database, RedisConnection, must, opt_event::OptEvent, ranks::get_rank, transaction,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, QueryFilter as _, QueryOrder as _,
-    QuerySelect as _, StreamTrait,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, Order, QueryFilter as _,
+    QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
     sea_query::{ExprTrait as _, Func},
 };
@@ -22,8 +22,6 @@ use crate::{
         mappack::{self, Mappack},
         player::Player,
         ranked_record::RankedRecord,
-        sort::UnorderedRecordSort,
-        sort_order::SortOrder,
         sort_state::SortState,
     },
     records_connection::{
@@ -114,11 +112,8 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
         first,
         last,
     }: ConnectionParameters,
-    sort: Option<UnorderedRecordSort>,
     event: OptEvent<'_>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
-    let sort_order = sort.and_then(|s| s.order).unwrap_or(SortOrder::Descending);
-
     let limit = if let Some(first) = first {
         if !CURSOR_LIMIT_RANGE.contains(&first) {
             return Err(ApiGqlError::from_cursor_range_error(
@@ -142,11 +137,6 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
     };
 
     let has_previous_page = after.is_some();
-
-    let (before, after) = match sort_order {
-        SortOrder::Ascending => (after, before),
-        SortOrder::Descending => (before, after),
-    };
 
     // Decode cursors if provided
     let after_timestamp = match after {
@@ -172,15 +162,22 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
 
     // Apply cursor filters
     if let Some(timestamp) = after_timestamp {
-        query = query.filter(global_records::Column::RecordDate.gt(timestamp.0));
-    }
-
-    if let Some(timestamp) = before_timestamp {
         query = query.filter(global_records::Column::RecordDate.lt(timestamp.0));
     }
 
+    if let Some(timestamp) = before_timestamp {
+        query = query.filter(global_records::Column::RecordDate.gt(timestamp.0));
+    }
+
     // Apply ordering
-    query = query.order_by(global_records::Column::RecordDate, sort_order.into());
+    query = query.order_by(
+        global_records::Column::RecordDate,
+        if last.is_some() {
+            Order::Asc
+        } else {
+            Order::Desc
+        },
+    );
 
     // Fetch one extra to determine if there's a next page
     query = query.limit((limit + 1) as u64);
@@ -190,7 +187,7 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
     let mut connection = connection::Connection::new(has_previous_page, records.len() > limit);
     connection.edges.reserve(records.len());
 
-    for record in records {
+    for record in records.into_iter().take(limit) {
         let rank = get_rank(
             conn,
             redis_conn,
@@ -339,7 +336,6 @@ impl QueryRoot {
         before: Option<String>,
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
-        sort: Option<UnorderedRecordSort>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let conn = ctx.data_unchecked::<DbConn>();
@@ -361,7 +357,6 @@ impl QueryRoot {
                             first,
                             last,
                         },
-                        sort,
                         Default::default(),
                     )
                     .await

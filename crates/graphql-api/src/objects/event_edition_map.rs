@@ -1,4 +1,4 @@
-use async_graphql::dataloader::DataLoader;
+use async_graphql::{ID, connection, dataloader::DataLoader};
 use entity::event_edition_maps;
 use records_lib::{event as event_utils, internal, opt_event::OptEvent};
 use sea_orm::{DbConn, EntityTrait as _, QuerySelect as _};
@@ -9,6 +9,7 @@ use crate::{
     objects::{
         event_edition::EventEdition, map::Map, medal_times::MedalTimes,
         ranked_record::RankedRecord, sort_state::SortState,
+        sortable_fields::MapRecordSortableField,
     },
 };
 
@@ -75,6 +76,32 @@ impl EventEditionMap<'_> {
                 OptEvent::new(&self.edition.event.inner, &self.edition.inner),
                 rank_sort_by,
                 date_sort_by,
+            )
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn records_connection(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        #[graphql(desc = "Cursor to fetch records after (for forward pagination)")] after: Option<
+            String,
+        >,
+        #[graphql(desc = "Cursor to fetch records before (for backward pagination)")]
+        before: Option<String>,
+        #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
+        #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
+        sort_field: Option<MapRecordSortableField>,
+    ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
+        self.map
+            .get_records_connection(
+                ctx,
+                OptEvent::new(&self.edition.event.inner, &self.edition.inner),
+                after,
+                before,
+                first,
+                last,
+                sort_field,
             )
             .await
     }
