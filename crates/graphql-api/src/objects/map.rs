@@ -16,8 +16,7 @@ use records_lib::{
     transaction,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, JoinType,
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, Order,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, JoinType, Order,
     QueryFilter as _, QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
     sea_query::{Asterisk, ExprTrait as _, Func, Query},
@@ -29,9 +28,7 @@ use crate::{
     objects::{
         event_edition::EventEdition, player::Player, player_rating::PlayerRating,
         ranked_record::RankedRecord, records_filter::RecordsFilter,
-        related_edition::RelatedEdition, sort::MapRecordSort, sort_order::SortOrder,
-        sort_state::SortState, sortable_fields::MapRecordSortableField,
-        ranked_record::RankedRecord, related_edition::RelatedEdition, sort_state::SortState,
+        related_edition::RelatedEdition, sort_state::SortState,
         sortable_fields::MapRecordSortableField,
     },
     records_connection::{
@@ -175,6 +172,7 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
         last,
     }: ConnectionParameters,
     sort_field: Option<MapRecordSortableField>,
+    filter: Option<RecordsFilter>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
         if !CURSOR_LIMIT_RANGE.contains(&first) {
@@ -424,6 +422,7 @@ impl Map {
         first: Option<i32>,
         last: Option<i32>,
         sort_field: Option<MapRecordSortableField>,
+        filter: Option<RecordsFilter>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
@@ -447,6 +446,7 @@ impl Map {
                             last,
                         },
                         sort_field,
+                        filter,
                     )
                     .await
                 },
@@ -583,6 +583,7 @@ impl Map {
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
         sort_field: Option<MapRecordSortableField>,
+        filter: Option<RecordsFilter>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         self.get_records_connection(
             ctx,
@@ -592,6 +593,7 @@ impl Map {
             first,
             last,
             sort_field,
+            filter,
         )
         .await
     }

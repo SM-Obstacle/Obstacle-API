@@ -1,14 +1,11 @@
+use async_graphql::connection::CursorType as _;
 use async_graphql::{Enum, ID, connection};
 use entity::{global_records, maps, players, records, role};
-use async_graphql::{
-    Enum, ID,
-    connection::{self, CursorType as _},
-};
-use entity::{global_records, players, records, role};
 use records_lib::{
     RedisConnection, RedisPool, error::RecordsError, internal, opt_event::OptEvent,
     ranks::get_rank, transaction,
 };
+use sea_orm::Order;
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, JoinType,
     QueryFilter as _, QueryOrder as _, QuerySelect as _, RelationTrait, StreamTrait,
@@ -16,23 +13,16 @@ use sea_orm::{
     sea_query::{ExprTrait as _, Func},
 };
 
+use crate::objects::records_filter::RecordsFilter;
 use crate::{
     error::{ApiGqlError, GqlResult},
-    objects::{
-        ranked_record::RankedRecord, records_filter::RecordsFilter, sort::UnorderedRecordSort,
-        sort_order::SortOrder, sort_state::SortState,
-    },
-    records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, Order,
-    QueryFilter as _, QueryOrder as _, QuerySelect as _, StreamTrait,
+    objects::{ranked_record::RankedRecord, sort_state::SortState},
+    records_connection::ConnectionParameters,
 };
 
 use crate::{
-    error::{self, ApiGqlError, GqlResult},
-    objects::{ranked_record::RankedRecord, sort_state::SortState},
-    records_connection::{
-        CURSOR_DEFAULT_LIMIT, CURSOR_LIMIT_RANGE, ConnectionParameters, RecordDateCursor,
-    },
+    error,
+    records_connection::{CURSOR_DEFAULT_LIMIT, CURSOR_LIMIT_RANGE, RecordDateCursor},
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Enum)]
@@ -130,6 +120,7 @@ impl Player {
         before: Option<String>,
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
+        filter: Option<RecordsFilter>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
@@ -152,6 +143,7 @@ impl Player {
                             first,
                             last,
                         },
+                        filter,
                     )
                     .await
                 },
@@ -221,6 +213,7 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
         first,
         last,
     }: ConnectionParameters,
+    filter: Option<RecordsFilter>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
         if !CURSOR_LIMIT_RANGE.contains(&first) {

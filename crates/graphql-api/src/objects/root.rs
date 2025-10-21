@@ -1,18 +1,14 @@
-use async_graphql::{ID, connection};
-use entity::{event as event_entity, event_edition, global_records, maps, players, records};
 use async_graphql::{
     ID,
     connection::{self, CursorType as _},
 };
-use entity::{event as event_entity, event_edition, global_records, players, records};
+use entity::{event as event_entity, event_edition, global_records, maps, players, records};
 use records_lib::{
     Database, RedisConnection, must, opt_event::OptEvent, ranks::get_rank, transaction,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, JoinType, QueryFilter as _,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, JoinType, Order, QueryFilter as _,
     QueryOrder as _, QuerySelect as _, RelationTrait, StreamTrait,
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, Order, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
     sea_query::{ExprTrait as _, Func},
 };
@@ -27,8 +23,6 @@ use crate::{
         player::Player,
         ranked_record::RankedRecord,
         records_filter::RecordsFilter,
-        sort::UnorderedRecordSort,
-        sort_order::SortOrder,
         sort_state::SortState,
     },
     records_connection::{
@@ -120,6 +114,7 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
         last,
     }: ConnectionParameters,
     event: OptEvent<'_>,
+    filter: Option<RecordsFilter>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
         if !CURSOR_LIMIT_RANGE.contains(&first) {
@@ -411,6 +406,7 @@ impl QueryRoot {
         before: Option<String>,
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
+        filter: Option<RecordsFilter>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let conn = ctx.data_unchecked::<DbConn>();
@@ -433,6 +429,7 @@ impl QueryRoot {
                             last,
                         },
                         Default::default(),
+                        filter,
                     )
                     .await
                 },

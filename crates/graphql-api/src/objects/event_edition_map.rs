@@ -8,7 +8,7 @@ use crate::{
     loaders::map::MapLoader,
     objects::{
         event_edition::EventEdition, map::Map, medal_times::MedalTimes,
-        ranked_record::RankedRecord, sort_state::SortState,
+        ranked_record::RankedRecord, records_filter::RecordsFilter, sort_state::SortState,
         sortable_fields::MapRecordSortableField,
     },
 };
@@ -92,6 +92,7 @@ impl EventEditionMap<'_> {
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
         sort_field: Option<MapRecordSortableField>,
+        filter: Option<RecordsFilter>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         self.map
             .get_records_connection(
@@ -102,6 +103,7 @@ impl EventEditionMap<'_> {
                 first,
                 last,
                 sort_field,
+                filter,
             )
             .await
     }
