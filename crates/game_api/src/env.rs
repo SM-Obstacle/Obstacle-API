@@ -41,6 +41,7 @@ const DEFAULT_MP_CLIENT_SECRET: &str = "";
 const DEFAULT_WH_REPORT_URL: &str = "";
 const DEFAULT_WH_AC_URL: &str = "";
 const DEFAULT_WH_INVALID_REQ_URL: &str = "";
+const DEFAULT_WH_RANK_COMPUTE_ERROR: &str = "";
 const DEFAULT_GQL_ENDPOINT: &str = "/graphql";
 
 mkenv::make_env! {pub ApiEnv includes [
@@ -126,6 +127,14 @@ mkenv::make_env! {pub ApiEnv includes [
         var: "GQL_ENDPOINT",
         desc: "The route to the GraphQL endpoint (e.g. /graphql)",
         default: DEFAULT_GQL_ENDPOINT,
+    },
+
+    wh_rank_compute_err: {
+        id: WebhookRankComputeError(String),
+        kind: normal,
+        var: "WEBHOOK_RANK_COMPUTE_ERROR",
+        desc: "The URL to the Discord webhook used to send rank compute errors",
+        default: DEFAULT_WH_RANK_COMPUTE_ERROR,
     },
 }
 

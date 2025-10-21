@@ -1,4 +1,8 @@
-use async_graphql::{ID, connection, dataloader::DataLoader};
+use async_graphql::{
+    ID,
+    connection::{self, CursorType},
+    dataloader::DataLoader,
+};
 use deadpool_redis::redis::AsyncCommands as _;
 use entity::{
     event_edition, event_edition_maps, global_event_records, global_records, maps, player_rating,
@@ -13,21 +17,27 @@ use records_lib::{
 };
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, JoinType,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, Order,
     QueryFilter as _, QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
     sea_query::{Asterisk, ExprTrait as _, Func, Query},
 };
 
 use crate::{
-    error::{ApiGqlError, GqlResult},
+    error::{self, ApiGqlError, GqlResult},
     loaders::{map::MapLoader, player::PlayerLoader},
     objects::{
         event_edition::EventEdition, player::Player, player_rating::PlayerRating,
         ranked_record::RankedRecord, records_filter::RecordsFilter,
         related_edition::RelatedEdition, sort::MapRecordSort, sort_order::SortOrder,
         sort_state::SortState, sortable_fields::MapRecordSortableField,
+        ranked_record::RankedRecord, related_edition::RelatedEdition, sort_state::SortState,
+        sortable_fields::MapRecordSortableField,
     },
-    records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
+    records_connection::{
+        CURSOR_DEFAULT_LIMIT, CURSOR_LIMIT_RANGE, ConnectionParameters, RecordDateCursor,
+        RecordRankCursor,
+    },
 };
 
 #[derive(FromQueryResult)]
@@ -141,6 +151,18 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
     Ok(ranked_records)
 }
 
+enum MapRecordCursor {
+    Date(RecordDateCursor),
+    Rank(RecordRankCursor),
+}
+
+fn encode_map_cursor(cursor: &MapRecordCursor) -> String {
+    match cursor {
+        MapRecordCursor::Date(date_cursor) => date_cursor.encode_cursor(),
+        MapRecordCursor::Rank(rank_cursor) => rank_cursor.encode_cursor(),
+    }
+}
+
 async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     conn: &C,
     redis_conn: &mut RedisConnection,
@@ -152,53 +174,67 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
         first,
         last,
     }: ConnectionParameters,
-    sort: Option<MapRecordSort>,
-    filter: Option<RecordsFilter>,
+    sort_field: Option<MapRecordSortableField>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
-        if !(1..=100).contains(&first) {
+        if !CURSOR_LIMIT_RANGE.contains(&first) {
             return Err(ApiGqlError::from_cursor_range_error(
                 "first",
-                1..=100,
+                CURSOR_LIMIT_RANGE,
                 first,
             ));
         }
         first
     } else if let Some(last) = last {
-        if !(1..=100).contains(&last) {
-            return Err(ApiGqlError::from_cursor_range_error("last", 1..=100, last));
+        if !CURSOR_LIMIT_RANGE.contains(&last) {
+            return Err(ApiGqlError::from_cursor_range_error(
+                "last",
+                CURSOR_LIMIT_RANGE,
+                last,
+            ));
         }
         last
     } else {
-        50 // Default limit
+        CURSOR_DEFAULT_LIMIT
     };
 
-    // Determine if we're going forward or backward
-    let is_backward = last.is_some() || before.is_some();
-    let has_previous_page = after.is_some();
+    let has_next_page = after.is_some();
 
     // Decode cursors if provided
-    let after_timestamp = match after {
+    let after = match after {
         Some(cursor) => {
-            let decoded = decode_cursor(&cursor).map_err(|decode_err| {
-                ApiGqlError::from_cursor_decode_error("after", cursor.0, decode_err)
-            })?;
-            Some(decoded)
+            let cursor = match sort_field {
+                Some(MapRecordSortableField::Date) => {
+                    CursorType::decode_cursor(&cursor).map(MapRecordCursor::Date)
+                }
+                Some(MapRecordSortableField::Rank) | None => {
+                    CursorType::decode_cursor(&cursor).map(MapRecordCursor::Rank)
+                }
+            }
+            .map_err(|e| ApiGqlError::from_cursor_decode_error("after", cursor.0, e))?;
+
+            Some(cursor)
         }
         None => None,
     };
 
-    let before_timestamp = match before {
+    let before = match before {
         Some(cursor) => {
-            let decoded = decode_cursor(&cursor).map_err(|decode_err| {
-                ApiGqlError::from_cursor_decode_error("before", cursor.0, decode_err)
-            })?;
-            Some(decoded)
+            let cursor = match sort_field {
+                Some(MapRecordSortableField::Date) => {
+                    CursorType::decode_cursor(&cursor).map(MapRecordCursor::Date)
+                }
+                Some(MapRecordSortableField::Rank) | None => {
+                    CursorType::decode_cursor(&cursor).map(MapRecordCursor::Rank)
+                }
+            }
+            .map_err(|e| ApiGqlError::from_cursor_decode_error("before", cursor.0, e))?;
+
+            Some(cursor)
         }
         None => None,
     };
 
-    let _key = map_key(map_id, event);
     update_leaderboard(conn, redis_conn, map_id, event).await?;
 
     let mut select = Query::select();
@@ -260,83 +296,80 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     }
 
     // Apply cursor filters
-    if let Some(timestamp) = after_timestamp {
-        let dt = chrono::DateTime::from_timestamp_millis(timestamp)
-            .ok_or_else(|| ApiGqlError::from_invalid_timestamp("after", timestamp))?
-            .naive_utc();
-
-        select.and_where(Expr::col(("r", records::Column::RecordDate)).lt(dt));
-    }
-
-    if let Some(timestamp) = before_timestamp {
-        let dt = chrono::DateTime::from_timestamp_millis(timestamp)
-            .ok_or_else(|| ApiGqlError::from_invalid_timestamp("before", timestamp))?
-            .naive_utc();
-
-        select.and_where(Expr::col(("r", records::Column::RecordDate)).gt(dt));
-    }
-
-    // Apply ordering based on date_sort_by and pagination direction
-    if let Some(sort) = sort {
-        match sort.field {
-            MapRecordSortableField::Date => {
-                let order = match (sort.order, is_backward) {
-                    (Some(SortOrder::Descending), false) => sea_orm::Order::Asc,
-                    (Some(SortOrder::Descending), true) => sea_orm::Order::Desc,
-                    (_, false) => sea_orm::Order::Desc,
-                    (_, true) => sea_orm::Order::Asc,
-                };
-
-                select.order_by_expr(Expr::col(("r", records::Column::RecordDate)).into(), order);
-            }
-            MapRecordSortableField::Rank => {
-                // For rank-based sorting with pagination, we need to fetch player IDs from Redis
-                // This is complex and may not work well with cursors
-                // For now, we'll order by time which correlates with rank
-
-                let order = match (sort.order, is_backward) {
-                    (Some(SortOrder::Descending), false) => sea_orm::Order::Desc,
-                    (Some(SortOrder::Ascending), true) => sea_orm::Order::Asc,
-                    (_, false) => sea_orm::Order::Asc,
-                    (_, true) => sea_orm::Order::Desc,
-                };
-
-                select.order_by_expr(Expr::col(("r", records::Column::Time)).into(), order);
-                select.order_by_expr(
-                    Expr::col(("r", records::Column::RecordDate)).into(),
-                    sea_orm::Order::Asc,
-                );
-            }
-        }
-    } else {
-        // Default ordering by record date
-        let order = if is_backward {
-            sea_orm::Order::Asc
-        } else {
-            sea_orm::Order::Desc
+    if let Some(cursor) = after {
+        let (date, time) = match cursor {
+            MapRecordCursor::Date(date) => (date.0, None),
+            MapRecordCursor::Rank(rank) => (rank.record_date, Some(rank.time)),
         };
-        select.order_by_expr(Expr::col(("r", records::Column::RecordDate)).into(), order);
+
+        select.and_where(Expr::col(("r", records::Column::RecordDate)).gt(date));
+
+        if let Some(time) = time {
+            select.and_where(Expr::col(("r", records::Column::Time)).gte(time));
+        }
     }
 
-    // Fetch one extra to determine if there's a next/previous page
+    if let Some(cursor) = before {
+        let (date, time) = match cursor {
+            MapRecordCursor::Date(date) => (date.0, None),
+            MapRecordCursor::Rank(rank) => (rank.record_date, Some(rank.time)),
+        };
+
+        select.and_where(Expr::col(("r", records::Column::RecordDate)).lt(date));
+
+        if let Some(time) = time {
+            select.and_where(Expr::col(("r", records::Column::Time)).lt(time));
+        }
+    }
+
+    // Apply ordering
+    if let Some(MapRecordSortableField::Rank) | None = sort_field {
+        select.order_by_expr(
+            Expr::col(("r", records::Column::Time)).into(),
+            if last.is_some() {
+                Order::Desc
+            } else {
+                Order::Asc
+            },
+        );
+    }
+    select.order_by_expr(
+        Expr::col(("r", records::Column::RecordDate)).into(),
+        if last.is_some() {
+            Order::Desc
+        } else {
+            Order::Asc
+        },
+    );
+
+    // Fetch one extra to determine if there's a next page
     select.limit((limit + 1) as u64);
 
     let stmt = conn.get_database_backend().build(&*select);
-    let mut records = conn
+    let records = conn
         .query_all(stmt)
         .await?
         .into_iter()
         .map(|result| records::Model::from_query_result(&result, ""))
         .collect::<Result<Vec<_>, _>>()?;
 
-    // If backward pagination, reverse the results
-    if is_backward {
-        records.reverse();
-    }
+    let mut connection = connection::Connection::new(has_next_page, records.len() > limit);
 
-    let mut connection = connection::Connection::new(has_previous_page, records.len() > limit);
+    let encode_cursor_fn = match sort_field {
+        Some(MapRecordSortableField::Date) => |record: &records::Model| {
+            encode_map_cursor(&MapRecordCursor::Date(RecordDateCursor(
+                record.record_date.and_utc(),
+            )))
+        },
+        Some(MapRecordSortableField::Rank) | None => |record: &records::Model| {
+            encode_map_cursor(&MapRecordCursor::Rank(RecordRankCursor {
+                record_date: record.record_date.and_utc(),
+                time: record.time,
+            }))
+        },
+    };
 
-    for record in records {
+    for record in records.into_iter().take(limit) {
         let rank = get_rank(
             conn,
             redis_conn,
@@ -348,7 +381,7 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
         .await?;
 
         connection.edges.push(connection::Edge::new(
-            ID(encode_cursor(&record.record_date.and_utc())),
+            ID(encode_cursor_fn(&record)),
             records::RankedRecord { rank, record }.into(),
         ));
     }
@@ -390,8 +423,7 @@ impl Map {
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
-        sort: Option<MapRecordSort>,
-        filter: Option<RecordsFilter>,
+        sort_field: Option<MapRecordSortableField>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
@@ -414,14 +446,13 @@ impl Map {
                             first,
                             last,
                         },
-                        sort,
-                        filter,
+                        sort_field,
                     )
                     .await
                 },
             )
             .await
-            .map_err(ApiGqlError::from_gql_error)
+            .map_err(error::map_gql_err)
         }))
         .await
     }
@@ -551,8 +582,7 @@ impl Map {
         before: Option<String>,
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
-        sort: Option<MapRecordSort>,
-        #[graphql(desc = "Filter options for records")] filter: Option<RecordsFilter>,
+        sort_field: Option<MapRecordSortableField>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         self.get_records_connection(
             ctx,
@@ -561,8 +591,7 @@ impl Map {
             before,
             first,
             last,
-            sort,
-            filter,
+            sort_field,
         )
         .await
     }

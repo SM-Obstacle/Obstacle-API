@@ -7,6 +7,7 @@ use async_graphql_actix_web::GraphQLRequest;
 use graphql_api::error::{ApiGqlError, ApiGqlErrorKind};
 use graphql_api::schema::{Schema, create_schema};
 use records_lib::Database;
+use records_lib::error::RecordsError;
 use reqwest::Client;
 use tracing_actix_web::RequestId;
 
@@ -46,9 +47,9 @@ async fn index_graphql(
 
         // Don't expose internal server errors
         if let Some(err) = api_error
-            && let ApiGqlErrorKind::Lib(err) = err.kind()
+            && let ApiGqlErrorKind::Lib(records_err) = err.kind()
         {
-            let err = ApiErrorKind::Lib(err);
+            let err = ApiErrorKind::Lib(records_err);
             let (err_type, status_code) = err.get_err_type_and_status_code();
 
             let mapped_err_type = if (100..200).contains(&err_type) || status_code.is_server_error()
@@ -57,8 +58,18 @@ async fn index_graphql(
                 configure::send_internal_err_msg_detached(
                     client.0.clone(),
                     req.head().clone(),
+                    request_id,
                     err,
                 );
+
+                if let RecordsError::RankCompute(err) = records_err {
+                    configure::send_compute_err_msg_detached(
+                        client.0.clone(),
+                        request_id,
+                        err.clone(),
+                    );
+                }
+
                 105 // Unknown type
             } else {
                 err_type

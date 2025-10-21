@@ -2,12 +2,25 @@ use std::{fmt, ops::RangeInclusive, sync::Arc};
 
 use records_lib::error::RecordsError;
 
+pub(crate) fn map_gql_err(e: async_graphql::Error) -> ApiGqlError {
+    match e
+        .source
+        .as_ref()
+        .and_then(|source| source.downcast_ref::<ApiGqlError>())
+    {
+        Some(err) => err.clone(),
+        None => ApiGqlError::from_gql_error(e),
+    }
+}
+
 #[derive(Debug)]
-pub(crate) enum CursorDecodeErrorKind {
+pub enum CursorDecodeErrorKind {
     NotBase64,
     NotUtf8,
     WrongPrefix,
-    NotTimestamp,
+    NoTimestamp,
+    NoTime,
+    InvalidTimestamp(i64),
 }
 
 impl fmt::Display for CursorDecodeErrorKind {
@@ -16,7 +29,12 @@ impl fmt::Display for CursorDecodeErrorKind {
             CursorDecodeErrorKind::NotBase64 => f.write_str("not base64"),
             CursorDecodeErrorKind::NotUtf8 => f.write_str("not UTF-8"),
             CursorDecodeErrorKind::WrongPrefix => f.write_str("wrong prefix"),
-            CursorDecodeErrorKind::NotTimestamp => f.write_str("not timestamp"),
+            CursorDecodeErrorKind::NoTimestamp => f.write_str("no timestamp"),
+            CursorDecodeErrorKind::NoTime => f.write_str("no time"),
+            CursorDecodeErrorKind::InvalidTimestamp(t) => {
+                f.write_str("invalid timestamp: ")?;
+                fmt::Display::fmt(t, f)
+            }
         }
     }
 }
@@ -40,7 +58,6 @@ pub enum ApiGqlErrorKind {
     Lib(RecordsError),
     CursorRange(CursorRangeError),
     CursorDecode(CursorDecodeError),
-    InvalidTimestamp { arg_name: &'static str, value: i64 },
     GqlError(async_graphql::Error),
     RecordNotFound { record_id: u32 },
     MapNotFound { map_uid: String },
@@ -84,12 +101,6 @@ impl ApiGqlError {
     pub(crate) fn from_gql_error(error: async_graphql::Error) -> Self {
         Self {
             inner: Arc::new(ApiGqlErrorKind::GqlError(error)),
-        }
-    }
-
-    pub(crate) fn from_invalid_timestamp(arg_name: &'static str, value: i64) -> Self {
-        Self {
-            inner: Arc::new(ApiGqlErrorKind::InvalidTimestamp { arg_name, value }),
         }
     }
 
@@ -151,13 +162,6 @@ impl fmt::Display for ApiGqlError {
                     decode_error.arg_name, decode_error.kind, decode_error.value
                 )
             }
-            ApiGqlErrorKind::InvalidTimestamp { arg_name, value } => {
-                write!(
-                    f,
-                    "argument `{}` is an invalid timestamp, got {}",
-                    arg_name, value
-                )
-            }
             ApiGqlErrorKind::GqlError(error) => f.write_str(&error.message),
             ApiGqlErrorKind::RecordNotFound { record_id } => {
                 write!(f, "record `{record_id}` not found")
@@ -173,12 +177,9 @@ impl fmt::Display for ApiGqlError {
 }
 
 impl From<ApiGqlError> for async_graphql::Error {
+    #[inline(always)]
     fn from(value: ApiGqlError) -> Self {
-        Self {
-            message: value.to_string(),
-            extensions: None,
-            source: Some(value.inner),
-        }
+        async_graphql::Error::new_with_source(value)
     }
 }
 
