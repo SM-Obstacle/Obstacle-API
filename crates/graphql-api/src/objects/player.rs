@@ -1,18 +1,23 @@
-use async_graphql::{Enum, ID, connection};
+use async_graphql::{
+    Enum, ID,
+    connection::{self, CursorType as _},
+};
 use entity::{global_records, players, records, role};
 use records_lib::{
     RedisConnection, RedisPool, error::RecordsError, internal, opt_event::OptEvent,
     ranks::get_rank, transaction,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, StreamTrait,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, Order,
+    QueryFilter as _, QueryOrder as _, QuerySelect as _, StreamTrait,
 };
 
 use crate::{
-    error::{ApiGqlError, GqlResult},
+    error::{self, ApiGqlError, GqlResult},
     objects::{ranked_record::RankedRecord, sort_state::SortState},
-    records_connection::{ConnectionParameters, decode_cursor, encode_cursor},
+    records_connection::{
+        CURSOR_DEFAULT_LIMIT, CURSOR_LIMIT_RANGE, ConnectionParameters, RecordDateCursor,
+    },
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Enum)]
@@ -99,6 +104,7 @@ impl Player {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn records_connection(
         &self,
         ctx: &async_graphql::Context<'_>,
@@ -109,7 +115,6 @@ impl Player {
         before: Option<String>,
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
-        date_sort_by: Option<SortState>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
@@ -132,22 +137,12 @@ impl Player {
                             first,
                             last,
                         },
-                        date_sort_by,
                     )
                     .await
                 },
             )
             .await
-            .map_err(|e| {
-                match e
-                    .source
-                    .as_ref()
-                    .and_then(|source| source.downcast_ref::<ApiGqlError>())
-                {
-                    Some(err) => err.clone(),
-                    None => ApiGqlError::from_gql_error(e),
-                }
-            })
+            .map_err(error::map_gql_err)
         }))
         .await
     }
@@ -211,34 +206,35 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
         first,
         last,
     }: ConnectionParameters,
-    date_sort_by: Option<SortState>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
-        if !(1..=100).contains(&first) {
+        if !CURSOR_LIMIT_RANGE.contains(&first) {
             return Err(ApiGqlError::from_cursor_range_error(
                 "first",
-                1..=100,
+                CURSOR_LIMIT_RANGE,
                 first,
             ));
         }
         first
     } else if let Some(last) = last {
-        if !(1..=100).contains(&last) {
-            return Err(ApiGqlError::from_cursor_range_error("last", 1..=100, last));
+        if !CURSOR_LIMIT_RANGE.contains(&last) {
+            return Err(ApiGqlError::from_cursor_range_error(
+                "last",
+                CURSOR_LIMIT_RANGE,
+                last,
+            ));
         }
         last
     } else {
-        50 // Default limit
+        CURSOR_DEFAULT_LIMIT
     };
 
-    // Determine if we're going forward or backward
-    let is_backward = last.is_some() || before.is_some();
     let has_previous_page = after.is_some();
 
     // Decode cursors if provided
     let after_timestamp = match after {
         Some(cursor) => {
-            let decoded = decode_cursor(&cursor)
+            let decoded = RecordDateCursor::decode_cursor(&cursor)
                 .map_err(|e| ApiGqlError::from_cursor_decode_error("after", cursor.0, e))?;
             Some(decoded)
         }
@@ -247,7 +243,7 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
 
     let before_timestamp = match before {
         Some(cursor) => {
-            let decoded = decode_cursor(&cursor)
+            let decoded = RecordDateCursor::decode_cursor(&cursor)
                 .map_err(|e| ApiGqlError::from_cursor_decode_error("before", cursor.0, e))?;
             Some(decoded)
         }
@@ -260,44 +256,31 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
 
     // Apply cursor filters
     if let Some(timestamp) = after_timestamp {
-        let dt = chrono::DateTime::from_timestamp_millis(timestamp)
-            .ok_or_else(|| ApiGqlError::from_invalid_timestamp("after", timestamp))?
-            .naive_utc();
-
-        query = query.filter(global_records::Column::RecordDate.lt(dt));
+        query = query.filter(global_records::Column::RecordDate.lt(timestamp.0));
     }
 
     if let Some(timestamp) = before_timestamp {
-        let dt = chrono::DateTime::from_timestamp_millis(timestamp)
-            .ok_or_else(|| ApiGqlError::from_invalid_timestamp("before", timestamp))?
-            .naive_utc();
-
-        query = query.filter(global_records::Column::RecordDate.gt(dt));
+        query = query.filter(global_records::Column::RecordDate.gt(timestamp.0));
     }
 
-    // Apply ordering based on date_sort_by and pagination direction
-    let order = match (date_sort_by, is_backward) {
-        (Some(SortState::Reverse), false) => sea_orm::Order::Asc,
-        (Some(SortState::Reverse), true) => sea_orm::Order::Desc,
-        (_, false) => sea_orm::Order::Desc, // Default: newest first
-        (_, true) => sea_orm::Order::Asc,   // Backward pagination: reverse order
-    };
+    // Apply ordering
+    query = query.order_by(
+        global_records::Column::RecordDate,
+        if last.is_some() {
+            Order::Asc
+        } else {
+            Order::Desc
+        },
+    );
 
-    query = query.order_by(global_records::Column::RecordDate, order);
-
-    // Fetch one extra to determine if there's a next/previous page
+    // Fetch one extra to determine if there's a next page
     query = query.limit((limit + 1) as u64);
 
-    let mut records = query.all(conn).await?;
-
-    // If backward pagination, reverse the results
-    if is_backward {
-        records.reverse();
-    }
+    let records = query.all(conn).await?;
 
     let mut connection = connection::Connection::new(has_previous_page, records.len() > limit);
 
-    for record in records {
+    for record in records.into_iter().take(limit) {
         let rank = get_rank(
             conn,
             redis_conn,
@@ -309,7 +292,7 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
         .await?;
 
         connection.edges.push(connection::Edge::new(
-            ID(encode_cursor(&record.record_date.and_utc())),
+            ID(RecordDateCursor(record.record_date.and_utc()).encode_cursor()),
             records::RankedRecord {
                 rank,
                 record: record.into(),
