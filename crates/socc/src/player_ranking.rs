@@ -58,7 +58,7 @@ pub async fn update(db: Database, from: Option<DateTime<Utc>>) -> anyhow::Result
 
     do_update(&db.sql_conn, &mut redis_conn, from).await?;
 
-    tracing::info!("End");
+    tracing::info!("Player and map ranking update completed");
 
     Ok(())
 }
