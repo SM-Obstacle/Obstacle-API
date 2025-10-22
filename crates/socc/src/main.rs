@@ -64,10 +64,16 @@ async fn main() -> anyhow::Result<()> {
         campaign_scores::update,
     ));
 
-    let player_map_ranking_handle =
-        tokio::spawn(handle(db.clone(), player_ranking_scores_interval, |db| {
-            player_ranking::update(db, Some(chrono::Utc::now() - chrono::Days::new(7)))
-        }));
+    let player_map_ranking_handle = tokio::spawn(handle(
+        db.clone(),
+        player_ranking_scores_interval,
+        move |db| {
+            player_ranking::update(
+                db,
+                Some(chrono::Utc::now() - player_ranking_scores_interval),
+            )
+        },
+    ));
 
     info!("Spawned all tasks");
 
