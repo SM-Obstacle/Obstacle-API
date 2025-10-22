@@ -11,7 +11,6 @@ use anyhow::Context as _;
 use clap::{Parser as _, ValueHint};
 
 #[derive(clap::Parser)]
-
 struct Args {
     #[arg(short, long, value_hint = ValueHint::DirPath)]
     directory: Option<String>,

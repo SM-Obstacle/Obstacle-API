@@ -41,6 +41,9 @@ const V3_MAPPACK_MAP_LAST_RANK: &str = "last_rank";
 
 const V3_CACHED: &str = "cached";
 
+const V3_PLAYER_RANKING: &str = "player_ranking";
+const V3_MAP_RANKING: &str = "map_ranking";
+
 macro_rules! create_key {
     (
         $(#[$($attr:tt)*])*
@@ -427,5 +430,27 @@ create_key! {
         f,
         "{V3_KEY_PREFIX}:{V3_MAPPACK_KEY_PREFIX}:{}:{V3_MAPPACK_MAP_KEY_PREFIX}:{}:{V3_MAPPACK_MAP_LAST_RANK}",
         self.mappack.mappack_id(), self.map_uid
+    )
+}
+
+create_key! {
+    ///
+    /// This key points to the ZSET of the player ranking.
+    struct PlayerRanking = player_ranking {
+    }
+    |self, f| write!(
+        f,
+        "{V3_KEY_PREFIX}:{V3_PLAYER_RANKING}",
+    )
+}
+
+create_key! {
+    ///
+    /// This key points to the ZSET of the map ranking.
+    struct MapRanking = map_ranking {
+    }
+    |self, f| write!(
+        f,
+        "{V3_KEY_PREFIX}:{V3_MAP_RANKING}",
     )
 }

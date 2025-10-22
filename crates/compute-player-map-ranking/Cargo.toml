@@ -1,0 +1,20 @@
+[package]
+name = "compute-player-map-ranking"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { version = "4.5.48", features = ["derive"] }
+dotenvy = { workspace = true }
+mkenv = { workspace = true }
+player-map-ranking = { path = "../player-map-ranking" }
+records-lib = { path = "../records_lib" }
+sea-orm = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+chrono = { workspace = true }
+
+[features]
+default = []
+mysql = ["records-lib/mysql"]
+postgres = ["records-lib/postgres"]

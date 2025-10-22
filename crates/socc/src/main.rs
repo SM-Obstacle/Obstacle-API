@@ -13,6 +13,7 @@ use tokio::{task::JoinHandle, time};
 use tracing::info;
 
 mod campaign_scores;
+mod player_ranking;
 
 async fn handle<F, Fut>(db: Database, period: Duration, f: F) -> anyhow::Result<()>
 where
@@ -51,23 +52,42 @@ async fn main() -> anyhow::Result<()> {
     setup_tracing()?;
     let env = Env::try_get()?;
     let event_scores_interval = env.lib_env.event_scores_interval;
+    let player_ranking_scores_interval = env.lib_env.player_map_ranking_scores_interval;
     records_lib::init_env(env.lib_env);
 
     let db =
         Database::from_db_url(env.db_env.db_url.db_url, env.db_env.redis_url.redis_url).await?;
 
-    let res = tokio::spawn(handle(
+    let event_scores_handle = tokio::spawn(handle(
         db.clone(),
         event_scores_interval,
         campaign_scores::update,
     ));
 
+    let player_map_ranking_handle = tokio::spawn(handle(
+        db.clone(),
+        player_ranking_scores_interval,
+        move |db| {
+            player_ranking::update(
+                db,
+                Some(chrono::Utc::now() - player_ranking_scores_interval),
+            )
+        },
+    ));
+
     info!("Spawned all tasks");
 
     join(
-        res,
+        event_scores_handle,
         "When joining the campaign_scores::update task",
         "When updating campaign scores",
+    )
+    .await?;
+
+    join(
+        player_map_ranking_handle,
+        "When joining the player_ranking::update task",
+        "When updating player and map ranking scores",
     )
     .await?;
 
