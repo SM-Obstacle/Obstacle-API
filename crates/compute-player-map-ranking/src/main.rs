@@ -120,19 +120,11 @@ async fn main() -> anyhow::Result<()> {
 
     let mut player_ranking = scores.player_scores.into_iter().collect::<Vec<_>>();
     player_ranking.sort_by(|(_, a), (_, b)| {
-        if *a < *b {
-            Ordering::Greater
-        } else {
-            Ordering::Less
-        }
+        b.partial_cmp(a).unwrap_or(Ordering::Equal)
     });
     let mut map_ranking = scores.map_scores.into_iter().collect::<Vec<_>>();
     map_ranking.sort_by(|(_, a), (_, b)| {
-        if *a < *b {
-            Ordering::Greater
-        } else {
-            Ordering::Less
-        }
+        b.partial_cmp(a).unwrap_or(Ordering::Equal)
     });
 
     println!("Writing to files...");
