@@ -66,6 +66,7 @@ const DEFAULT_INGAME_AUTHORS_POS_X: f64 = 181.;
 const DEFAULT_INGAME_AUTHORS_POS_Y: f64 = -29.5;
 
 const DEFAULT_EVENT_SCORES_INTERVAL_SECONDS: u64 = 6 * 3600;
+const DEFAULT_PLAYER_MAP_RANKING_INTERVAL_SECONDS: u64 = 3600 * 24 * 7;
 
 mkenv::make_env! {
 /// The environment used by this crate.
@@ -187,6 +188,15 @@ pub LibEnv:
         var: "EVENT_SCORES_INTERVAL_SECONDS",
         desc: "The interval of the update of the event scores, in seconds",
         default: DEFAULT_EVENT_SCORES_INTERVAL_SECONDS,
+    },
+
+    /// The interval of the player/map ranking update
+    player_map_ranking_scores_interval: {
+        id: PlayerMapRankingScoresInterval(Duration),
+        kind: parse(from_secs),
+        var: "PLAYER_MAP_RANKING_SCORES_INTERVAL",
+        desc: "The interval of the update of the player/map ranking scores, in seconds",
+        default: DEFAULT_PLAYER_MAP_RANKING_INTERVAL_SECONDS,
     }
 }
 

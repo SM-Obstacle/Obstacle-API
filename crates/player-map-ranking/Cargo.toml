@@ -1,0 +1,14 @@
+[package]
+name = "player-map-ranking"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+entity = { path = "../entity" }
+sea-orm = { workspace = true }
+
+[features]
+default = []
+mysql = ["sea-orm/sqlx-mysql"]
+postgres = ["sea-orm/sqlx-postgres"]
