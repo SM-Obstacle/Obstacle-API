@@ -739,10 +739,10 @@ async fn get_maps_connection<C: ConnectionTrait>(
                     )
                 })
                 .apply_if(after, |query, after| {
-                    query.filter(maps::Column::Name.gt(after.0))
+                    query.filter(maps::Column::GameId.gt(after.0))
                 })
                 .apply_if(before, |query, before| {
-                    query.filter(maps::Column::Name.lt(before.0))
+                    query.filter(maps::Column::GameId.lt(before.0))
                 })
                 .order_by(
                     maps::Column::GameId,
