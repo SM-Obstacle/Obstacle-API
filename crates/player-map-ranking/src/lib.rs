@@ -136,7 +136,7 @@ pub async fn compute_scores<C: ConnectionTrait>(
         map_stats.insert(map.id, stats);
     }
 
-    let output = Scores {
+    let mut output = Scores {
         player_scores: player_scores
             .into_iter()
             .map(|(player_id, score)| {
@@ -161,6 +161,22 @@ pub async fn compute_scores<C: ConnectionTrait>(
             })
             .collect(),
     };
+
+    // Insert remaining players and maps, having 0 as score
+    for (_, player) in players {
+        output
+            .player_scores
+            .insert(HashablePlayer { inner: player }, 0.);
+    }
+    for (_, map) in maps {
+        output.map_scores.insert(
+            HashableMap {
+                inner: map,
+                stats: Default::default(),
+            },
+            0.,
+        );
+    }
 
     Ok(output)
 }

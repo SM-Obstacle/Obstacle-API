@@ -101,6 +101,38 @@ impl CursorType for RecordRankCursor {
     }
 }
 
+pub struct TextCursor(pub String);
+
+impl CursorType for TextCursor {
+    type Error = CursorDecodeErrorKind;
+
+    fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
+        decode_base64(s).map(Self)
+    }
+
+    fn encode_cursor(&self) -> String {
+        BASE64.encode(&self.0)
+    }
+}
+
+pub struct F64Cursor(pub f64);
+
+impl CursorType for F64Cursor {
+    type Error = CursorDecodeErrorKind;
+
+    fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
+        let decoded = decode_base64(s)?;
+        let parsed = decoded
+            .parse()
+            .map_err(|_| CursorDecodeErrorKind::NoScore)?;
+        Ok(Self(parsed))
+    }
+
+    fn encode_cursor(&self) -> String {
+        BASE64.encode(self.0.to_string())
+    }
+}
+
 pub struct ConnectionParameters {
     pub before: Option<ID>,
     pub after: Option<ID>,

@@ -20,6 +20,7 @@ pub enum CursorDecodeErrorKind {
     WrongPrefix,
     NoTimestamp,
     NoTime,
+    NoScore,
     InvalidTimestamp(i64),
 }
 
@@ -31,6 +32,7 @@ impl fmt::Display for CursorDecodeErrorKind {
             CursorDecodeErrorKind::WrongPrefix => f.write_str("wrong prefix"),
             CursorDecodeErrorKind::NoTimestamp => f.write_str("no timestamp"),
             CursorDecodeErrorKind::NoTime => f.write_str("no time"),
+            CursorDecodeErrorKind::NoScore => f.write_str("no score"),
             CursorDecodeErrorKind::InvalidTimestamp(t) => {
                 f.write_str("invalid timestamp: ")?;
                 fmt::Display::fmt(t, f)

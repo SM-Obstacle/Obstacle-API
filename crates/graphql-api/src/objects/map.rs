@@ -23,6 +23,10 @@ use sea_orm::{
 };
 
 use crate::{
+    cursors::{
+        CURSOR_DEFAULT_LIMIT, CURSOR_LIMIT_RANGE, ConnectionParameters, RecordDateCursor,
+        RecordRankCursor,
+    },
     error::{self, ApiGqlError, GqlResult},
     loaders::{map::MapLoader, player::PlayerLoader},
     objects::{
@@ -30,10 +34,6 @@ use crate::{
         ranked_record::RankedRecord, records_filter::RecordsFilter,
         related_edition::RelatedEdition, sort_state::SortState,
         sortable_fields::MapRecordSortableField,
-    },
-    records_connection::{
-        CURSOR_DEFAULT_LIMIT, CURSOR_LIMIT_RANGE, ConnectionParameters, RecordDateCursor,
-        RecordRankCursor,
     },
 };
 
@@ -249,9 +249,9 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     .and_where(Expr::col(("r", records::Column::MapId)).eq(map_id));
 
     // Apply filters if provided
-    if let Some(filter) = &filter {
+    if let Some(filter) = filter {
         // For player filters, we need to join with players table
-        if filter.player_login.is_some() || filter.player_name.is_some() {
+        if let Some(filter) = filter.player {
             select.join_as(
                 JoinType::InnerJoin,
                 players::Entity,

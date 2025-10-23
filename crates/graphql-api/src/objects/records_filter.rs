@@ -1,20 +1,16 @@
 use async_graphql::InputObject;
 use chrono::NaiveDateTime;
 
+use crate::objects::{map_filter::MapsFilter, player_filter::PlayersFilter};
+
 /// Filter options for querying records
 #[derive(InputObject, Clone, Default)]
 pub struct RecordsFilter {
-    /// Filter by player login
-    pub player_login: Option<String>,
+    /// Filter by player who made the record
+    pub player: Option<PlayersFilter>,
 
-    /// Filter by player name
-    pub player_name: Option<String>,
-
-    /// Filter by map UID
-    pub map_uid: Option<String>,
-
-    /// Filter by map name
-    pub map_name: Option<String>,
+    /// Filter by map on which the record is made
+    pub map: Option<MapsFilter>,
 
     /// Filter records made before this date (ISO 8601 format)
     pub before_date: Option<NaiveDateTime>,

@@ -1,8 +1,14 @@
 pub mod checkpoint_time;
 pub mod medal_times;
 pub mod ranked_record;
-pub mod records_filter;
 pub mod root;
+
+pub mod map_filter;
+pub mod player_filter;
+pub mod records_filter;
+
+pub mod map_with_score;
+pub mod player_with_score;
 
 pub mod sort;
 pub mod sort_order;
