@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
-use deadpool_redis::redis::{self, AsyncCommands as _};
+use deadpool_redis::redis;
 use player_map_ranking::compute_scores;
 use records_lib::{
     Database, RedisConnection,
@@ -39,22 +39,6 @@ pub async fn update(db: Database, from: Option<DateTime<Utc>>) -> anyhow::Result
         .get()
         .await
         .context("couldn't get redis connection")?;
-
-    let player_ranking_count: u64 = redis_conn
-        .zcount(player_ranking(), "-inf", "+inf")
-        .await
-        .context("couldn't get player ranking count")?;
-    let map_ranking_count: u64 = redis_conn
-        .zcount(map_ranking(), "-inf", "+inf")
-        .await
-        .context("couldn't get map ranking count")?;
-
-    if player_ranking_count == 0 || map_ranking_count == 0 {
-        tracing::info!("Empty player or map ranking, doing full update first...");
-        do_update(&db.sql_conn, &mut redis_conn, None)
-            .await
-            .context("couldn't fully update the player and map ranking")?;
-    }
 
     do_update(&db.sql_conn, &mut redis_conn, from).await?;
 

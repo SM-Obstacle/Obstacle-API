@@ -15,14 +15,14 @@ use sea_orm::{
 
 use crate::objects::records_filter::RecordsFilter;
 use crate::{
+    cursors::ConnectionParameters,
     error::{ApiGqlError, GqlResult},
     objects::{ranked_record::RankedRecord, sort_state::SortState},
-    records_connection::ConnectionParameters,
 };
 
 use crate::{
+    cursors::{CURSOR_DEFAULT_LIMIT, CURSOR_LIMIT_RANGE, RecordDateCursor},
     error,
-    records_connection::{CURSOR_DEFAULT_LIMIT, CURSOR_LIMIT_RANGE, RecordDateCursor},
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Enum)]
@@ -265,26 +265,27 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
     // Apply filters if provided
     if let Some(filter) = filter {
         // Join with maps table if needed for map filters
-        if filter.map_uid.is_some() || filter.map_name.is_some() {
+        if let Some(filter) = filter.map {
             query = query.join_as(
                 JoinType::InnerJoin,
                 global_records::Relation::Maps.def(),
                 "m",
             );
-        }
 
-        // Apply map UID filter
-        if let Some(uid) = filter.map_uid {
-            query = query.filter(Expr::col(("m", maps::Column::GameId)).like(format!("%{uid}%")));
-        }
+            // Apply map UID filter
+            if let Some(uid) = filter.map_uid {
+                query =
+                    query.filter(Expr::col(("m", maps::Column::GameId)).like(format!("%{uid}%")));
+            }
 
-        // Apply map name filter
-        if let Some(name) = filter.map_name {
-            query = query.filter(
-                Func::cust("rm_mp_style")
-                    .arg(Expr::col(("m", maps::Column::Name)))
-                    .like(format!("%{name}%")),
-            );
+            // Apply map name filter
+            if let Some(name) = filter.map_name {
+                query = query.filter(
+                    Func::cust("rm_mp_style")
+                        .arg(Expr::col(("m", maps::Column::Name)))
+                        .like(format!("%{name}%")),
+                );
+            }
         }
 
         // Apply date filters
