@@ -128,9 +128,9 @@ async fn main() -> anyhow::Result<()> {
     for (player, score) in player_ranking {
         writeln!(
             player_ranking_file,
-            "{},{login},{},{score},https://obstacle.titlepack.io/player/{login}",
+            "{},\"{login}\",\"{}\",{score},https://obstacle.titlepack.io/player/{login}",
             player.inner.id,
-            player.inner.name,
+            player.unstyled_name,
             login = player.inner.login,
         )
         .context("couldn't write a row to player ranking file")?;
@@ -139,9 +139,9 @@ async fn main() -> anyhow::Result<()> {
     for (map, score) in map_ranking {
         writeln!(
             map_ranking_file,
-            "{},{map_uid},{},{score},{},{},{},{},{},{},https://obstacle.titlepack.io/map/{map_uid}",
+            "{},\"{map_uid}\",\"{}\",{score},{},{},{},{},{},{},https://obstacle.titlepack.io/map/{map_uid}",
             map.inner.id,
-            map.inner.name,
+            map.unstyled_name,
             score / map.stats.records_count,
             map.stats.min_record,
             map.stats.max_record,
