@@ -292,7 +292,7 @@ fn get_mariadb_lb_query(
     records::Entity::find()
         .filter(records::Column::MapId.eq(map_id))
         .group_by(records::Column::RecordPlayerId)
-        .order_by(records::Column::Time, Order::Asc)
+        .order_by(records::Column::Time.min(), Order::Asc)
         .order_by(records::Column::RecordPlayerId, Order::Asc)
         .apply_if(event.get(), |builder, (ev, ed)| {
             builder.reverse_join(event_edition_records::Entity).filter(
