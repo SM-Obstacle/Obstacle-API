@@ -3,7 +3,8 @@
 use deadpool_redis::redis::AsyncCommands as _;
 use entity::{event_edition_records, players, records};
 use sea_orm::{
-    ConnectionTrait, FromQueryResult, Order, StreamTrait, prelude::Expr, sea_query::Query,
+    ColumnTrait as _, ConnectionTrait, EntityTrait as _, FromQueryResult, Order, QueryFilter as _,
+    QueryOrder as _, QuerySelect as _, QueryTrait as _, StreamTrait, prelude::Expr,
 };
 
 use crate::{
@@ -155,50 +156,31 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
         return Ok(());
     }
 
-    let mut query = Query::select();
-    query
-        .from_as(records::Entity, "r")
-        .join_as(
-            sea_orm::JoinType::InnerJoin,
-            players::Entity,
-            "p",
-            Expr::col(("r", records::Column::RecordPlayerId))
-                .eq(Expr::col(("p", players::Column::Id))),
-        )
-        .and_where(
-            Expr::col(("r", records::Column::MapId))
+    let result = records::Entity::find()
+        .inner_join(players::Entity)
+        .filter(
+            records::Column::MapId
                 .eq(map_id)
-                .and(Expr::col(("p", players::Column::Id)).is_in(player_ids)),
+                .and(records::Column::RecordPlayerId.is_in(player_ids)),
         )
-        .order_by_expr(Expr::col(("r", records::Column::Time)).into(), Order::Asc)
-        .order_by_expr(
-            Expr::col(("r", records::Column::RecordDate)).into(),
-            Order::Asc,
-        )
-        .expr_as(Expr::col(("p", players::Column::Id)), "player_id")
-        .expr_as(Expr::col(("p", players::Column::Login)), "login")
-        .expr_as(Expr::col(("p", players::Column::Name)), "nickname")
-        .expr_as(Expr::col(("r", records::Column::Time)), "time")
-        .expr_as(Expr::col(("r", records::Column::MapId)), "map_id")
-        .apply_if(event.get(), |query, (ev, ed)| {
-            query.join_as(
-                sea_orm::JoinType::InnerJoin,
-                event_edition_records::Entity,
-                "er",
-                Expr::col(("r", records::Column::RecordId))
-                    .eq(Expr::col(("er", event_edition_records::Column::RecordId)))
-                    .and(Expr::col(("er", event_edition_records::Column::EventId)).eq(ev.id))
-                    .and(Expr::col(("er", event_edition_records::Column::EditionId)).eq(ed.id)),
-            );
-        });
-
-    let stmt = conn.get_database_backend().build(&query);
-    let result = conn
-        .query_all(stmt)
-        .await?
-        .into_iter()
-        .map(|result| RecordQueryRow::from_query_result(&result, ""))
-        .collect::<Result<Vec<_>, _>>()?;
+        .group_by(records::Column::RecordPlayerId)
+        .order_by(records::Column::Time.min(), Order::Asc)
+        .apply_if(event.event, |query, (ev, ed)| {
+            query.reverse_join(event_edition_records::Entity).filter(
+                event_edition_records::Column::EventId
+                    .eq(ev.id)
+                    .and(event_edition_records::Column::EditionId.eq(ed.id)),
+            )
+        })
+        .select_only()
+        .column_as(records::Column::RecordPlayerId, "player_id")
+        .column_as(players::Column::Login, "login")
+        .column_as(players::Column::Name, "nickname")
+        .column_as(Expr::col(records::Column::Time).min(), "time")
+        .column_as(records::Column::MapId, "map_id")
+        .into_model::<RecordQueryRow>()
+        .all(conn)
+        .await?;
 
     rows.reserve(result.len());
 
