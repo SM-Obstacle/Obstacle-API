@@ -177,7 +177,6 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
         .column_as(players::Column::Login, "login")
         .column_as(players::Column::Name, "nickname")
         .column_as(Expr::col(records::Column::Time).min(), "time")
-        .column_as(records::Column::MapId, "map_id")
         .into_model::<RecordQueryRow>()
         .all(conn)
         .await?;
