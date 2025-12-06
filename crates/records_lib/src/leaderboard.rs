@@ -1,7 +1,7 @@
 //! This module contains various utility items to retrieve leaderboards information.
 
 use deadpool_redis::redis::AsyncCommands as _;
-use entity::{global_event_records, global_records, players, records};
+use entity::{event_edition_records, players, records};
 use sea_orm::{
     ConnectionTrait, FromQueryResult, Order, StreamTrait, prelude::Expr, sea_query::Query,
 };
@@ -157,6 +157,7 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
 
     let mut query = Query::select();
     query
+        .from_as(records::Entity, "r")
         .join_as(
             sea_orm::JoinType::InnerJoin,
             players::Entity,
@@ -178,20 +179,18 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
         .expr_as(Expr::col(("p", players::Column::Login)), "login")
         .expr_as(Expr::col(("p", players::Column::Name)), "nickname")
         .expr_as(Expr::col(("r", records::Column::Time)), "time")
-        .expr_as(Expr::col(("r", records::Column::MapId)), "map_id");
-
-    match event.get() {
-        Some((ev, ed)) => {
-            query.from_as(global_event_records::Entity, "r").and_where(
-                Expr::col(("r", global_event_records::Column::EventId))
-                    .eq(ev.id)
-                    .and(Expr::col(("r", global_event_records::Column::EditionId)).eq(ed.id)),
+        .expr_as(Expr::col(("r", records::Column::MapId)), "map_id")
+        .apply_if(event.get(), |query, (ev, ed)| {
+            query.join_as(
+                sea_orm::JoinType::InnerJoin,
+                event_edition_records::Entity,
+                "er",
+                Expr::col(("r", records::Column::RecordId))
+                    .eq(Expr::col(("er", event_edition_records::Column::RecordId)))
+                    .and(Expr::col(("er", event_edition_records::Column::EventId)).eq(ev.id))
+                    .and(Expr::col(("er", event_edition_records::Column::EditionId)).eq(ed.id)),
             );
-        }
-        None => {
-            query.from_as(global_records::Entity, "r");
-        }
-    }
+        });
 
     let stmt = conn.get_database_backend().build(&query);
     let result = conn
