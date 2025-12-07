@@ -5,7 +5,9 @@ use std::{fmt, time::Duration};
 
 use actix_web::test;
 use anyhow::Context as _;
-use entity::{maps, players, records};
+use chrono::SubsecRound as _;
+use entity::{event, event_admins, event_edition, event_edition_maps, maps, players, records};
+use records_lib::event::event_edition_maps;
 use sea_orm::{ActiveValue::Set, ConnectionTrait, EntityTrait as _};
 
 use crate::overview_base::{Response, Row};
@@ -398,6 +400,167 @@ async fn competition_ranking() -> anyhow::Result<()> {
                     time,
                 }),
         );
+
+        anyhow::Ok(())
+    })
+    .await
+}
+
+/// Setup: a player, a map X, an event with its edition, which contains a map which has map X
+/// as the original one (e.g. map "Solexium - Benchmark" has "Solexium" as original map).
+///
+/// The player makes a record on the original map with a time of 5s. He makes a record on the event
+/// map with a time of 6s. The /overview request of the event version should show a single record
+/// with the 6s time record, and the one of the original version should show a single record with
+/// the 5s time record.
+#[tokio::test]
+async fn overview_event_version_map_non_empty() -> anyhow::Result<()> {
+    let event = event::ActiveModel {
+        id: Set(1),
+        handle: Set("event_handle".to_owned()),
+        ..Default::default()
+    };
+
+    let edition = event_edition::ActiveModel {
+        event_id: Set(1),
+        id: Set(1),
+        name: Set("event_1_1_name".to_owned()),
+        start_date: Set(chrono::Utc::now().naive_utc().trunc_subsecs(0)),
+        is_transparent: Set(0),
+        non_original_maps: Set(0),
+        save_non_event_record: Set(1),
+        ..Default::default()
+    };
+
+    base::with_db(async |db| {
+        event::Entity::insert(event).exec(&db.sql_conn).await?;
+        event_edition::Entity::insert(edition)
+            .exec(&db.sql_conn)
+            .await?;
+
+        players::Entity::insert_many([players::ActiveModel {
+            id: Set(1),
+            login: Set("player_login".to_owned()),
+            name: Set("player_name".to_owned()),
+            role: Set(0),
+            ..Default::default()
+        }])
+        .exec(&db.sql_conn)
+        .await
+        .context("couldn't insert players")?;
+
+        let map_id = rand::random_range(1..=100);
+        let event_map_id = rand::random_range(1..=100);
+
+        let map = maps::ActiveModel {
+            id: Set(map_id),
+            player_id: Set(1),
+            game_id: Set("map_uid".to_owned()),
+            name: Set("map_name".to_owned()),
+            ..Default::default()
+        };
+        let event_map = maps::ActiveModel {
+            id: Set(event_map_id),
+            player_id: Set(1),
+            game_id: Set("event_map_uid".to_owned()),
+            name: Set("event_map_name".to_owned()),
+            ..Default::default()
+        };
+
+        maps::Entity::insert_many([map, event_map])
+            .exec(&db.sql_conn)
+            .await?;
+
+        event_edition_maps::Entity::insert(event_edition_maps::ActiveModel {
+            event_id: Set(1),
+            edition_id: Set(1),
+            map_id: Set(event_map_id),
+            original_map_id: Set(Some(map_id)),
+            order: Set(0),
+            ..Default::default()
+        })
+        .exec(&db.sql_conn)
+        .await?;
+
+        let record = records::ActiveModel {
+            record_player_id: Set(1),
+            map_id: Set(map_id),
+            record_date: Set(chrono::Utc::now().naive_utc()),
+            respawn_count: Set(0),
+            flags: Set(682),
+            time: Set(5000),
+            ..Default::default()
+        };
+
+        records::Entity::insert(record).exec(&db.sql_conn).await?;
+
+        let event_record = records::ActiveModel {
+            record_player_id: Set(1),
+            map_id: Set(event_map_id),
+            record_date: Set(chrono::Utc::now().naive_utc()),
+            respawn_count: Set(0),
+            flags: Set(682),
+            time: Set(6000),
+            ..Default::default()
+        };
+
+        let event_record_id = records::Entity::insert(event_record)
+            .exec(&db.sql_conn)
+            .await?
+            .last_insert_id;
+
+        let original_map_record = records::ActiveModel {
+            record_player_id: Set(1),
+            map_id: Set(map_id),
+            record_date: Set(chrono::Utc::now().naive_utc()),
+            respawn_count: Set(0),
+            flags: Set(682),
+            time: Set(6000),
+            event_record_id: Set(Some(event_record_id)),
+            ..Default::default()
+        };
+
+        records::Entity::insert(original_map_record)
+            .exec(&db.sql_conn)
+            .await?;
+
+        let app = base::get_app(db.clone()).await;
+
+        // /overview on the original map
+        let req = test::TestRequest::get()
+            .uri("/overview?mapId=map_uid&playerId=player_login")
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        let status = resp.status();
+
+        let body = test::read_body(resp).await;
+        let body = base::try_from_slice::<Response>(&body)?;
+
+        assert_eq!(status, 200);
+        assert_eq!(body.response.len(), 1);
+        assert_eq!(body.response[0].login, "player_login");
+        assert_eq!(body.response[0].nickname, "player_name");
+        assert_eq!(body.response[0].rank, 1);
+        assert_eq!(body.response[0].time, 5000);
+
+        // /overview on the event map
+        let req = test::TestRequest::get()
+            .uri("/overview?mapId=event_map_uid&playerId=player_login")
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        let status = resp.status();
+
+        let body = test::read_body(resp).await;
+        let body = base::try_from_slice::<Response>(&body)?;
+
+        assert_eq!(status, 200);
+        assert_eq!(body.response.len(), 1);
+        assert_eq!(body.response[0].login, "player_login");
+        assert_eq!(body.response[0].nickname, "player_name");
+        assert_eq!(body.response[0].rank, 1);
+        assert_eq!(body.response[0].time, 6000);
 
         anyhow::Ok(())
     })
