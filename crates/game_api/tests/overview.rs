@@ -6,8 +6,7 @@ use std::{fmt, time::Duration};
 use actix_web::test;
 use anyhow::Context as _;
 use chrono::SubsecRound as _;
-use entity::{event, event_admins, event_edition, event_edition_maps, maps, players, records};
-use records_lib::event::event_edition_maps;
+use entity::{event, event_edition, event_edition_maps, maps, players, records};
 use sea_orm::{ActiveValue::Set, ConnectionTrait, EntityTrait as _};
 
 use crate::overview_base::{Response, Row};
