@@ -21,7 +21,7 @@ use crate::{
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
-    transaction,
+    sync,
 };
 
 #[derive(Default, Clone, Debug)]
@@ -149,7 +149,7 @@ pub async fn update_mappack<C: TransactionTrait + Sync>(
     event: OptEvent<'_>,
 ) -> RecordsResult<usize> {
     // Calculate the scores
-    let scores = crate::assert_future_send(transaction::within(conn, async |txn| {
+    let scores = crate::assert_future_send(sync::transaction_within(conn, async |txn| {
         calc_scores(txn, redis_conn, mappack, event).await
     }))
     .await?;

@@ -16,7 +16,7 @@ use records_lib::{
     error::RecordsError,
     event::{self, EventMap},
     opt_event::OptEvent,
-    player, transaction,
+    player, sync,
 };
 use sea_orm::{
     ActiveValue::Set,
@@ -923,7 +923,7 @@ pub async fn edition_finished_at(
         return Err(ApiErrorKind::EventHasExpired(event.handle, edition.id));
     }
 
-    let res: pf::FinishedOutput = transaction::within(&db.sql_conn, async |txn| {
+    let res: pf::FinishedOutput = sync::transaction_within(&db.sql_conn, async |txn| {
         let params = EditionFinishedParams {
             player_login: &login,
             map: &map,

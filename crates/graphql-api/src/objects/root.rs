@@ -11,7 +11,7 @@ use records_lib::{
     opt_event::OptEvent,
     ranks::get_rank,
     redis_key::{map_ranking, player_ranking},
-    transaction,
+    sync,
 };
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, JoinType, Order, QueryFilter as _,
@@ -388,7 +388,7 @@ impl QueryRoot {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        transaction::within(conn, async |txn| {
+        sync::transaction_within(conn, async |txn| {
             get_record(txn, &mut redis_conn, record_id, Default::default()).await
         })
         .await
@@ -426,7 +426,7 @@ impl QueryRoot {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        transaction::within(conn, async |txn| {
+        sync::transaction_within(conn, async |txn| {
             get_records(txn, &mut redis_conn, date_sort_by, Default::default()).await
         })
         .await
@@ -521,7 +521,7 @@ impl QueryRoot {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        transaction::within(conn, async |txn| {
+        sync::transaction_within(conn, async |txn| {
             connection::query(
                 after,
                 before,

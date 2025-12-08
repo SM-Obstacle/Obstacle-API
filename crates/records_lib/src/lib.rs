@@ -25,7 +25,7 @@ pub mod pool;
 pub mod ranks;
 pub mod redis_key;
 pub mod time;
-pub mod transaction;
+pub mod sync;
 
 /// The MySQL/MariaDB pool type.
 pub type MySqlPool = sqlx::MySqlPool;

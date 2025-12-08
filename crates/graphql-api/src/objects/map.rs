@@ -13,7 +13,7 @@ use records_lib::{
     opt_event::OptEvent,
     ranks::{get_rank, update_leaderboard},
     redis_key::map_key,
-    transaction,
+    sync,
 };
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, JoinType, Order,
@@ -396,7 +396,7 @@ impl Map {
         let db = gql_ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        records_lib::assert_future_send(transaction::within(&db.sql_conn, async |txn| {
+        records_lib::assert_future_send(sync::transaction_within(&db.sql_conn, async |txn| {
             get_map_records(
                 txn,
                 &mut redis_conn,
@@ -425,7 +425,7 @@ impl Map {
         let db = gql_ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        records_lib::assert_future_send(transaction::within(&db.sql_conn, async |txn| {
+        records_lib::assert_future_send(sync::transaction_within(&db.sql_conn, async |txn| {
             connection::query(
                 after,
                 before,

@@ -144,8 +144,6 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
     rows: &mut Vec<Row>,
     event: OptEvent<'_>,
 ) -> RecordsResult<()> {
-    ranks::update_leaderboard(conn, redis_conn, map_id, event).await?;
-
     let start = start.unwrap_or_default();
     let end = end.unwrap_or(-1);
     let player_ids: Vec<i32> = redis_conn

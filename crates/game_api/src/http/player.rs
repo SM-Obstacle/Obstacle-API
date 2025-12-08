@@ -7,7 +7,7 @@ use actix_web::{
 };
 use entity::{banishments, current_bans, maps, players, records, role, types};
 use futures::TryStreamExt;
-use records_lib::{Database, RedisConnection, must, player, transaction};
+use records_lib::{Database, RedisConnection, must, player, sync};
 use reqwest::Client;
 use sea_orm::{
     ActiveValue::{Set, Unchanged},
@@ -268,7 +268,7 @@ pub async fn finished_at<C: TransactionTrait + ConnectionTrait>(
 ) -> RecordsResult<impl Responder<Body = BoxBody> + use<C>> {
     let map = must::have_map(conn, &body.map_uid).await.with_api_err()?;
 
-    let res: pf::FinishedOutput = transaction::within(conn, async |txn| {
+    let res: pf::FinishedOutput = sync::transaction_within(conn, async |txn| {
         let params = ExpandedInsertRecordParams {
             body: &body.rest,
             at,

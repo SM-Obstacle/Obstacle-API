@@ -3,7 +3,7 @@ use async_graphql::{Enum, ID, connection};
 use entity::{global_records, maps, players, records, role};
 use records_lib::{
     RedisConnection, RedisPool, error::RecordsError, internal, opt_event::OptEvent,
-    ranks::get_rank, transaction,
+    ranks::get_rank, sync,
 };
 use sea_orm::Order;
 use sea_orm::{
@@ -96,7 +96,7 @@ impl Player {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
 
-        records_lib::assert_future_send(transaction::within(conn, async |txn| {
+        records_lib::assert_future_send(sync::transaction_within(conn, async |txn| {
             get_player_records(
                 txn,
                 &mut redis_conn,
@@ -125,7 +125,7 @@ impl Player {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
 
-        records_lib::assert_future_send(transaction::within(conn, async |txn| {
+        records_lib::assert_future_send(sync::transaction_within(conn, async |txn| {
             connection::query(
                 after,
                 before,
