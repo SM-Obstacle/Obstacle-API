@@ -186,7 +186,7 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
 
     for r in result {
         rows.push(Row {
-            rank: ranks::get_rank(conn, redis_conn, map_id, r.player_id, r.time, event).await?,
+            rank: ranks::get_rank(redis_conn, map_id, r.player_id, r.time, event).await?,
             login: r.login,
             nickname: r.nickname,
             time: r.time,

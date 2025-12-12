@@ -421,7 +421,6 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
 
             let record = RankedRecordRow {
                 rank: get_rank(
-                    conn,
                     redis_conn,
                     map.id,
                     record.record.record_player_id,

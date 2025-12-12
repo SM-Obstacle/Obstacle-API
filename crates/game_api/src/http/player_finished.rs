@@ -1,7 +1,10 @@
 use crate::{ApiErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
+use deadpool_redis::redis::AsyncCommands as _;
 use entity::{checkpoint_times, event_edition_records, maps, records, types};
-use records_lib::{NullableInteger, RedisConnection, opt_event::OptEvent, ranks};
+use records_lib::{
+    NullableInteger, RedisConnection, opt_event::OptEvent, ranks, redis_key::map_key,
+};
 use sea_orm::{
     ActiveValue::Set, ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter as _, QueryOrder,
     QuerySelect, QueryTrait, StreamTrait,
@@ -104,14 +107,10 @@ pub(super) async fn insert_record<C: ConnectionTrait + StreamTrait>(
     ranks::update_leaderboard(conn, redis_conn, map_id, params.event).await?;
 
     if update_redis_lb {
-        ranks::update_rank(
-            redis_conn,
-            map_id,
-            player_id,
-            params.body.time,
-            params.event,
-        )
-        .await?;
+        let _: () = redis_conn
+            .zadd(map_key(map_id, params.event), player_id, params.body.time)
+            .await
+            .with_api_err()?;
     }
 
     // FIXME: find a way to retry deadlock errors **without loops**
@@ -196,7 +195,7 @@ pub async fn finished<C: ConnectionTrait + StreamTrait>(
             old,
             params.body.time,
             params.body.time < old,
-            Some(ranks::get_rank(conn, redis_conn, map.id, player_id, old, params.event).await?),
+            Some(ranks::get_rank(redis_conn, map.id, player_id, old, params.event).await?),
         ),
         None => (params.body.time, params.body.time, true, None),
     };
@@ -216,7 +215,6 @@ pub async fn finished<C: ConnectionTrait + StreamTrait>(
     .await?;
 
     let current_rank = ranks::get_rank(
-        conn,
         redis_conn,
         map.id,
         player_id,
