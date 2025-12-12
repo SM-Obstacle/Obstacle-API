@@ -17,7 +17,7 @@ use sea_orm::{ConnectionTrait, DbConn};
 use tracing_actix_web::TracingLogger;
 
 use game_api_lib::{configure, init_env};
-use tracing_subscriber::fmt::{TestWriter, writer::MakeWriterExt};
+use tracing_subscriber::fmt::TestWriter;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct ErrorResponse {

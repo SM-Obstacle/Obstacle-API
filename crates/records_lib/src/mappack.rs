@@ -149,9 +149,12 @@ pub async fn update_mappack<C: TransactionTrait + Sync>(
     event: OptEvent<'_>,
 ) -> RecordsResult<usize> {
     // Calculate the scores
-    let scores = crate::assert_future_send(sync::transaction(conn, async |txn| {
-        calc_scores(txn, redis_conn, mappack, event).await
-    }))
+    let scores = crate::assert_future_send(sync::transaction_with_config(
+        conn,
+        Some(sea_orm::IsolationLevel::RepeatableRead),
+        Some(sea_orm::AccessMode::ReadOnly),
+        async |txn| calc_scores(txn, redis_conn, mappack, event).await,
+    ))
     .await?;
 
     // Early return if the mappack has expired
