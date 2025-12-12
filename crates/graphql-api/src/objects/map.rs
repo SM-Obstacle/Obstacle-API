@@ -396,7 +396,7 @@ impl Map {
         let db = gql_ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        records_lib::assert_future_send(sync::transaction_within(&db.sql_conn, async |txn| {
+        records_lib::assert_future_send(sync::transaction(&db.sql_conn, async |txn| {
             get_map_records(
                 txn,
                 &mut redis_conn,
@@ -425,7 +425,7 @@ impl Map {
         let db = gql_ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        records_lib::assert_future_send(sync::transaction_within(&db.sql_conn, async |txn| {
+        records_lib::assert_future_send(sync::transaction(&db.sql_conn, async |txn| {
             connection::query(
                 after,
                 before,

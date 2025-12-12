@@ -388,7 +388,7 @@ impl QueryRoot {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        sync::transaction_within(conn, async |txn| {
+        sync::transaction(conn, async |txn| {
             get_record(txn, &mut redis_conn, record_id, Default::default()).await
         })
         .await
@@ -426,7 +426,7 @@ impl QueryRoot {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        sync::transaction_within(conn, async |txn| {
+        sync::transaction(conn, async |txn| {
             get_records(txn, &mut redis_conn, date_sort_by, Default::default()).await
         })
         .await
@@ -521,7 +521,7 @@ impl QueryRoot {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        sync::transaction_within(conn, async |txn| {
+        sync::transaction(conn, async |txn| {
             connection::query(
                 after,
                 before,

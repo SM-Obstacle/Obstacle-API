@@ -96,7 +96,7 @@ impl Player {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
 
-        records_lib::assert_future_send(sync::transaction_within(conn, async |txn| {
+        records_lib::assert_future_send(sync::transaction(conn, async |txn| {
             get_player_records(
                 txn,
                 &mut redis_conn,
@@ -125,7 +125,7 @@ impl Player {
         let conn = ctx.data_unchecked::<DbConn>();
         let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
 
-        records_lib::assert_future_send(sync::transaction_within(conn, async |txn| {
+        records_lib::assert_future_send(sync::transaction(conn, async |txn| {
             connection::query(
                 after,
                 before,

@@ -149,7 +149,7 @@ pub async fn update_mappack<C: TransactionTrait + Sync>(
     event: OptEvent<'_>,
 ) -> RecordsResult<usize> {
     // Calculate the scores
-    let scores = crate::assert_future_send(sync::transaction_within(conn, async |txn| {
+    let scores = crate::assert_future_send(sync::transaction(conn, async |txn| {
         calc_scores(txn, redis_conn, mappack, event).await
     }))
     .await?;

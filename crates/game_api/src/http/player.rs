@@ -268,7 +268,7 @@ pub async fn finished_at<C: TransactionTrait + ConnectionTrait>(
 ) -> RecordsResult<impl Responder<Body = BoxBody> + use<C>> {
     let map = must::have_map(conn, &body.map_uid).await.with_api_err()?;
 
-    let res: pf::FinishedOutput = sync::transaction_within(conn, async |txn| {
+    let res: pf::FinishedOutput = sync::transaction(conn, async |txn| {
         let params = ExpandedInsertRecordParams {
             body: &body.rest,
             at,

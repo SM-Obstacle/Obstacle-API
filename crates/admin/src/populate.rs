@@ -234,7 +234,7 @@ async fn run_populate<C: TransactionTrait + ConnectionTrait>(
             .await?;
     }
 
-    match sync::transaction_within(conn, async |txn| {
+    match sync::transaction(conn, async |txn| {
         tracing::info!("Clearing old content");
         clear::clear_content(txn, redis_conn, event, edition).await?;
 

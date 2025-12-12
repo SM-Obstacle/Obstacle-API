@@ -17,7 +17,7 @@ use sea_orm::{ConnectionTrait, DbConn};
 use tracing_actix_web::TracingLogger;
 
 use game_api_lib::{configure, init_env};
-use tracing_subscriber::fmt::TestWriter;
+use tracing_subscriber::fmt::{TestWriter, writer::MakeWriterExt};
 
 #[derive(Debug, serde::Deserialize)]
 pub struct ErrorResponse {
@@ -195,7 +195,10 @@ where
                 Ok(out)
             }
             other => {
-                println!("Test failed, leaving database {db_name} as-is");
+                println!(
+                    "Test failed, leaving database {db_name} as-is. \
+                    Run with cfg `test_force_db_deletion` to drop the database everytime."
+                );
                 match other {
                     Ok(Err(e)) => Err(e),
                     Err(e) => panic::resume_unwind(e),
