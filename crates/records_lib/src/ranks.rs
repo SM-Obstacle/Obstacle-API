@@ -136,8 +136,8 @@ pub async fn get_rank(
         .zadd(&key, player_id, time)
         .ignore()
         .zcount(&key, "-inf", time - 1);
-    if let Some(time) = newest_time {
-        pipe.zadd(&key, player_id, time).ignore();
+    if let Some(old_time) = newest_time {
+        pipe.zadd(&key, player_id, old_time).ignore();
     }
 
     let response: [i32; 1] = pipe.query_async(redis_conn).await?;
