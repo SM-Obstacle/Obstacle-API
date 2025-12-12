@@ -180,7 +180,7 @@ async fn get_rank<C: ConnectionTrait + StreamTrait>(
 
     match min_time {
         Some(time) => {
-            let rank = ranks::get_rank(conn, redis_conn, map.id, p.id, time, event)
+            let rank = ranks::get_rank(redis_conn, map.id, p.id, time, event)
                 .await
                 .with_api_err()?;
             Ok(Some(rank))

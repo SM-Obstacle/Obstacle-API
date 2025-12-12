@@ -3,8 +3,6 @@
 use deadpool_redis::PoolError;
 use sea_orm::TransactionError;
 
-use crate::ranks::RankComputeError;
-
 /// Represents any type of error that could happen when using this crate.
 #[derive(thiserror::Error, Debug)]
 #[rustfmt::skip]
@@ -34,9 +32,6 @@ pub enum RecordsError {
     /// An error from the database.
     #[error(transparent)]
     DbError(#[from] sea_orm::DbErr),
-    /// An error when computing the rank of a player on a map.
-    #[error(transparent)]
-    RankCompute(#[from] RankComputeError),
 
     // --------
     // --- Logical errors

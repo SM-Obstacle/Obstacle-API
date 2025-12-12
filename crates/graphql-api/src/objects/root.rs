@@ -58,7 +58,6 @@ async fn get_record<C: ConnectionTrait + StreamTrait>(
 
     let out = records::RankedRecord {
         rank: get_rank(
-            conn,
             redis_conn,
             record.map_id,
             record.record_player_id,
@@ -95,7 +94,6 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
 
     for record in records {
         let rank = get_rank(
-            conn,
             redis_conn,
             record.map_id,
             record.record_player_id,
@@ -299,7 +297,6 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
 
     for record in records.into_iter().take(limit) {
         let rank = get_rank(
-            conn,
             redis_conn,
             record.map_id,
             record.record_player_id,

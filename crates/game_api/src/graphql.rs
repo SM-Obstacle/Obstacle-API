@@ -7,7 +7,6 @@ use async_graphql_actix_web::GraphQLRequest;
 use graphql_api::error::{ApiGqlError, ApiGqlErrorKind};
 use graphql_api::schema::{Schema, create_schema};
 use records_lib::Database;
-use records_lib::error::RecordsError;
 use reqwest::Client;
 use tracing_actix_web::RequestId;
 
@@ -61,14 +60,6 @@ async fn index_graphql(
                     request_id,
                     err,
                 );
-
-                if let RecordsError::RankCompute(err) = records_err {
-                    configure::send_compute_err_msg_detached(
-                        client.0.clone(),
-                        request_id,
-                        err.clone(),
-                    );
-                }
 
                 105 // Unknown type
             } else {

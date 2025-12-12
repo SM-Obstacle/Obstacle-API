@@ -88,7 +88,6 @@ async fn main() -> anyhow::Result<()> {
 
         App::new()
             .wrap(cors)
-            .wrap(middleware::from_fn(configure::mask_rank_compute_error))
             .wrap(middleware::from_fn(configure::mask_internal_errors))
             .wrap(middleware::from_fn(configure::fit_request_id))
             .wrap(TracingLogger::<configure::RootSpanBuilder>::new())

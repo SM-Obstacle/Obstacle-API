@@ -127,10 +127,7 @@ where
             E::Lib(e) if matches!(e.as_ref(), LE::MaskedInternal) => {
                 (111, S::INTERNAL_SERVER_ERROR)
             }
-            E::Lib(e) if matches!(e.as_ref(), LE::RankCompute(_)) => {
-                (112, S::INTERNAL_SERVER_ERROR)
-            }
-
+            // --- 112 is taken by the old rank compute error ---
             E::Unauthorized => (201, S::UNAUTHORIZED),
             E::Forbidden => (202, S::FORBIDDEN),
             E::MissingGetTokenReq => (203, S::BAD_REQUEST),

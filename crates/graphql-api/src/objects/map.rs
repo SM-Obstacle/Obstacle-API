@@ -134,7 +134,6 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
 
     for record in records {
         let rank = get_rank(
-            conn,
             redis_conn,
             map_id,
             record.record_player_id,
@@ -369,7 +368,6 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
 
     for record in records.into_iter().take(limit) {
         let rank = get_rank(
-            conn,
             redis_conn,
             map_id,
             record.record_player_id,
