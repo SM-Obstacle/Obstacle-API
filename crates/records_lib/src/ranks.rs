@@ -56,7 +56,7 @@ pub async fn update_leaderboard<C: ConnectionTrait + StreamTrait>(
     Ok(mysql_count)
 }
 
-/// A leaderboard row, used in [`RankComputeError`].
+/// A leaderboard row.
 #[derive(Debug, sea_orm::FromQueryResult)]
 pub struct DbLeaderboardItem {
     /// The ID of the player who made the record.
