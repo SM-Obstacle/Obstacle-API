@@ -9,7 +9,7 @@ use entity::{event as event_entity, event_edition, global_records, maps, players
 use records_lib::{
     Database, RedisConnection, RedisPool, internal, must,
     opt_event::OptEvent,
-    ranks::get_rank,
+    ranks,
     redis_key::{map_ranking, player_ranking},
     sync,
 };
@@ -56,9 +56,11 @@ async fn get_record<C: ConnectionTrait + StreamTrait>(
         return Err(ApiGqlError::from_record_not_found_error(record_id));
     };
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     let out = records::RankedRecord {
-        rank: get_rank(
-            redis_pool,
+        rank: ranks::get_rank_in_session(
+            &mut ranking_session,
             record.map_id,
             record.record_player_id,
             record.time,
@@ -92,9 +94,11 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for record in records {
-        let rank = get_rank(
-            redis_pool,
+        let rank = ranks::get_rank_in_session(
+            &mut ranking_session,
             record.map_id,
             record.record_player_id,
             record.time,
@@ -295,9 +299,11 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
     let mut connection = connection::Connection::new(has_previous_page, records.len() > limit);
     connection.edges.reserve(records.len());
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for record in records.into_iter().take(limit) {
-        let rank = get_rank(
-            redis_pool,
+        let rank = ranks::get_rank_in_session(
+            &mut ranking_session,
             record.map_id,
             record.record_player_id,
             record.time,

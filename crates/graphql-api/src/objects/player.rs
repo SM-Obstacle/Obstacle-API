@@ -1,10 +1,8 @@
 use async_graphql::connection::CursorType as _;
 use async_graphql::{Enum, ID, connection};
 use entity::{global_records, maps, players, records, role};
-use records_lib::Database;
-use records_lib::{
-    RedisPool, error::RecordsError, internal, opt_event::OptEvent, ranks::get_rank, sync,
-};
+use records_lib::{Database, ranks};
+use records_lib::{RedisPool, error::RecordsError, internal, opt_event::OptEvent, sync};
 use sea_orm::Order;
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, JoinType,
@@ -177,9 +175,11 @@ async fn get_player_records<C: ConnectionTrait + StreamTrait>(
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for record in records {
-        let rank = get_rank(
-            redis_pool,
+        let rank = ranks::get_rank_in_session(
+            &mut ranking_session,
             record.map_id,
             record.record_player_id,
             record.time,
@@ -330,9 +330,11 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
 
     let mut connection = connection::Connection::new(has_previous_page, records.len() > limit);
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for record in records.into_iter().take(limit) {
-        let rank = get_rank(
-            redis_pool,
+        let rank = ranks::get_rank_in_session(
+            &mut ranking_session,
             record.map_id,
             record.record_player_id,
             record.time,

@@ -11,7 +11,7 @@ use entity::{
 use records_lib::{
     Database, RedisPool, internal,
     opt_event::OptEvent,
-    ranks::{get_rank, update_leaderboard},
+    ranks::{self, update_leaderboard},
     redis_key::map_key,
     sync,
 };
@@ -136,9 +136,11 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for record in records {
-        let rank = get_rank(
-            redis_pool,
+        let rank = ranks::get_rank_in_session(
+            &mut ranking_session,
             map_id,
             record.record_player_id,
             record.time,
@@ -370,9 +372,11 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
         },
     };
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for record in records.into_iter().take(limit) {
-        let rank = get_rank(
-            redis_pool,
+        let rank = ranks::get_rank_in_session(
+            &mut ranking_session,
             map_id,
             record.record_player_id,
             record.time,

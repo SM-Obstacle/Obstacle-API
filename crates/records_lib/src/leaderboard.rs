@@ -184,9 +184,18 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
 
     rows.reserve(result.len());
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for r in result {
         rows.push(Row {
-            rank: ranks::get_rank(redis_pool, map_id, r.player_id, r.time, event).await?,
+            rank: ranks::get_rank_in_session(
+                &mut ranking_session,
+                map_id,
+                r.player_id,
+                r.time,
+                event,
+            )
+            .await?,
             login: r.login,
             nickname: r.nickname,
             time: r.time,

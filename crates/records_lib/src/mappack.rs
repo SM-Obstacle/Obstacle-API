@@ -15,7 +15,7 @@ use crate::{
     error::RecordsResult,
     internal, must,
     opt_event::OptEvent,
-    ranks::get_rank,
+    ranks,
     redis_key::{
         mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_nb_map_key,
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
@@ -365,6 +365,8 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
 
     let mut scores = Vec::<PlayerScore>::with_capacity(mappack.len());
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for (i, map) in mappack.iter().enumerate() {
         let mut query = Query::select();
         query
@@ -418,8 +420,8 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
             }
 
             let record = RankedRecordRow {
-                rank: get_rank(
-                    redis_pool,
+                rank: ranks::get_rank_in_session(
+                    &mut ranking_session,
                     map.id,
                     record.record.record_player_id,
                     record.record.time,
