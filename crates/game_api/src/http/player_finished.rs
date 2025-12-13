@@ -1,13 +1,13 @@
 use crate::{ApiErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
-use deadpool_redis::redis::AsyncCommands as _;
+use deadpool_redis::redis;
 use entity::{checkpoint_times, event_edition_records, maps, records, types};
 use records_lib::{
-    NullableInteger, RedisConnection, opt_event::OptEvent, ranks, redis_key::map_key,
+    NullableInteger, RedisPool, opt_event::OptEvent, ranks, redis_key::map_key, sync,
 };
 use sea_orm::{
     ActiveValue::Set, ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter as _, QueryOrder,
-    QuerySelect, QueryTrait, StreamTrait,
+    QuerySelect, QueryTrait, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +44,7 @@ struct SendQueryParam<'a> {
     event_record_id: Option<u32>,
     at: chrono::NaiveDateTime,
     mode_version: Option<types::ModeVersion>,
+    event: OptEvent<'a>,
 }
 
 async fn send_query<C: ConnectionTrait>(
@@ -55,6 +56,7 @@ async fn send_query<C: ConnectionTrait>(
         event_record_id,
         at,
         mode_version,
+        event,
     }: SendQueryParam<'_>,
 ) -> Result<u32, sea_orm::DbErr> {
     let new_record = records::ActiveModel {
@@ -69,22 +71,34 @@ async fn send_query<C: ConnectionTrait>(
         ..Default::default()
     };
 
-    let record = records::Entity::insert(new_record)
-        .exec_with_returning(conn)
-        .await?;
+    let record_id = records::Entity::insert(new_record)
+        .exec(conn)
+        .await?
+        .last_insert_id;
 
     checkpoint_times::Entity::insert_many(body.cps.iter().enumerate().map(|(idx, time)| {
         checkpoint_times::ActiveModel {
             cp_num: Set(idx as _),
             map_id: Set(map_id),
-            record_id: Set(record.record_id),
+            record_id: Set(record_id),
             time: Set(*time),
         }
     }))
     .exec(conn)
     .await?;
 
-    Ok(record.record_id)
+    if let Some((ev, ed)) = event.get() {
+        let new_event_record = event_edition_records::ActiveModel {
+            record_id: Set(record_id),
+            event_id: Set(ev.id),
+            edition_id: Set(ed.id),
+        };
+        event_edition_records::Entity::insert(new_event_record)
+            .exec(conn)
+            .await?;
+    }
+
+    Ok(record_id)
 }
 
 #[derive(Clone, Copy)]
@@ -95,25 +109,16 @@ pub struct ExpandedInsertRecordParams<'a> {
     pub mode_version: Option<types::ModeVersion>,
 }
 
-pub(super) async fn insert_record<C: ConnectionTrait + StreamTrait>(
+pub(super) async fn insert_record<C>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
     params: ExpandedInsertRecordParams<'_>,
     map_id: u32,
     player_id: u32,
     event_record_id: Option<u32>,
-    update_redis_lb: bool,
-) -> RecordsResult<u32> {
-    ranks::update_leaderboard(conn, redis_conn, map_id, params.event).await?;
-
-    if update_redis_lb {
-        let _: () = redis_conn
-            .zadd(map_key(map_id, params.event), player_id, params.body.time)
-            .await
-            .with_api_err()?;
-    }
-
-    // FIXME: find a way to retry deadlock errors **without loops**
+) -> RecordsResult<u32>
+where
+    C: ConnectionTrait,
+{
     let record_id = send_query(
         conn,
         player_id,
@@ -123,6 +128,7 @@ pub(super) async fn insert_record<C: ConnectionTrait + StreamTrait>(
             event_record_id,
             at: params.at,
             mode_version: params.mode_version,
+            event: params.event,
         },
     )
     .await
@@ -163,13 +169,37 @@ async fn get_old_record<C: ConnectionTrait>(
         .with_api_err()
 }
 
-pub async fn finished<C: ConnectionTrait + StreamTrait>(
+async fn lock_map_records<C: ConnectionTrait>(conn: &C, map_id: u32) -> RecordsResult<()> {
+    // TODO(#105): once sea-query supports "LOCK IN SHARE MODE" syntax for MySQL/MariaDB,
+    // use a shared lock instead of an exclusive one.
+    // See https://github.com/SeaQL/sea-query/pull/980
+    let _ = records::Entity::find()
+        .select_only()
+        .expr(1)
+        .filter(records::Column::MapId.eq(map_id))
+        .lock_exclusive()
+        .into_tuple::<(i32,)>()
+        .all(conn)
+        .await
+        .with_api_err()?;
+    Ok(())
+}
+
+struct RecordSaveOutput {
+    old_record: Option<records::Model>,
+    record_id: u32,
+}
+
+pub async fn finished<C>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     params: ExpandedInsertRecordParams<'_>,
     player_login: &str,
     map: &maps::Model,
-) -> RecordsResult<FinishedOutput> {
+) -> RecordsResult<FinishedOutput>
+where
+    C: ConnectionTrait + TransactionTrait,
+{
     // First, we retrieve all what we need to save the record
     let player = records_lib::must::have_player(conn, player_login)
         .await
@@ -188,43 +218,56 @@ pub async fn finished<C: ConnectionTrait + StreamTrait>(
         return Err(ApiErrorKind::InvalidTimes);
     }
 
-    let old_record = get_old_record(conn, player_id, map.id, params.event).await?;
+    let result = sync::transaction(conn, async |txn| {
+        // Lock the rows related to the map
+        lock_map_records(txn, map.id).await?;
 
-    let (old, new, has_improved, old_rank) = match old_record {
+        let old_record = get_old_record(txn, player_id, map.id, params.event).await?;
+        let new_record_id = insert_record(txn, params, map.id, player_id, None).await?;
+
+        RecordsResult::Ok(RecordSaveOutput {
+            old_record,
+            record_id: new_record_id,
+        })
+    })
+    .await?;
+
+    let (old, new, has_improved, old_rank) = match result.old_record {
         Some(records::Model { time: old, .. }) => (
             old,
             params.body.time,
             params.body.time < old,
-            Some(ranks::get_rank(redis_conn, map.id, player_id, old, params.event).await?),
+            Some(ranks::get_rank(redis_pool, map.id, player_id, old, params.event).await?),
         ),
         None => (params.body.time, params.body.time, true, None),
     };
 
-    let event = params.event;
+    let current_rank = if has_improved {
+        // We update the score in Redis then get the new rank.
+        //
+        // N.B.: we must update the time in Redis **after** the SQL transaction is committed, so
+        // that any other operation acting on the same leaderboard doesn't update the ZSET with an
+        // outdated version.
 
-    // We insert the record
-    let record_id = insert_record(
-        conn,
-        redis_conn,
-        params,
-        map.id,
-        player_id,
-        None,
-        has_improved,
-    )
-    .await?;
+        let mut pipe = redis::pipe();
+        pipe.atomic();
 
-    let current_rank = ranks::get_rank(
-        redis_conn,
-        map.id,
-        player_id,
-        if has_improved { new } else { old },
-        event,
-    )
-    .await?;
+        let map_key = map_key(map.id, params.event);
+        pipe.zadd(&map_key, player_id, new)
+            .ignore()
+            .zcount(&map_key, "-inf", new - 1);
+
+        let mut redis_conn = redis_pool.get().await.with_api_err()?;
+        let (count,): (i32,) = pipe.query_async(&mut redis_conn).await.with_api_err()?;
+        count + 1
+    } else {
+        ranks::get_rank(redis_pool, map.id, player_id, old, params.event)
+            .await
+            .with_api_err()?
+    };
 
     Ok(FinishedOutput {
-        record_id,
+        record_id: result.record_id,
         player_id,
         res: HasFinishedResponse {
             has_improved,

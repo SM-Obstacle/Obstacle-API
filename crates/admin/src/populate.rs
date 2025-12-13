@@ -306,7 +306,7 @@ pub async fn populate(
     tracing::info!("Filling mappack in the Redis database...");
     mappack::update_mappack(
         &db.sql_conn,
-        &mut redis_conn,
+        &db.redis_pool,
         AnyMappackId::Event(&event, &edition),
         Default::default(),
     )

@@ -4,11 +4,11 @@ use entity::{event_edition_records, maps, records};
 use records_lib::leaderboard::{self, Row};
 use records_lib::opt_event::OptEvent;
 use records_lib::ranks::update_leaderboard;
-use records_lib::{RedisConnection, ranks};
+use records_lib::{Database, RedisPool, ranks};
 use records_lib::{player, sync};
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, QueryTrait,
-    StreamTrait, TransactionTrait,
+    StreamTrait,
 };
 
 // -- Compute display ranges
@@ -28,7 +28,7 @@ pub type OverviewReq = web::Query<OverviewQuery>;
 
 async fn extend_range<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     records: &mut Vec<Row>,
     (start, end): (i32, i32),
     map_id: u32,
@@ -36,7 +36,7 @@ async fn extend_range<C: ConnectionTrait + StreamTrait>(
 ) -> RecordsResult<()> {
     leaderboard::leaderboard_into(
         conn,
-        redis_conn,
+        redis_pool,
         map_id,
         Some(start),
         Some(end - 1),
@@ -56,7 +56,7 @@ pub struct ResponseBody {
 
 async fn build_records_array<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     player_rank: Option<i32>,
     records_count: i32,
     map_id: u32,
@@ -69,7 +69,7 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
         if player_rank < TOTAL_ROWS {
             extend_range(
                 conn,
-                redis_conn,
+                redis_pool,
                 &mut ranked_records,
                 (0, TOTAL_ROWS),
                 map_id,
@@ -80,7 +80,7 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
         // The player is not in the top ROWS records, display top3 and then center around the player rank
         else {
             // push top3
-            extend_range(conn, redis_conn, &mut ranked_records, (0, 3), map_id, event).await?;
+            extend_range(conn, redis_pool, &mut ranked_records, (0, 3), map_id, event).await?;
 
             // the rest is centered around the player
             let range = {
@@ -92,7 +92,7 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
                     (start, end)
                 }
             };
-            extend_range(conn, redis_conn, &mut ranked_records, range, map_id, event).await?;
+            extend_range(conn, redis_pool, &mut ranked_records, range, map_id, event).await?;
         }
     }
     // The player has no record, so ROWS = ROWS - 1 to keep one last line for the player
@@ -103,7 +103,7 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
             // top (ROWS - 1 - 3)
             extend_range(
                 conn,
-                redis_conn,
+                redis_pool,
                 &mut ranked_records,
                 (0, NO_RECORD_ROWS - 3),
                 map_id,
@@ -114,7 +114,7 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
             // last 3
             extend_range(
                 conn,
-                redis_conn,
+                redis_pool,
                 &mut ranked_records,
                 (records_count - 3, records_count),
                 map_id,
@@ -126,7 +126,7 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
         else {
             extend_range(
                 conn,
-                redis_conn,
+                redis_pool,
                 &mut ranked_records,
                 (0, NO_RECORD_ROWS),
                 map_id,
@@ -141,7 +141,7 @@ async fn build_records_array<C: ConnectionTrait + StreamTrait>(
 
 async fn get_rank<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut deadpool_redis::Connection,
+    redis_pool: &RedisPool,
     map: &maps::Model,
     event: OptEvent<'_>,
     p: &entity::players::Model,
@@ -169,7 +169,7 @@ async fn get_rank<C: ConnectionTrait + StreamTrait>(
 
     match min_time {
         Some(time) => {
-            let rank = ranks::get_rank(redis_conn, map.id, p.id, time, event)
+            let rank = ranks::get_rank(redis_pool, map.id, p.id, time, event)
                 .await
                 .with_api_err()?;
             Ok(Some(rank))
@@ -178,30 +178,31 @@ async fn get_rank<C: ConnectionTrait + StreamTrait>(
     }
 }
 
-pub async fn overview<C: TransactionTrait + ConnectionTrait + StreamTrait>(
-    conn: &C,
-    redis_conn: &mut RedisConnection,
+pub async fn overview(
+    db: Database,
     player_login: &str,
     map: &maps::Model,
     event: OptEvent<'_>,
 ) -> RecordsResult<ResponseBody> {
-    let player = player::get_player_from_login(conn, player_login)
+    let player = player::get_player_from_login(&db.sql_conn, player_login)
         .await
         .with_api_err()?;
 
     // Update redis if needed
-    let count = update_leaderboard(conn, redis_conn, map.id, event).await? as _;
+    let count = update_leaderboard(&db.sql_conn, &db.redis_pool, map.id, event).await? as _;
 
     let player_rank = match player {
-        Some(ref p) => get_rank(conn, redis_conn, map, event, p).await?,
+        Some(ref p) => get_rank(&db.sql_conn, &db.redis_pool, map, event, p).await?,
         None => None,
     };
 
     let ranked_records = sync::transaction_with_config(
-        conn,
+        &db.sql_conn,
         Some(sea_orm::IsolationLevel::RepeatableRead),
         Some(sea_orm::AccessMode::ReadOnly),
-        async |txn| build_records_array(txn, redis_conn, player_rank, count, map.id, event).await,
+        async |txn| {
+            build_records_array(txn, &db.redis_pool, player_rank, count, map.id, event).await
+        },
     )
     .await?;
 

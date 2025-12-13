@@ -9,7 +9,7 @@ use entity::{
     players, records,
 };
 use records_lib::{
-    Database, RedisConnection, internal,
+    Database, RedisPool, internal,
     opt_event::OptEvent,
     ranks::{get_rank, update_leaderboard},
     redis_key::map_key,
@@ -58,7 +58,7 @@ impl From<maps::Model> for Map {
 
 async fn get_map_records<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     map_id: u32,
     event: OptEvent<'_>,
     rank_sort_by: Option<SortState>,
@@ -66,15 +66,19 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
 ) -> GqlResult<Vec<RankedRecord>> {
     let key = map_key(map_id, event);
 
-    update_leaderboard(conn, redis_conn, map_id, event).await?;
+    update_leaderboard(conn, redis_pool, map_id, event).await?;
 
     let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
-    let record_ids: Vec<i32> = if to_reverse {
-        redis_conn.zrevrange(&key, 0, 99)
-    } else {
-        redis_conn.zrange(&key, 0, 99)
-    }
-    .await?;
+    let record_ids: Vec<i32> = {
+        let mut redis_conn = redis_pool.get().await?;
+
+        if to_reverse {
+            redis_conn.zrevrange(&key, 0, 99)
+        } else {
+            redis_conn.zrange(&key, 0, 99)
+        }
+        .await?
+    };
 
     if record_ids.is_empty() {
         return Ok(Vec::new());
@@ -134,7 +138,7 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
 
     for record in records {
         let rank = get_rank(
-            redis_conn,
+            redis_pool,
             map_id,
             record.record_player_id,
             record.time,
@@ -161,7 +165,7 @@ fn encode_map_cursor(cursor: &MapRecordCursor) -> String {
 
 async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     map_id: u32,
     event: OptEvent<'_>,
     ConnectionParameters {
@@ -232,7 +236,7 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
         None => None,
     };
 
-    update_leaderboard(conn, redis_conn, map_id, event).await?;
+    update_leaderboard(conn, redis_pool, map_id, event).await?;
 
     let mut select = Query::select();
 
@@ -368,7 +372,7 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
 
     for record in records.into_iter().take(limit) {
         let rank = get_rank(
-            redis_conn,
+            redis_pool,
             map_id,
             record.record_player_id,
             record.time,
@@ -394,12 +398,11 @@ impl Map {
         date_sort_by: Option<SortState>,
     ) -> GqlResult<Vec<RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
-        let mut redis_conn = db.redis_pool.get().await?;
 
         records_lib::assert_future_send(sync::transaction(&db.sql_conn, async |txn| {
             get_map_records(
                 txn,
-                &mut redis_conn,
+                &db.redis_pool,
                 self.inner.id,
                 event,
                 rank_sort_by,
@@ -423,7 +426,6 @@ impl Map {
         filter: Option<RecordsFilter>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
-        let mut redis_conn = db.redis_pool.get().await?;
 
         records_lib::assert_future_send(sync::transaction(&db.sql_conn, async |txn| {
             connection::query(
@@ -434,7 +436,7 @@ impl Map {
                 |after, before, first, last| async move {
                     get_map_records_connection(
                         txn,
-                        &mut redis_conn,
+                        &db.redis_pool,
                         self.inner.id,
                         event,
                         ConnectionParameters {

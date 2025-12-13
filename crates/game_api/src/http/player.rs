@@ -5,9 +5,10 @@ use actix_web::{
     body::BoxBody,
     web::{self, Json},
 };
+use deadpool_redis::redis::AsyncCommands as _;
 use entity::{banishments, current_bans, maps, players, records, role, types};
 use futures::TryStreamExt;
-use records_lib::{Database, RedisConnection, must, player, sync};
+use records_lib::{Database, RedisPool, must, player, redis_key::alone_map_key, sync};
 use reqwest::Client;
 use sea_orm::{
     ActiveValue::{Set, Unchanged},
@@ -197,14 +198,17 @@ pub async fn check_banned<C: ConnectionTrait>(
     Ok(r)
 }
 
-async fn finished_impl<C: ConnectionTrait + StreamTrait>(
+async fn finished_impl<C>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     params: ExpandedInsertRecordParams<'_>,
     player_login: &str,
     map: &maps::Model,
-) -> RecordsResult<pf::FinishedOutput> {
-    let res = pf::finished(conn, redis_conn, params, player_login, map).await?;
+) -> RecordsResult<pf::FinishedOutput>
+where
+    C: ConnectionTrait + TransactionTrait + StreamTrait,
+{
+    let res = pf::finished(conn, redis_pool, params, player_login, map).await?;
 
     // If the record isn't in an event context, save the record to the events that have the map
     // and allow records saving without an event context.
@@ -228,19 +232,35 @@ async fn finished_impl<C: ConnectionTrait + StreamTrait>(
                 .await?;
         let is_pb = previous_time.is_none_or(|t| t > params.body.time);
 
-        pf::insert_record(
-            conn,
-            redis_conn,
-            ExpandedInsertRecordParams {
-                event: Default::default(),
-                ..params
-            },
-            original_map_id,
-            res.player_id,
-            Some(res.record_id),
-            is_pb,
-        )
+        sync::transaction(conn, async |txn| {
+            pf::insert_record(
+                txn,
+                ExpandedInsertRecordParams {
+                    event: Default::default(),
+                    ..params
+                },
+                original_map_id,
+                res.player_id,
+                Some(res.record_id),
+            )
+            .await
+        })
         .await?;
+
+        // Update the rank on the original map
+        if is_pb {
+            let _: () = redis_pool
+                .get()
+                .await
+                .with_api_err()?
+                .zadd(
+                    alone_map_key(original_map_id),
+                    res.player_id,
+                    params.body.time,
+                )
+                .await
+                .with_api_err()?;
+        }
     }
 
     Ok(res)
@@ -253,32 +273,31 @@ pub async fn finished_at_with_pool(
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
 ) -> RecordsResult<impl Responder> {
-    let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
-    let res = finished_at(&db.sql_conn, &mut redis_conn, mode_version, login, body, at).await?;
+    let res = finished_at(&db.sql_conn, &db.redis_pool, mode_version, login, body, at).await?;
     Ok(res)
 }
 
-pub async fn finished_at<C: TransactionTrait + ConnectionTrait>(
+pub async fn finished_at<C>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     mode_version: Option<types::ModeVersion>,
     login: String,
     body: pf::HasFinishedBody,
     at: chrono::NaiveDateTime,
-) -> RecordsResult<impl Responder<Body = BoxBody> + use<C>> {
+) -> RecordsResult<impl Responder<Body = BoxBody> + use<C>>
+where
+    C: TransactionTrait + ConnectionTrait + StreamTrait,
+{
     let map = must::have_map(conn, &body.map_uid).await.with_api_err()?;
 
-    let res: pf::FinishedOutput = sync::transaction(conn, async |txn| {
-        let params = ExpandedInsertRecordParams {
-            body: &body.rest,
-            at,
-            event: Default::default(),
-            mode_version,
-        };
+    let params = ExpandedInsertRecordParams {
+        body: &body.rest,
+        at,
+        event: Default::default(),
+        mode_version,
+    };
 
-        finished_impl(txn, redis_conn, params, &login, &map).await
-    })
-    .await?;
+    let res: pf::FinishedOutput = finished_impl(conn, redis_pool, params, &login, &map).await?;
 
     json(res.res)
 }

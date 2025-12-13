@@ -215,16 +215,7 @@ async fn overview(
         .await
         .with_api_err()?;
 
-    let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
-
-    let res = overview::overview(
-        &db.sql_conn,
-        &mut redis_conn,
-        &query.login,
-        &map,
-        Default::default(),
-    )
-    .await?;
+    let res = overview::overview(db.0, &query.login, &map, Default::default()).await?;
 
     utils::json(res)
 }

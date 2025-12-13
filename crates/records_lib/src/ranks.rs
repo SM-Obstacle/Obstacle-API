@@ -1,6 +1,6 @@
 //! Module which contains utility functions used to update maps leaderboards and get players ranks.
 
-use crate::{RedisConnection, error::RecordsResult, opt_event::OptEvent, redis_key::map_key};
+use crate::{RedisPool, error::RecordsResult, opt_event::OptEvent, redis_key::map_key};
 use deadpool_redis::redis::{self, AsyncCommands};
 use entity::{event_edition_records, records};
 use futures::TryStreamExt;
@@ -40,7 +40,7 @@ async fn count_records_map<C: ConnectionTrait>(
 /// It returns the number of records in the map.
 pub async fn update_leaderboard<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     map_id: u32,
     event: OptEvent<'_>,
 ) -> RecordsResult<u64> {
@@ -48,9 +48,11 @@ pub async fn update_leaderboard<C: ConnectionTrait + StreamTrait>(
 
     let key = map_key(map_id, event);
 
+    let mut redis_conn = redis_pool.get().await?;
     let redis_count: u64 = redis_conn.zcount(key, "-inf", "+inf").await?;
+
     if redis_count != mysql_count {
-        force_update_locked(conn, redis_conn, map_id, event).await?;
+        force_update_locked(conn, redis_pool, map_id, event).await?;
     }
 
     Ok(mysql_count)
@@ -89,10 +91,12 @@ fn get_mariadb_lb_query(
 
 async fn force_update_locked<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     map_id: u32,
     event: OptEvent<'_>,
 ) -> RecordsResult<()> {
+    let mut redis_conn = redis_pool.get().await?;
+
     let mut pipe = redis::pipe();
     let pipe = pipe.atomic();
 
@@ -109,16 +113,22 @@ async fn force_update_locked<C: ConnectionTrait + StreamTrait>(
         .try_collect::<()>()
         .await?;
 
-    let _: () = pipe.query_async(redis_conn).await?;
+    let _: () = pipe.query_async(&mut redis_conn).await?;
 
     Ok(())
 }
 
-/// Gets the rank of a time in a map.
+/// Gets the rank of the time of a player on a map.
+///
+/// This function is concurrency-safe, so it guarantees that at the moment it is called, it returns
+/// the correct rank for the provided time. It also keeps the leaderboard unchanged.
+///
+/// However, it doesn't guarantee that the related ZSET of the map's leaderboard is synchronized
+/// with its SQL database version. For this, please use the [`update_leaderboard`] function.
 ///
 /// The ranking type is the standard competition ranking (1224).
 pub async fn get_rank(
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     map_id: u32,
     player_id: u32,
     time: i32,
@@ -126,20 +136,34 @@ pub async fn get_rank(
 ) -> RecordsResult<i32> {
     let key = map_key(map_id, event);
 
-    // We update the Redis leaderboard if it doesn't have the requested `time`, and keep
-    // track of the previous time if it's lower than ours.
-    let score: Option<i32> = redis_conn.zscore(&key, player_id).await?;
-    let newest_time = score.filter(|t| *t < time);
+    let mut redis_conn = redis_pool.get().await?;
 
-    let mut pipe = redis::pipe();
-    pipe.atomic()
-        .zadd(&key, player_id, time)
-        .ignore()
-        .zcount(&key, "-inf", time - 1);
-    if let Some(old_time) = newest_time {
-        pipe.zadd(&key, player_id, old_time).ignore();
+    // Loop until the commands response isn't null, meaning the watchpoint didn't trigger during the
+    // transaction, meaning it succeeded.
+    loop {
+        redis::cmd("WATCH")
+            .arg(&key)
+            .exec_async(&mut redis_conn)
+            .await?;
+
+        let score: Option<i32> = redis_conn.zscore(&key, player_id).await?;
+
+        let mut pipe = redis::pipe();
+        pipe.atomic()
+            .zadd(&key, player_id, time)
+            .ignore()
+            .zcount(&key, "-inf", time - 1);
+
+        // Restore the previous state
+        let _ = match score {
+            Some(old_time) => pipe.zadd(&key, player_id, old_time).ignore(),
+            None => pipe.zrem(&key, player_id).ignore(),
+        };
+
+        let response: Option<(i32,)> = pipe.query_async(&mut redis_conn).await?;
+
+        if let Some((count,)) = response {
+            return Ok(count + 1);
+        }
     }
-
-    let response: [i32; 1] = pipe.query_async(redis_conn).await?;
-    Ok(response[0] + 1)
 }

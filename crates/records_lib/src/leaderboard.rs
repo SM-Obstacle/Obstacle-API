@@ -7,9 +7,7 @@ use sea_orm::{
     QueryOrder as _, QuerySelect as _, QueryTrait as _, StreamTrait, prelude::Expr,
 };
 
-use crate::{
-    RedisConnection, error::RecordsResult, opt_event::OptEvent, ranks, redis_key::map_key,
-};
+use crate::{RedisPool, error::RecordsResult, opt_event::OptEvent, ranks, redis_key::map_key};
 
 /// The type returned by the [`compet_rank_by_key`](CompetRankingByKeyIter::compet_rank_by_key)
 /// method.
@@ -137,7 +135,7 @@ pub struct Row {
 /// Gets the leaderboard of a map and extends it to the provided vec.
 pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     map_id: u32,
     start: Option<i32>,
     end: Option<i32>,
@@ -146,9 +144,13 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
 ) -> RecordsResult<()> {
     let start = start.unwrap_or_default();
     let end = end.unwrap_or(-1);
-    let player_ids: Vec<i32> = redis_conn
-        .zrange(map_key(map_id, event), start as isize, end as isize)
-        .await?;
+
+    let player_ids: Vec<i32> = {
+        let mut redis_conn = redis_pool.get().await?;
+        redis_conn
+            .zrange(map_key(map_id, event), start as isize, end as isize)
+            .await?
+    };
 
     if player_ids.is_empty() {
         return Ok(());
@@ -184,7 +186,7 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
 
     for r in result {
         rows.push(Row {
-            rank: ranks::get_rank(redis_conn, map_id, r.player_id, r.time, event).await?,
+            rank: ranks::get_rank(redis_pool, map_id, r.player_id, r.time, event).await?,
             login: r.login,
             nickname: r.nickname,
             time: r.time,
@@ -197,13 +199,13 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
 /// Returns the leaderboard of a map.
 pub async fn leaderboard<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     map_id: u32,
     start: Option<i32>,
     end: Option<i32>,
     event: OptEvent<'_>,
 ) -> RecordsResult<Vec<Row>> {
     let mut out = Vec::new();
-    leaderboard_into(conn, redis_conn, map_id, start, end, &mut out, event).await?;
+    leaderboard_into(conn, redis_pool, map_id, start, end, &mut out, event).await?;
     Ok(out)
 }
