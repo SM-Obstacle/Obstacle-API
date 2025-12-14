@@ -14,8 +14,8 @@ use records_lib::{
     mappack::{self, AnyMappackId},
     must,
     redis_key::{cached_key, mappack_key},
+    sync,
     time::Time,
-    transaction,
 };
 use sea_orm::{
     ActiveValue::{NotSet, Set},
@@ -234,7 +234,7 @@ async fn run_populate<C: TransactionTrait + ConnectionTrait>(
             .await?;
     }
 
-    match transaction::within(conn, async |txn| {
+    match sync::transaction(conn, async |txn| {
         tracing::info!("Clearing old content");
         clear::clear_content(txn, redis_conn, event, edition).await?;
 
@@ -306,7 +306,7 @@ pub async fn populate(
     tracing::info!("Filling mappack in the Redis database...");
     mappack::update_mappack(
         &db.sql_conn,
-        &mut redis_conn,
+        &db.redis_pool,
         AnyMappackId::Event(&event, &edition),
         Default::default(),
     )

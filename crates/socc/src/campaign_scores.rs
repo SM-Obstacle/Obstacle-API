@@ -1,25 +1,25 @@
 use deadpool_redis::redis::{self, AsyncCommands};
 use records_lib::{
-    Database, RedisConnection, event,
+    Database, RedisPool, event,
     mappack::{self, AnyMappackId},
     opt_event::OptEvent,
     redis_key::{mappack_key, mappacks_key},
 };
 use sea_orm::{ConnectionTrait, StreamTrait, TransactionTrait};
 
-#[tracing::instrument(skip(conn, redis_conn), fields(mappack = %mappack.mappack_id()))]
+#[tracing::instrument(skip(conn, redis_pool), fields(mappack = %mappack.mappack_id()))]
 async fn update_mappack<C: TransactionTrait + Sync>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     mappack: AnyMappackId<'_>,
     event: OptEvent<'_>,
 ) -> anyhow::Result<()> {
-    let rows = mappack::update_mappack(conn, redis_conn, mappack, event).await?;
+    let rows = mappack::update_mappack(conn, redis_pool, mappack, event).await?;
     tracing::info!("Rows: {rows}");
     Ok(())
 }
 
-async fn update_event_mappacks<C>(conn: &C, redis_conn: &mut RedisConnection) -> anyhow::Result<()>
+async fn update_event_mappacks<C>(conn: &C, redis_pool: &RedisPool) -> anyhow::Result<()>
 where
     C: ConnectionTrait + StreamTrait + TransactionTrait + Sync,
 {
@@ -35,7 +35,7 @@ where
             let mappack = AnyMappackId::Event(&event.event, &edition);
 
             let mut pipe = redis::pipe();
-            let pipe = pipe.atomic();
+            pipe.atomic();
 
             pipe.del(mappack_key(mappack));
 
@@ -43,11 +43,14 @@ where
                 pipe.sadd(mappack_key(mappack), map.game_id);
             }
 
-            pipe.exec_async(redis_conn).await?;
+            {
+                let mut redis_conn = redis_pool.get().await?;
+                pipe.exec_async(&mut redis_conn).await?;
+            }
 
             update_mappack(
                 conn,
-                redis_conn,
+                redis_pool,
                 mappack,
                 OptEvent::new(&event.event, &edition),
             )
@@ -59,16 +62,17 @@ where
 }
 
 pub async fn update(db: Database) -> anyhow::Result<()> {
-    let mut redis_conn = db.redis_pool.get().await?;
+    update_event_mappacks(&db.sql_conn, &db.redis_pool).await?;
 
-    update_event_mappacks(&db.sql_conn, &mut redis_conn).await?;
-
-    let mappacks: Vec<String> = redis_conn.smembers(mappacks_key()).await?;
+    let mappacks: Vec<String> = {
+        let mut redis_conn = db.redis_pool.get().await?;
+        redis_conn.smembers(mappacks_key()).await?
+    };
 
     for mappack_id in mappacks {
         update_mappack(
             &db.sql_conn,
-            &mut redis_conn,
+            &db.redis_pool,
             AnyMappackId::Id(&mappack_id),
             Default::default(),
         )

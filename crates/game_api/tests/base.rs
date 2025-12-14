@@ -195,7 +195,10 @@ where
                 Ok(out)
             }
             other => {
-                println!("Test failed, leaving database {db_name} as-is");
+                println!(
+                    "Test failed, leaving database {db_name} as-is. \
+                    Run with cfg `test_force_db_deletion` to drop the database everytime."
+                );
                 match other {
                     Ok(Err(e)) => Err(e),
                     Err(e) => panic::resume_unwind(e),

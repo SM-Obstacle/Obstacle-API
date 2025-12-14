@@ -7,11 +7,11 @@ use async_graphql::{
 use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
 use entity::{event as event_entity, event_edition, global_records, maps, players, records};
 use records_lib::{
-    Database, RedisConnection, internal, must,
+    Database, RedisConnection, RedisPool, internal, must,
     opt_event::OptEvent,
-    ranks::get_rank,
+    ranks,
     redis_key::{map_ranking, player_ranking},
-    transaction,
+    sync,
 };
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, JoinType, Order, QueryFilter as _,
@@ -46,7 +46,7 @@ pub struct QueryRoot;
 
 async fn get_record<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     record_id: u32,
     event: OptEvent<'_>,
 ) -> GqlResult<RankedRecord> {
@@ -56,9 +56,11 @@ async fn get_record<C: ConnectionTrait + StreamTrait>(
         return Err(ApiGqlError::from_record_not_found_error(record_id));
     };
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     let out = records::RankedRecord {
-        rank: get_rank(
-            redis_conn,
+        rank: ranks::get_rank_in_session(
+            &mut ranking_session,
             record.map_id,
             record.record_player_id,
             record.time,
@@ -74,7 +76,7 @@ async fn get_record<C: ConnectionTrait + StreamTrait>(
 
 async fn get_records<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     date_sort_by: Option<SortState>,
     event: OptEvent<'_>,
 ) -> GqlResult<Vec<RankedRecord>> {
@@ -92,9 +94,11 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for record in records {
-        let rank = get_rank(
-            redis_conn,
+        let rank = ranks::get_rank_in_session(
+            &mut ranking_session,
             record.map_id,
             record.record_player_id,
             record.time,
@@ -116,7 +120,7 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
 
 async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     ConnectionParameters {
         after,
         before,
@@ -295,9 +299,11 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
     let mut connection = connection::Connection::new(has_previous_page, records.len() > limit);
     connection.edges.reserve(records.len());
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for record in records.into_iter().take(limit) {
-        let rank = get_rank(
-            redis_conn,
+        let rank = ranks::get_rank_in_session(
+            &mut ranking_session,
             record.map_id,
             record.record_player_id,
             record.time,
@@ -386,10 +392,9 @@ impl QueryRoot {
     ) -> GqlResult<RankedRecord> {
         let db = ctx.data_unchecked::<Database>();
         let conn = ctx.data_unchecked::<DbConn>();
-        let mut redis_conn = db.redis_pool.get().await?;
 
-        transaction::within(conn, async |txn| {
-            get_record(txn, &mut redis_conn, record_id, Default::default()).await
+        sync::transaction(conn, async |txn| {
+            get_record(txn, &db.redis_pool, record_id, Default::default()).await
         })
         .await
     }
@@ -424,10 +429,9 @@ impl QueryRoot {
     ) -> GqlResult<Vec<RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let conn = ctx.data_unchecked::<DbConn>();
-        let mut redis_conn = db.redis_pool.get().await?;
 
-        transaction::within(conn, async |txn| {
-            get_records(txn, &mut redis_conn, date_sort_by, Default::default()).await
+        sync::transaction(conn, async |txn| {
+            get_records(txn, &db.redis_pool, date_sort_by, Default::default()).await
         })
         .await
     }
@@ -519,9 +523,8 @@ impl QueryRoot {
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
         let conn = ctx.data_unchecked::<DbConn>();
-        let mut redis_conn = db.redis_pool.get().await?;
 
-        transaction::within(conn, async |txn| {
+        sync::transaction(conn, async |txn| {
             connection::query(
                 after,
                 before,
@@ -530,7 +533,7 @@ impl QueryRoot {
                 |after, before, first, last| async move {
                     get_records_connection(
                         txn,
-                        &mut redis_conn,
+                        &db.redis_pool,
                         ConnectionParameters {
                             after,
                             before,

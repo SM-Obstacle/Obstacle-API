@@ -2,7 +2,7 @@
 
 use std::{fmt, time::SystemTime};
 
-use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
+use deadpool_redis::redis::{self, AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
 use entity::{event, event_edition, global_event_records, global_records, players, records};
 use sea_orm::{
     ConnectionTrait, FromQueryResult, Order, StreamTrait, TransactionTrait,
@@ -11,17 +11,17 @@ use sea_orm::{
 };
 
 use crate::{
-    RedisConnection,
+    RedisPool,
     error::RecordsResult,
     internal, must,
     opt_event::OptEvent,
-    ranks::get_rank,
+    ranks,
     redis_key::{
         mappack_key, mappack_lb_key, mappack_map_last_rank, mappack_nb_map_key,
         mappack_player_map_finished_key, mappack_player_rank_avg_key, mappack_player_ranks_key,
         mappack_player_worst_rank_key, mappack_time_key, mappacks_key,
     },
-    transaction,
+    sync,
 };
 
 #[derive(Default, Clone, Debug)]
@@ -140,18 +140,21 @@ impl AnyMappackId<'_> {
 /// on the Redis database.
 #[cfg_attr(
     feature = "tracing",
-    tracing::instrument(skip(conn, redis_conn), fields(mappack = %mappack.mappack_id()), err)
+    tracing::instrument(skip(conn, redis_pool), fields(mappack = %mappack.mappack_id()), err)
 )]
 pub async fn update_mappack<C: TransactionTrait + Sync>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     mappack: AnyMappackId<'_>,
     event: OptEvent<'_>,
 ) -> RecordsResult<usize> {
     // Calculate the scores
-    let scores = crate::assert_future_send(transaction::within(conn, async |txn| {
-        calc_scores(txn, redis_conn, mappack, event).await
-    }))
+    let scores = crate::assert_future_send(sync::transaction_with_config(
+        conn,
+        Some(sea_orm::IsolationLevel::RepeatableRead),
+        Some(sea_orm::AccessMode::ReadOnly),
+        async |txn| calc_scores(txn, redis_pool, mappack, event).await,
+    ))
     .await?;
 
     // Early return if the mappack has expired
@@ -162,10 +165,12 @@ pub async fn update_mappack<C: TransactionTrait + Sync>(
     let total_scores = scores.scores.len();
 
     // Then save them to the Redis database for cache-handling
-    save(mappack, scores, redis_conn).await?;
+    save(mappack, scores, redis_pool).await?;
 
     // And we save it to the registered mappacks set.
     if mappack.has_ttl() {
+        let mut redis_conn = redis_pool.get().await?;
+
         // The mappack has a TTL, so its member will be removed from the set when
         // attempting to retrieve its maps.
         let _: () = redis_conn
@@ -176,26 +181,29 @@ pub async fn update_mappack<C: TransactionTrait + Sync>(
     Ok(total_scores)
 }
 
-#[cfg_attr(feature = "tracing", tracing::instrument(skip(scores, redis_conn)))]
+#[cfg_attr(feature = "tracing", tracing::instrument(skip(scores, redis_pool)))]
 async fn save(
     mappack: AnyMappackId<'_>,
     scores: MappackScores,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
 ) -> RecordsResult<()> {
     // Here, we control all the Redis keys related to mappacks except `mappack_key`,
     // because this one is set only once.
+
+    let mut pipe = redis::pipe();
+    pipe.atomic();
 
     let set_options = SetOptions::default();
     let set_options = match mappack.get_ttl() {
         Some(ex) => {
             // Update expiration time of the mappack's maps set by the way
-            let _: () = redis_conn.expire(mappack_key(mappack), ex).await?;
+            pipe.expire(mappack_key(mappack), ex).ignore();
 
             set_options.with_expiration(SetExpiry::EX(ex as _))
         }
         None => {
             // Persist the mappack's maps set by the way
-            let _: () = redis_conn.persist(mappack_key(mappack)).await?;
+            pipe.persist(mappack_key(mappack)).ignore();
 
             set_options
         }
@@ -203,70 +211,62 @@ async fn save(
 
     // --- Save the number of maps of the campaign
 
-    let _: () = redis_conn
-        .set_options(mappack_nb_map_key(mappack), scores.maps.len(), set_options)
-        .await?;
+    pipe.set_options(mappack_nb_map_key(mappack), scores.maps.len(), set_options)
+        .ignore();
 
     for map in &scores.maps {
         // --- Save the last rank on each map
 
-        let _: () = redis_conn
-            .set_options(
-                mappack_map_last_rank(mappack, &map.map_id),
-                map.last_rank,
-                set_options,
-            )
-            .await?;
+        pipe.set_options(
+            mappack_map_last_rank(mappack, &map.map_id),
+            map.last_rank,
+            set_options,
+        )
+        .ignore();
 
         if !mappack.has_ttl() {
-            let _: () = redis_conn
-                .persist(mappack_map_last_rank(mappack, &map.map_id))
-                .await?;
+            pipe.persist(mappack_map_last_rank(mappack, &map.map_id))
+                .ignore();
         }
     }
 
-    let _: () = redis_conn.del(mappack_lb_key(mappack)).await?;
+    pipe.del(mappack_lb_key(mappack)).ignore();
 
     for score in scores.scores {
-        let _: () = redis_conn
-            .zadd(mappack_lb_key(mappack), score.player_id, score.rank)
-            .await?;
+        pipe.zadd(mappack_lb_key(mappack), score.player_id, score.rank)
+            .ignore();
 
         // --- Save the rank average
 
         let rank_avg = ((score.score + f64::EPSILON) * 100.).round() / 100.;
 
-        let _: () = redis_conn
-            .set_options(
-                mappack_player_rank_avg_key(mappack, score.player_id),
-                rank_avg,
-                set_options,
-            )
-            .await?;
+        pipe.set_options(
+            mappack_player_rank_avg_key(mappack, score.player_id),
+            rank_avg,
+            set_options,
+        )
+        .ignore();
 
         // --- Save the amount of finished map
 
-        let _: () = redis_conn
-            .set_options(
-                mappack_player_map_finished_key(mappack, score.player_id),
-                score.maps_finished,
-                set_options,
-            )
-            .await?;
+        pipe.set_options(
+            mappack_player_map_finished_key(mappack, score.player_id),
+            score.maps_finished,
+            set_options,
+        )
+        .ignore();
 
         // --- Save their worst rank
 
-        let _: () = redis_conn
-            .set_options(
-                mappack_player_worst_rank_key(mappack, score.player_id),
-                score.worst.rank,
-                set_options,
-            )
-            .await?;
+        pipe.set_options(
+            mappack_player_worst_rank_key(mappack, score.player_id),
+            score.worst.rank,
+            set_options,
+        )
+        .ignore();
 
-        let _: () = redis_conn
-            .del(mappack_player_ranks_key(mappack, score.player_id))
-            .await?;
+        pipe.del(mappack_player_ranks_key(mappack, score.player_id))
+            .ignore();
 
         for (game_id, rank) in score
             .ranks
@@ -275,32 +275,26 @@ async fn save(
         {
             // --- Save their rank on each map
 
-            let _: () = redis_conn
-                .zadd(
-                    mappack_player_ranks_key(mappack, score.player_id),
-                    game_id,
-                    rank,
-                )
-                .await?;
+            pipe.zadd(
+                mappack_player_ranks_key(mappack, score.player_id),
+                game_id,
+                rank,
+            )
+            .ignore();
         }
 
         if let Some(ttl) = mappack.get_ttl() {
-            let _: () = redis_conn
-                .expire(mappack_player_ranks_key(mappack, score.player_id), ttl)
-                .await?;
+            pipe.expire(mappack_player_ranks_key(mappack, score.player_id), ttl)
+                .ignore();
         } else {
-            let _: () = redis_conn
-                .persist(mappack_player_ranks_key(mappack, score.player_id))
-                .await?;
-            let _: () = redis_conn
-                .persist(mappack_player_rank_avg_key(mappack, score.player_id))
-                .await?;
-            let _: () = redis_conn
-                .persist(mappack_player_map_finished_key(mappack, score.player_id))
-                .await?;
-            let _: () = redis_conn
-                .persist(mappack_player_worst_rank_key(mappack, score.player_id))
-                .await?;
+            pipe.persist(mappack_player_ranks_key(mappack, score.player_id))
+                .ignore();
+            pipe.persist(mappack_player_rank_avg_key(mappack, score.player_id))
+                .ignore();
+            pipe.persist(mappack_player_map_finished_key(mappack, score.player_id))
+                .ignore();
+            pipe.persist(mappack_player_worst_rank_key(mappack, score.player_id))
+                .ignore();
         }
     }
 
@@ -308,19 +302,21 @@ async fn save(
     let update_time = SystemTime::UNIX_EPOCH.elapsed().map_err(|e| {
         internal!("Failed to get elapsed time since UNIX_EPOCH for mappack update: {e}")
     })?;
-    let _: () = redis_conn
-        .set(mappack_time_key(mappack), update_time.as_secs())
-        .await?;
+    pipe.set(mappack_time_key(mappack), update_time.as_secs())
+        .ignore();
 
     // Update the expiration time of the global keys
     if let Some(ttl) = mappack.get_ttl() {
-        let _: () = redis_conn.expire(mappack_time_key(mappack), ttl).await?;
-        let _: () = redis_conn.expire(mappack_lb_key(mappack), ttl).await?;
+        pipe.expire(mappack_time_key(mappack), ttl).ignore();
+        pipe.expire(mappack_lb_key(mappack), ttl).ignore();
     } else {
-        let _: () = redis_conn.persist(mappack_time_key(mappack)).await?;
-        let _: () = redis_conn.persist(mappack_lb_key(mappack)).await?;
-        let _: () = redis_conn.persist(mappack_nb_map_key(mappack)).await?;
+        pipe.persist(mappack_time_key(mappack)).ignore();
+        pipe.persist(mappack_lb_key(mappack)).ignore();
+        pipe.persist(mappack_nb_map_key(mappack)).ignore();
     }
+
+    let mut redis_conn = redis_pool.get().await?;
+    pipe.exec_async(&mut redis_conn).await?;
 
     Ok(())
 }
@@ -328,14 +324,16 @@ async fn save(
 /// Returns an `Option` because the mappack may have expired.
 #[cfg_attr(
     feature = "tracing",
-    tracing::instrument(skip(conn, redis_conn), fields(mappack = %mappack.mappack_id()))
+    tracing::instrument(skip(conn, redis_pool), fields(mappack = %mappack.mappack_id()))
 )]
 async fn calc_scores<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     mappack: AnyMappackId<'_>,
     event: OptEvent<'_>,
 ) -> RecordsResult<Option<MappackScores>> {
+    let mut redis_conn = redis_pool.get().await?;
+
     let mappack_key = mappack_key(mappack);
     let mappack_uids: Vec<String> = redis_conn.smembers(&mappack_key).await?;
 
@@ -366,6 +364,8 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
     };
 
     let mut scores = Vec::<PlayerScore>::with_capacity(mappack.len());
+
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
 
     for (i, map) in mappack.iter().enumerate() {
         let mut query = Query::select();
@@ -420,8 +420,8 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
             }
 
             let record = RankedRecordRow {
-                rank: get_rank(
-                    redis_conn,
+                rank: ranks::get_rank_in_session(
+                    &mut ranking_session,
                     map.id,
                     record.record.record_player_id,
                     record.record.time,

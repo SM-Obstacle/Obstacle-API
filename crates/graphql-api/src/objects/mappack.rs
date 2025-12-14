@@ -1,8 +1,8 @@
 use std::time::SystemTime;
 
-use deadpool_redis::redis::AsyncCommands as _;
+use deadpool_redis::redis::{self, AsyncCommands as _};
 use records_lib::{
-    Database, RedisConnection, RedisPool,
+    Database, RedisPool,
     error::{RecordsError, RecordsResult},
     internal, map,
     mappack::{AnyMappackId, update_mappack},
@@ -26,7 +26,7 @@ struct MXMappackInfoResponse {
 
 async fn fill_mappack<C: ConnectionTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     client: &reqwest::Client,
     mappack: AnyMappackId<'_>,
     mappack_id: u32,
@@ -49,29 +49,29 @@ async fn fill_mappack<C: ConnectionTrait>(
     let (maps, info) = tokio::join!(maps, info);
     let (maps, info) = (maps?, info?);
 
+    let mut pipe = redis::pipe();
+    pipe.atomic();
+
     for mx_map in maps {
         // We check that the map exists in our database
         let _ = must::have_map(conn, &mx_map.TrackUID).await?;
-        let _: () = redis_conn
-            .sadd(mappack_key(mappack), mx_map.TrackUID)
-            .await?;
+        pipe.sadd(mappack_key(mappack), mx_map.TrackUID).ignore();
     }
 
     // --------
     // These keys would probably be null for some mappacks, because they would belong
     // to an event edition, so these info would be retrieved from our information system.
 
-    let _: () = redis_conn
-        .set(mappack_mx_username_key(mappack), info.Username)
-        .await?;
+    pipe.set(mappack_mx_username_key(mappack), info.Username)
+        .ignore();
 
-    let _: () = redis_conn
-        .set(mappack_mx_name_key(mappack), info.Name)
-        .await?;
+    pipe.set(mappack_mx_name_key(mappack), info.Name).ignore();
 
-    let _: () = redis_conn
-        .set(mappack_mx_created_key(mappack), info.Created)
-        .await?;
+    pipe.set(mappack_mx_created_key(mappack), info.Created)
+        .ignore();
+
+    let mut redis_conn = redis_pool.get().await?;
+    pipe.exec_async(&mut redis_conn).await?;
 
     Ok(())
 }
@@ -207,12 +207,13 @@ pub async fn get_mappack(
     mappack_id: String,
 ) -> RecordsResult<Mappack> {
     let db = ctx.data_unchecked::<Database>();
-    let conn = ctx.data_unchecked::<DbConn>();
-    let mut redis_conn = db.redis_pool.get().await?;
 
     let mappack = AnyMappackId::Id(&mappack_id);
 
-    let mappack_uids: Vec<String> = redis_conn.smembers(mappack_key(mappack)).await?;
+    let mappack_uids: Vec<String> = {
+        let mut redis_conn = db.redis_pool.get().await?;
+        redis_conn.smembers(mappack_key(mappack)).await?
+    };
 
     // We load the campaign, and update it, before retrieving the scores from it
     if mappack_uids.is_empty() {
@@ -223,12 +224,19 @@ pub async fn get_mappack(
         let client = ctx.data_unchecked::<reqwest::Client>();
 
         // We fill the mappack
-        fill_mappack(conn, &mut redis_conn, client, mappack, mappack_id_int).await?;
+        fill_mappack(
+            &db.sql_conn,
+            &db.redis_pool,
+            client,
+            mappack,
+            mappack_id_int,
+        )
+        .await?;
 
         // And we update it to have its scores cached
         update_mappack(
-            conn,
-            &mut redis_conn,
+            &db.sql_conn,
+            &db.redis_pool,
             AnyMappackId::Id(&mappack_id),
             Default::default(),
         )

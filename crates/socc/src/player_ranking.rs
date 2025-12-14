@@ -3,19 +3,24 @@ use chrono::{DateTime, Utc};
 use deadpool_redis::redis;
 use player_map_ranking::compute_scores;
 use records_lib::{
-    Database, RedisConnection,
+    Database, RedisPool,
     redis_key::{map_ranking, player_ranking},
 };
 use sea_orm::ConnectionTrait;
 
 async fn do_update<C: ConnectionTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     from: Option<DateTime<Utc>>,
 ) -> anyhow::Result<()> {
     let scores = compute_scores(conn, from)
         .await
         .context("couldn't compute the scores")?;
+
+    let mut redis_conn = redis_pool
+        .get()
+        .await
+        .context("couldn't get redis connection")?;
 
     let mut pipe = redis::pipe();
     let pipe = pipe.atomic();
@@ -26,7 +31,7 @@ async fn do_update<C: ConnectionTrait>(
     for (map, score) in scores.map_scores {
         pipe.zadd(map_ranking(), map.inner.id, score);
     }
-    pipe.exec_async(redis_conn)
+    pipe.exec_async(&mut redis_conn)
         .await
         .context("couldn't save scores to Redis")?;
 
@@ -34,13 +39,7 @@ async fn do_update<C: ConnectionTrait>(
 }
 
 pub async fn update(db: Database, from: Option<DateTime<Utc>>) -> anyhow::Result<()> {
-    let mut redis_conn = db
-        .redis_pool
-        .get()
-        .await
-        .context("couldn't get redis connection")?;
-
-    do_update(&db.sql_conn, &mut redis_conn, from).await?;
+    do_update(&db.sql_conn, &db.redis_pool, from).await?;
 
     tracing::info!("Player and map ranking update completed");
 

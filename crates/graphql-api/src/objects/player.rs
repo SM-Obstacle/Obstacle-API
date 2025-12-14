@@ -1,10 +1,8 @@
 use async_graphql::connection::CursorType as _;
 use async_graphql::{Enum, ID, connection};
 use entity::{global_records, maps, players, records, role};
-use records_lib::{
-    RedisConnection, RedisPool, error::RecordsError, internal, opt_event::OptEvent,
-    ranks::get_rank, transaction,
-};
+use records_lib::{Database, ranks};
+use records_lib::{RedisPool, error::RecordsError, internal, opt_event::OptEvent, sync};
 use sea_orm::Order;
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, JoinType,
@@ -93,13 +91,12 @@ impl Player {
         ctx: &async_graphql::Context<'_>,
         date_sort_by: Option<SortState>,
     ) -> GqlResult<Vec<RankedRecord>> {
-        let conn = ctx.data_unchecked::<DbConn>();
-        let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
+        let db = ctx.data_unchecked::<Database>();
 
-        records_lib::assert_future_send(transaction::within(conn, async |txn| {
+        records_lib::assert_future_send(sync::transaction(&db.sql_conn, async |txn| {
             get_player_records(
                 txn,
-                &mut redis_conn,
+                &db.redis_pool,
                 self.inner.id,
                 Default::default(),
                 date_sort_by,
@@ -122,10 +119,9 @@ impl Player {
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
         filter: Option<RecordsFilter>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
-        let conn = ctx.data_unchecked::<DbConn>();
-        let mut redis_conn = ctx.data_unchecked::<RedisPool>().get().await?;
+        let db = ctx.data_unchecked::<Database>();
 
-        records_lib::assert_future_send(transaction::within(conn, async |txn| {
+        records_lib::assert_future_send(sync::transaction(&db.sql_conn, async |txn| {
             connection::query(
                 after,
                 before,
@@ -134,7 +130,7 @@ impl Player {
                 |after, before, first, last| async move {
                     get_player_records_connection(
                         txn,
-                        &mut redis_conn,
+                        &db.redis_pool,
                         self.inner.id,
                         Default::default(),
                         ConnectionParameters {
@@ -157,7 +153,7 @@ impl Player {
 
 async fn get_player_records<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     player_id: u32,
     event: OptEvent<'_>,
     date_sort_by: Option<SortState>,
@@ -179,9 +175,11 @@ async fn get_player_records<C: ConnectionTrait + StreamTrait>(
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for record in records {
-        let rank = get_rank(
-            redis_conn,
+        let rank = ranks::get_rank_in_session(
+            &mut ranking_session,
             record.map_id,
             record.record_player_id,
             record.time,
@@ -203,7 +201,7 @@ async fn get_player_records<C: ConnectionTrait + StreamTrait>(
 
 async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     player_id: u32,
     event: OptEvent<'_>,
     ConnectionParameters {
@@ -332,9 +330,11 @@ async fn get_player_records_connection<C: ConnectionTrait + StreamTrait>(
 
     let mut connection = connection::Connection::new(has_previous_page, records.len() > limit);
 
+    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+
     for record in records.into_iter().take(limit) {
-        let rank = get_rank(
-            redis_conn,
+        let rank = ranks::get_rank_in_session(
+            &mut ranking_session,
             record.map_id,
             record.record_player_id,
             record.time,

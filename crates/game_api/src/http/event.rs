@@ -4,6 +4,7 @@ use actix_web::{
     Responder, Scope,
     web::{self, Path},
 };
+use deadpool_redis::redis::AsyncCommands as _;
 use entity::{
     event_edition, event_edition_maps, event_edition_records, global_event_records, global_records,
     in_game_event_edition_params, maps, players, records,
@@ -12,16 +13,18 @@ use entity::{
 use futures::TryStreamExt;
 use itertools::Itertools;
 use records_lib::{
-    Database, Expirable as _, NullableInteger, NullableReal, NullableText, RedisConnection,
+    Database, Expirable as _, NullableInteger, NullableReal, NullableText, RedisPool,
     error::RecordsError,
     event::{self, EventMap},
     opt_event::OptEvent,
-    player, transaction,
+    player,
+    redis_key::alone_map_key,
+    sync,
 };
 use sea_orm::{
     ActiveValue::Set,
     ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
-    QuerySelect, QueryTrait as _, RelationTrait as _, StreamTrait,
+    QuerySelect, QueryTrait as _, RelationTrait as _, TransactionTrait,
     prelude::Expr,
     sea_query::{Asterisk, Func, Query},
 };
@@ -771,8 +774,6 @@ async fn edition_overview(
     path: Path<(String, u32)>,
     query: overview::OverviewReq,
 ) -> RecordsResult<impl Responder> {
-    let mut redis_conn = db.0.redis_pool.get().await.with_api_err()?;
-
     let (event, edition) = path.into_inner();
 
     let (event, edition, EventMap { map, .. }) = records_lib::must::have_event_edition_with_map(
@@ -788,14 +789,7 @@ async fn edition_overview(
         return Err(ApiErrorKind::EventHasExpired(event.handle, edition.id));
     }
 
-    let res = overview::overview(
-        &db.sql_conn,
-        &mut redis_conn,
-        &query.login,
-        &map,
-        OptEvent::new(&event, &edition),
-    )
-    .await?;
+    let res = overview::overview(db.0, &query.login, &map, OptEvent::new(&event, &edition)).await?;
 
     utils::json(res)
 }
@@ -822,26 +816,25 @@ async fn edition_finished(
 struct EditionFinishedParams<'a> {
     player_login: &'a str,
     map: &'a maps::Model,
-    event_id: u32,
-    edition_id: u32,
     original_map_id: Option<u32>,
     inner_params: ExpandedInsertRecordParams<'a>,
 }
 
-async fn edition_finished_impl<C: ConnectionTrait + StreamTrait>(
+async fn edition_finished_impl<C>(
     conn: &C,
-    redis_conn: &mut RedisConnection,
+    redis_pool: &RedisPool,
     EditionFinishedParams {
         player_login,
         map,
-        event_id,
-        edition_id,
         original_map_id,
         inner_params: params,
     }: EditionFinishedParams<'_>,
-) -> RecordsResult<pf::FinishedOutput> {
-    // Then we insert the record for the global records
-    let res = pf::finished(conn, redis_conn, params, player_login, map).await?;
+) -> RecordsResult<pf::FinishedOutput>
+where
+    C: ConnectionTrait + TransactionTrait,
+{
+    // We insert the record for the global records
+    let res = pf::finished(conn, redis_pool, params, player_login, map).await?;
 
     if let Some(original_map_id) = original_map_id {
         // Get the previous time of the player on the original map to check if it's a PB
@@ -852,24 +845,37 @@ async fn edition_finished_impl<C: ConnectionTrait + StreamTrait>(
         let is_pb =
             time_on_previous.is_none() || time_on_previous.is_some_and(|t| t > params.body.time);
 
-        // Here, we don't provide the event instances, because we don't want to save in event mode.
-        pf::insert_record(
-            conn,
-            redis_conn,
-            ExpandedInsertRecordParams {
-                event: Default::default(),
-                ..params
-            },
-            original_map_id,
-            res.player_id,
-            Some(res.record_id),
-            is_pb,
-        )
+        sync::transaction(conn, async |txn| {
+            // Here, we don't provide the event instances, because we don't want to save in event mode.
+            pf::insert_record(
+                txn,
+                ExpandedInsertRecordParams {
+                    event: Default::default(),
+                    ..params
+                },
+                original_map_id,
+                res.player_id,
+                Some(res.record_id),
+            )
+            .await
+        })
         .await?;
-    }
 
-    // Then we insert it for the event edition records.
-    insert_event_record(conn, res.record_id, event_id, edition_id).await?;
+        // Update the rank on the original map
+        if is_pb {
+            let _: () = redis_pool
+                .get()
+                .await
+                .with_api_err()?
+                .zadd(
+                    alone_map_key(original_map_id),
+                    res.player_id,
+                    params.body.time,
+                )
+                .await
+                .with_api_err()?;
+        }
+    }
 
     Ok(res)
 }
@@ -901,19 +907,11 @@ pub async fn edition_finished_at(
     )
     .await?;
 
-    let mut redis_conn = db.0.redis_pool.get().await.with_api_err()?;
-
     // The edition is transparent, so we save the record for the map directly.
     if edition.is_transparent != 0 {
-        let res = super::player::finished_at(
-            &db.sql_conn,
-            &mut redis_conn,
-            mode_version,
-            login,
-            body,
-            at,
-        )
-        .await?;
+        let res =
+            super::player::finished_at(&db.sql_conn, &db.redis_pool, mode_version, login, body, at)
+                .await?;
         return Ok(utils::Either::Left(res));
     }
 
@@ -923,24 +921,19 @@ pub async fn edition_finished_at(
         return Err(ApiErrorKind::EventHasExpired(event.handle, edition.id));
     }
 
-    let res: pf::FinishedOutput = transaction::within(&db.sql_conn, async |txn| {
-        let params = EditionFinishedParams {
-            player_login: &login,
-            map: &map,
-            event_id: event.id,
-            edition_id: edition.id,
-            original_map_id,
-            inner_params: ExpandedInsertRecordParams {
-                body: &body.rest,
-                at,
-                event: OptEvent::new(&event, &edition),
-                mode_version,
-            },
-        };
+    let params = EditionFinishedParams {
+        player_login: &login,
+        map: &map,
+        original_map_id,
+        inner_params: ExpandedInsertRecordParams {
+            body: &body.rest,
+            at,
+            event: OptEvent::new(&event, &edition),
+            mode_version,
+        },
+    };
 
-        edition_finished_impl(txn, &mut redis_conn, params).await
-    })
-    .await?;
+    let res = edition_finished_impl(&db.sql_conn, &db.redis_pool, params).await?;
 
     json(res.res).map(utils::Either::Right)
 }

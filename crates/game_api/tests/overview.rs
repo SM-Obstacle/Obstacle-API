@@ -78,7 +78,7 @@ fn player_id_to_row(player_id: i32) -> Row {
 }
 
 async fn insert_sample_map<C: ConnectionTrait>(conn: &C) -> anyhow::Result<u32> {
-    let map_id = rand::random_range(..1000);
+    let map_id = rand::random_range(..100000);
 
     maps::Entity::insert(maps::ActiveModel {
         id: Set(map_id),
@@ -448,8 +448,8 @@ async fn overview_event_version_map_non_empty() -> anyhow::Result<()> {
         .await
         .context("couldn't insert players")?;
 
-        let map_id = rand::random_range(1..=100);
-        let event_map_id = rand::random_range(1..=100);
+        let map_id = rand::random_range(1..=100000);
+        let event_map_id = rand::random_range(1..=100000);
 
         let map = maps::ActiveModel {
             id: Set(map_id),
