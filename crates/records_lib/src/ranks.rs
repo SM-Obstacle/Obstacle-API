@@ -1,7 +1,11 @@
 //! Module which contains utility functions used to update maps leaderboards and get players ranks.
 
 use crate::{
-    RedisConnection, RedisPool, error::RecordsResult, opt_event::OptEvent, redis_key::map_key,
+    RedisConnection, RedisPool,
+    error::RecordsResult,
+    internal,
+    opt_event::OptEvent,
+    redis_key::{MapKey, map_key},
 };
 use deadpool_redis::{
     PoolError,
@@ -140,6 +144,31 @@ impl RankingSession {
     }
 }
 
+async fn get_rank_impl(
+    redis_conn: &mut RedisConnection,
+    key: &MapKey<'_>,
+    player_id: u32,
+    time: i32,
+) -> RecordsResult<Option<i32>> {
+    let score: Option<i32> = redis_conn.zscore(key, player_id).await?;
+
+    let mut pipe = redis::pipe();
+    pipe.atomic()
+        .zadd(key, player_id, time)
+        .ignore()
+        .zcount(key, "-inf", time - 1);
+
+    // Restore the previous state
+    let _ = match score {
+        Some(old_time) => pipe.zadd(key, player_id, old_time).ignore(),
+        None => pipe.zrem(key, player_id).ignore(),
+    };
+
+    let response: Option<(i32,)> = pipe.query_async(redis_conn).await?;
+
+    Ok(response.map(|(t,)| t + 1))
+}
+
 /// Gets the rank of the time of a player on a map, using the current ranking session.
 ///
 /// This is like [`get_rank`], but used when retrieving a large amount of ranks during an operation,
@@ -165,36 +194,43 @@ pub async fn get_rank_in_session(
     time: i32,
     event: OptEvent<'_>,
 ) -> RecordsResult<i32> {
+    const MAX_TXN_RETRY_COUNT: usize = 100;
+
     let key = map_key(map_id, event);
 
-    // Loop until the commands response isn't null, meaning the watchpoint didn't trigger during the
-    // transaction, meaning it succeeded.
-    loop {
+    for _ in 0..MAX_TXN_RETRY_COUNT {
         redis::cmd("WATCH")
             .arg(&key)
             .exec_async(&mut session.redis_conn)
             .await?;
 
-        let score: Option<i32> = session.redis_conn.zscore(&key, player_id).await?;
+        let result = get_rank_impl(&mut session.redis_conn, &key, player_id, time).await;
 
-        let mut pipe = redis::pipe();
-        pipe.atomic()
-            .zadd(&key, player_id, time)
-            .ignore()
-            .zcount(&key, "-inf", time - 1);
-
-        // Restore the previous state
-        let _ = match score {
-            Some(old_time) => pipe.zadd(&key, player_id, old_time).ignore(),
-            None => pipe.zrem(&key, player_id).ignore(),
-        };
-
-        let response: Option<(i32,)> = pipe.query_async(&mut session.redis_conn).await?;
-
-        if let Some((count,)) = response {
-            return Ok(count + 1);
+        match result {
+            Ok(Some(rank)) => return Ok(rank),
+            // The watchpoint triggered so a null response was returned, we restart the transaction
+            Ok(None) => (),
+            Err(e) => {
+                redis::cmd("UNWATCH")
+                    .exec_async(&mut session.redis_conn)
+                    .await?;
+                return Err(e);
+            }
         }
     }
+
+    // We reached the max amount of retry, which is very unlikely.
+    // Just get the rank without the watch part.
+    get_rank_impl(&mut session.redis_conn, &key, player_id, time)
+        .await
+        .and_then(|r| {
+            r.ok_or_else(|| {
+                internal!(
+                    "couldn't retrieve rank of member {player_id} on ZSET `{key}` \
+                    (required score: {time})"
+                )
+            })
+        })
 }
 
 /// Gets the rank of the time of a player on a map.
