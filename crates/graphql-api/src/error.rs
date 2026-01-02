@@ -1,6 +1,7 @@
-use std::{fmt, ops::RangeInclusive, sync::Arc};
+use std::{fmt, sync::Arc};
 
 use records_lib::error::RecordsError;
+use sha2::digest::MacError;
 
 pub(crate) fn map_gql_err(e: async_graphql::Error) -> ApiGqlError {
     match e
@@ -13,12 +14,14 @@ pub(crate) fn map_gql_err(e: async_graphql::Error) -> ApiGqlError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum CursorDecodeErrorKind {
     NotBase64,
     NotUtf8,
     WrongPrefix,
     NoTimestamp,
+    NoSignature,
+    InvalidSignature(MacError),
     NoTime,
     NoScore,
     InvalidTimestamp(i64),
@@ -31,6 +34,8 @@ impl fmt::Display for CursorDecodeErrorKind {
             CursorDecodeErrorKind::NotUtf8 => f.write_str("not UTF-8"),
             CursorDecodeErrorKind::WrongPrefix => f.write_str("wrong prefix"),
             CursorDecodeErrorKind::NoTimestamp => f.write_str("no timestamp"),
+            CursorDecodeErrorKind::NoSignature => f.write_str("no signature"),
+            CursorDecodeErrorKind::InvalidSignature(e) => write!(f, "invalid signature: {e}"),
             CursorDecodeErrorKind::NoTime => f.write_str("no time"),
             CursorDecodeErrorKind::NoScore => f.write_str("no score"),
             CursorDecodeErrorKind::InvalidTimestamp(t) => {
@@ -49,21 +54,58 @@ pub struct CursorDecodeError {
 }
 
 #[derive(Debug)]
-pub struct CursorRangeError {
-    arg_name: &'static str,
-    value: usize,
-    range: RangeInclusive<usize>,
-}
-
-#[derive(Debug)]
 pub enum ApiGqlErrorKind {
     Lib(RecordsError),
-    CursorRange(CursorRangeError),
     CursorDecode(CursorDecodeError),
+    PaginationInput,
     GqlError(async_graphql::Error),
     RecordNotFound { record_id: u32 },
     MapNotFound { map_uid: String },
     PlayerNotFound { login: String },
+}
+
+impl fmt::Display for ApiGqlErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ApiGqlErrorKind::Lib(records_error) => fmt::Display::fmt(records_error, f),
+            ApiGqlErrorKind::PaginationInput => f.write_str(
+                "cursor pagination input is invalid. \
+                must provide either: `after`, `after` with `first`, \
+                `before`, or `before` with `last`.",
+            ),
+            ApiGqlErrorKind::CursorDecode(decode_error) => {
+                write!(
+                    f,
+                    "cursor argument `{}` couldn't be decoded: {}. got `{}`",
+                    decode_error.arg_name, decode_error.kind, decode_error.value
+                )
+            }
+            ApiGqlErrorKind::GqlError(error) => f.write_str(&error.message),
+            ApiGqlErrorKind::RecordNotFound { record_id } => {
+                write!(f, "record `{record_id}` not found")
+            }
+            ApiGqlErrorKind::MapNotFound { map_uid } => {
+                write!(f, "map with UID `{map_uid}` not found")
+            }
+            ApiGqlErrorKind::PlayerNotFound { login } => {
+                write!(f, "player with login `{login}` not found")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ApiGqlErrorKind {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ApiGqlErrorKind::Lib(records_error) => Some(records_error),
+            ApiGqlErrorKind::CursorDecode(_) => None,
+            ApiGqlErrorKind::PaginationInput => None,
+            ApiGqlErrorKind::GqlError(_) => None,
+            ApiGqlErrorKind::RecordNotFound { .. } => None,
+            ApiGqlErrorKind::MapNotFound { .. } => None,
+            ApiGqlErrorKind::PlayerNotFound { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -71,18 +113,16 @@ pub struct ApiGqlError {
     inner: Arc<ApiGqlErrorKind>,
 }
 
+impl std::error::Error for ApiGqlError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.inner)
+    }
+}
+
 impl ApiGqlError {
-    pub(crate) fn from_cursor_range_error(
-        arg_name: &'static str,
-        expected_range: RangeInclusive<usize>,
-        value: usize,
-    ) -> Self {
+    pub(crate) fn from_pagination_input_error() -> Self {
         Self {
-            inner: Arc::new(ApiGqlErrorKind::CursorRange(CursorRangeError {
-                arg_name,
-                value,
-                range: expected_range,
-            })),
+            inner: Arc::new(ApiGqlErrorKind::PaginationInput),
         }
     }
 
@@ -145,36 +185,7 @@ where
 impl fmt::Display for ApiGqlError {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &*self.inner {
-            ApiGqlErrorKind::Lib(records_error) => fmt::Display::fmt(records_error, f),
-            ApiGqlErrorKind::CursorRange(cursor_error) => {
-                write!(
-                    f,
-                    "`{}` must be between {} and {} included, got {}",
-                    cursor_error.arg_name,
-                    cursor_error.range.start(),
-                    cursor_error.range.end(),
-                    cursor_error.value
-                )
-            }
-            ApiGqlErrorKind::CursorDecode(decode_error) => {
-                write!(
-                    f,
-                    "cursor argument `{}` couldn't be decoded: {}. got `{}`",
-                    decode_error.arg_name, decode_error.kind, decode_error.value
-                )
-            }
-            ApiGqlErrorKind::GqlError(error) => f.write_str(&error.message),
-            ApiGqlErrorKind::RecordNotFound { record_id } => {
-                write!(f, "record `{record_id}` not found")
-            }
-            ApiGqlErrorKind::MapNotFound { map_uid } => {
-                write!(f, "map with UID `{map_uid}` not found")
-            }
-            ApiGqlErrorKind::PlayerNotFound { login } => {
-                write!(f, "player with login `{login}` not found")
-            }
-        }
+        fmt::Display::fmt(&self.inner, f)
     }
 }
 
@@ -185,4 +196,4 @@ impl From<ApiGqlError> for async_graphql::Error {
     }
 }
 
-pub type GqlResult<T, E = ApiGqlError> = Result<T, E>;
+pub type GqlResult<T> = Result<T, ApiGqlError>;

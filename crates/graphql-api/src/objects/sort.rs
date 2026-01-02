@@ -5,13 +5,13 @@ use crate::objects::{
     sortable_fields::{MapRecordSortableField, UnorderedRecordSortableField},
 };
 
-#[derive(InputObject, Clone)]
+#[derive(InputObject, Clone, Copy)]
 pub(crate) struct UnorderedRecordSort {
     pub field: UnorderedRecordSortableField,
     pub order: Option<SortOrder>,
 }
 
-#[derive(InputObject, Clone)]
+#[derive(InputObject, Clone, Copy)]
 pub(crate) struct MapRecordSort {
     pub field: MapRecordSortableField,
     pub order: Option<SortOrder>,

@@ -17,6 +17,7 @@ use actix_web::{
 use anyhow::Context;
 use game_api_lib::configure;
 use migration::MigratorTrait;
+use mkenv::prelude::*;
 use records_lib::Database;
 use tracing::level_filters::LevelFilter;
 use tracing_actix_web::TracingLogger;
@@ -26,15 +27,18 @@ use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
-    let env = game_api_lib::init_env()?;
+    game_api_lib::init_env()?;
     #[cfg(feature = "request_filter")]
-    request_filter::init_wh_url(env.used_once.wh_invalid_req_url).map_err(|_| {
+    request_filter::init_wh_url(game_api_lib::env().wh_invalid_req_url.get()).map_err(|_| {
         game_api_lib::internal!("Invalid request WH URL isn't supposed to be set twice")
     })?;
 
-    let db = Database::from_db_url(env.db_env.db_url.db_url, env.db_env.redis_url.redis_url)
-        .await
-        .context("Cannot initialize database connection")?;
+    let db = Database::from_db_url(
+        game_api_lib::env().db_env.db_url.db_url.get(),
+        game_api_lib::env().db_env.redis_url.redis_url.get(),
+    )
+    .await
+    .context("Cannot initialize database connection")?;
 
     migration::Migrator::up(&db.sql_conn, None)
         .await
@@ -72,8 +76,7 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Using max connections: {max_connections}");
 
-    let sess_key = Key::from(env.used_once.sess_key.as_bytes());
-    drop(env.used_once.sess_key);
+    let sess_key = Key::from(game_api_lib::env().dynamic.sess_key.get().as_bytes());
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -96,13 +99,13 @@ async fn main() -> anyhow::Result<()> {
                     .cookie_secure(cfg!(not(debug_assertions)))
                     .cookie_content_security(CookieContentSecurity::Private)
                     .session_lifecycle(PersistentSession::default().session_ttl(
-                        CookieDuration::seconds(game_api_lib::env().auth_token_ttl as i64),
+                        CookieDuration::seconds(game_api_lib::env().auth_token_ttl.get() as i64),
                     ))
                     .build(),
             )
             .configure(|cfg| configure::configure(cfg, db.clone()))
     })
-    .bind(("0.0.0.0", game_api_lib::env().port))
+    .bind(("0.0.0.0", game_api_lib::env().port.get()))
     .context("Cannot bind address")?
     .run()
     .await

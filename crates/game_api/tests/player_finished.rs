@@ -27,7 +27,7 @@ async fn single_try() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let map_id = rand::random_range(1..=100000);
+    let map_id = test_env::get_map_id();
 
     let map = maps::ActiveModel {
         id: Set(map_id),
@@ -192,7 +192,7 @@ async fn many_tries() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let map_id = rand::random_range(1..=100000);
+    let map_id = test_env::get_map_id();
 
     let map = maps::ActiveModel {
         id: Set(map_id),
@@ -338,7 +338,7 @@ async fn with_mode_version() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let map_id = rand::random_range(1..=100000);
+    let map_id = test_env::get_map_id();
 
     let map = maps::ActiveModel {
         id: Set(map_id),
@@ -428,7 +428,7 @@ async fn many_records() -> anyhow::Result<()> {
         ..Default::default()
     });
 
-    let map_id = rand::random_range(1..=100000);
+    let map_id = test_env::get_map_id();
 
     let map = maps::ActiveModel {
         id: Set(map_id),
@@ -569,7 +569,7 @@ async fn save_record_for_related_non_transparent_event() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let map_id = rand::random_range(1..=100000);
+    let map_id = test_env::get_map_id();
 
     let map = maps::ActiveModel {
         id: Set(map_id),

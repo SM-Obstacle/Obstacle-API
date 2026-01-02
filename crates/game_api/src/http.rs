@@ -9,6 +9,8 @@ pub mod player;
 
 use std::fmt;
 
+use mkenv::prelude::*;
+
 use actix_web::body::BoxBody;
 use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
 use actix_web::web::{JsonConfig, Query};
@@ -131,7 +133,7 @@ async fn report_error(
     }
 
     client
-        .post(&crate::env().wh_report_url)
+        .post(crate::env().wh_report_url.get())
         .json(&WebhookBody {
             content: format!("Error reported (mode version: {mode_vers})"),
             embeds: vec![

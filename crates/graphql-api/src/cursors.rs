@@ -1,20 +1,47 @@
-use std::{ops::RangeInclusive, str};
+use std::str;
 
 use async_graphql::{ID, connection::CursorType};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{Engine as _, prelude::BASE64_URL_SAFE};
 use chrono::{DateTime, Utc};
+use hmac::Mac;
+use mkenv::Layer;
+use sea_orm::sea_query::IntoValueTuple;
 
 use crate::error::CursorDecodeErrorKind;
 
-pub const CURSOR_LIMIT_RANGE: RangeInclusive<usize> = 1..=100;
+pub const CURSOR_MAX_LIMIT: usize = 100;
 pub const CURSOR_DEFAULT_LIMIT: usize = 50;
 
 fn decode_base64(s: &str) -> Result<String, CursorDecodeErrorKind> {
-    let decoded = BASE64
+    let decoded = BASE64_URL_SAFE
         .decode(s)
         .map_err(|_| CursorDecodeErrorKind::NotBase64)?;
+    let idx = decoded
+        .iter()
+        .position(|b| *b == b'$')
+        .ok_or(CursorDecodeErrorKind::NoSignature)?;
+    let (content, signature) = (&decoded[..idx], &decoded[idx + 1..]);
 
-    String::from_utf8(decoded).map_err(|_| CursorDecodeErrorKind::NotUtf8)
+    let mut mac = crate::config().cursor_secret_key.cursor_secret_key.get();
+    mac.update(content);
+    mac.verify_slice(signature)
+        .map_err(CursorDecodeErrorKind::InvalidSignature)?;
+
+    let content = str::from_utf8(content).map_err(|_| CursorDecodeErrorKind::NotUtf8)?;
+
+    Ok(content.to_owned())
+}
+
+fn encode_base64(s: String) -> String {
+    let mut mac = crate::config().cursor_secret_key.cursor_secret_key.get();
+    mac.update(s.as_bytes());
+    let signature = mac.finalize().into_bytes();
+
+    let mut output = s.into_bytes();
+    output.push(b'$');
+    output.extend_from_slice(&signature);
+
+    BASE64_URL_SAFE.encode(&output)
 }
 
 fn check_prefix<I, S>(splitted: I) -> Result<(), CursorDecodeErrorKind>
@@ -74,7 +101,13 @@ impl CursorType for RecordDateCursor {
 
     fn encode_cursor(&self) -> String {
         let timestamp = self.0.timestamp_millis();
-        BASE64.encode(format!("record:{}", timestamp))
+        encode_base64(format!("record:{}", timestamp))
+    }
+}
+
+impl IntoValueTuple for &RecordDateCursor {
+    fn into_value_tuple(self) -> sea_orm::sea_query::ValueTuple {
+        self.0.into_value_tuple()
     }
 }
 
@@ -97,7 +130,13 @@ impl CursorType for RecordRankCursor {
 
     fn encode_cursor(&self) -> String {
         let timestamp = self.record_date.timestamp_millis();
-        BASE64.encode(format!("record:{timestamp}:{}", self.time))
+        encode_base64(format!("record:{timestamp}:{}", self.time))
+    }
+}
+
+impl IntoValueTuple for &RecordRankCursor {
+    fn into_value_tuple(self) -> sea_orm::sea_query::ValueTuple {
+        (self.time, self.record_date).into_value_tuple()
     }
 }
 
@@ -111,7 +150,7 @@ impl CursorType for TextCursor {
     }
 
     fn encode_cursor(&self) -> String {
-        BASE64.encode(&self.0)
+        encode_base64(self.0.clone())
     }
 }
 
@@ -129,7 +168,7 @@ impl CursorType for F64Cursor {
     }
 
     fn encode_cursor(&self) -> String {
-        BASE64.encode(self.0.to_string())
+        encode_base64(self.0.to_string())
     }
 }
 
@@ -138,4 +177,103 @@ pub struct ConnectionParameters {
     pub after: Option<ID>,
     pub first: Option<usize>,
     pub last: Option<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use async_graphql::connection::CursorType;
+    use base64::{Engine as _, prelude::BASE64_URL_SAFE};
+    use chrono::{SubsecRound, Utc};
+    use sha2::digest::MacError;
+
+    use crate::{config::InitError, error::CursorDecodeErrorKind};
+
+    use super::{RecordDateCursor, RecordRankCursor};
+
+    fn setup() {
+        match crate::init_config() {
+            Ok(_) | Err(InitError::ConfigAlreadySet) => (),
+            Err(InitError::Config(e)) => {
+                panic!("test setup error: {e}");
+            }
+        }
+    }
+
+    #[test]
+    fn encode_date_cursor() {
+        setup();
+
+        let now = Utc::now();
+        let cursor = RecordDateCursor(now).encode_cursor();
+
+        let decoded = BASE64_URL_SAFE
+            .decode(&cursor)
+            .expect("cursor should be encoded as base64");
+        assert!(decoded.starts_with(format!("record:{}$", now.timestamp_millis()).as_bytes()));
+    }
+
+    #[test]
+    fn decode_date_cursor() {
+        setup();
+
+        let now = Utc::now();
+        let cursor = RecordDateCursor(now).encode_cursor();
+
+        let decoded = RecordDateCursor::decode_cursor(&cursor);
+        assert_eq!(decoded.map(|c| c.0), Ok(now.trunc_subsecs(3)));
+    }
+
+    #[test]
+    fn decode_date_cursor_errors() {
+        setup();
+
+        let decoded = RecordDateCursor::decode_cursor("foobar").err();
+        assert_eq!(decoded, Some(CursorDecodeErrorKind::NotBase64));
+
+        let encoded = BASE64_URL_SAFE.encode("foobar");
+        let decoded = RecordDateCursor::decode_cursor(&encoded).err();
+        assert_eq!(decoded, Some(CursorDecodeErrorKind::NoSignature));
+
+        let encoded = BASE64_URL_SAFE.encode("foobar$signature");
+        let decoded = RecordDateCursor::decode_cursor(&encoded).err();
+        assert_eq!(
+            decoded,
+            Some(CursorDecodeErrorKind::InvalidSignature(MacError))
+        );
+    }
+
+    #[test]
+    fn encode_rank_cursor() {
+        setup();
+
+        let now = Utc::now();
+        let cursor = RecordRankCursor {
+            record_date: now,
+            time: 1000,
+        }
+        .encode_cursor();
+
+        let decoded = BASE64_URL_SAFE
+            .decode(&cursor)
+            .expect("cursor should be encoded as base64");
+        assert!(decoded.starts_with(format!("record:{}:1000$", now.timestamp_millis()).as_bytes()));
+    }
+
+    #[test]
+    fn decode_rank_cursor() {
+        setup();
+
+        let now = Utc::now();
+        let cursor = RecordRankCursor {
+            record_date: now,
+            time: 2000,
+        }
+        .encode_cursor();
+
+        let decoded = RecordRankCursor::decode_cursor(&cursor);
+        assert_eq!(
+            decoded.map(|c| (c.record_date, c.time)),
+            Ok((now.trunc_subsecs(3), 2000))
+        );
+    }
 }

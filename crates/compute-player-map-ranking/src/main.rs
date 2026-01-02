@@ -11,11 +11,15 @@ use std::{
 use anyhow::Context as _;
 use chrono::{DateTime, Days, Months, Utc};
 use clap::Parser as _;
-use mkenv::Env as _;
+use mkenv::prelude::*;
 use records_lib::{DbUrlEnv, time::Time};
 use sea_orm::Database;
 
-mkenv::make_env! {AppEnv includes [DbUrlEnv as db_env]:}
+mkenv::make_config! {
+    struct AppEnv {
+        db_env: { DbUrlEnv },
+    }
+}
 
 #[derive(Clone)]
 struct SinceDuration {
@@ -96,10 +100,11 @@ async fn main() -> anyhow::Result<()> {
         })
         .context("couldn't write header to map ranking file")?;
 
-    let db_url = AppEnv::try_get()
-        .context("couldn't initialize environment")?
-        .db_env
-        .db_url;
+    let app_config = AppEnv::define();
+    app_config
+        .try_init()
+        .map_err(|e| anyhow::anyhow!("couldn't initialize environment: {e}"))?;
+    let db_url = app_config.db_env.db_url.get();
     let db = Database::connect(db_url)
         .await
         .context("couldn't connect to database")?;

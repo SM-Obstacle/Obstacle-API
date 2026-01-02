@@ -3,15 +3,18 @@ mod base;
 use actix_web::test;
 
 #[tokio::test]
-#[cfg(feature = "test")]
+#[cfg(test)]
 async fn test_not_found() -> anyhow::Result<()> {
     use actix_http::StatusCode;
     use game_api_lib::TracedError;
-    use records_lib::Database;
+    use mkenv::prelude::*;
+    use records_lib::{Database, DbEnv};
     use sea_orm::DbBackend;
 
-    let env = base::get_env()?;
-    let db = Database::from_mock_db(DbBackend::MySql, env.db_env.redis_url.redis_url)?;
+    test_env::init_env()?;
+
+    let env = DbEnv::define();
+    let db = Database::from_mock_db(DbBackend::MySql, env.redis_url.redis_url.get())?;
     let app = base::get_app(db).await;
     let req = test::TestRequest::get().uri("/").to_request();
 

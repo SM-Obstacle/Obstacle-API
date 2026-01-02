@@ -6,6 +6,7 @@ use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
 use async_graphql_actix_web::GraphQLRequest;
 use graphql_api::error::{ApiGqlError, ApiGqlErrorKind};
 use graphql_api::schema::{Schema, create_schema};
+use mkenv::prelude::*;
 use records_lib::Database;
 use reqwest::Client;
 use tracing_actix_web::RequestId;
@@ -79,7 +80,7 @@ async fn index_playground() -> impl Responder {
     HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")
         .body(playground_source(GraphQLPlaygroundConfig::new(
-            &crate::env().gql_endpoint,
+            &crate::env().gql_endpoint.get(),
         )))
 }
 

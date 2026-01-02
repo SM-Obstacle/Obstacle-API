@@ -1,4 +1,5 @@
 use deadpool_redis::redis::AsyncCommands as _;
+use mkenv::Layer as _;
 use records_lib::{
     RedisConnection, gen_random_str,
     redis_key::{mp_token_key, web_token_key},
@@ -23,7 +24,7 @@ pub async fn gen_token_for(
     let mp_key = mp_token_key(login);
     let web_key = web_token_key(login);
 
-    let ex = crate::env().auth_token_ttl as _;
+    let ex = crate::env().auth_token_ttl.get() as _;
 
     let mp_token_hash = digest(&*mp_token);
     let web_token_hash = digest(&*web_token);

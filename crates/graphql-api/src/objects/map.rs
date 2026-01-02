@@ -24,7 +24,7 @@ use sea_orm::{
 
 use crate::{
     cursors::{
-        CURSOR_DEFAULT_LIMIT, CURSOR_LIMIT_RANGE, ConnectionParameters, RecordDateCursor,
+        CURSOR_DEFAULT_LIMIT, CURSOR_MAX_LIMIT, ConnectionParameters, RecordDateCursor,
         RecordRankCursor,
     },
     error::{self, ApiGqlError, GqlResult},
@@ -136,17 +136,10 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
-    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+    let mut redis_conn = redis_pool.get().await?;
 
     for record in records {
-        let rank = ranks::get_rank_in_session(
-            &mut ranking_session,
-            map_id,
-            record.record_player_id,
-            record.time,
-            event,
-        )
-        .await?;
+        let rank = ranks::get_rank(&mut redis_conn, map_id, record.time, event).await?;
         ranked_records.push(records::RankedRecord { rank, record }.into());
     }
 
@@ -180,23 +173,9 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
     filter: Option<RecordsFilter>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let limit = if let Some(first) = first {
-        if !CURSOR_LIMIT_RANGE.contains(&first) {
-            return Err(ApiGqlError::from_cursor_range_error(
-                "first",
-                CURSOR_LIMIT_RANGE,
-                first,
-            ));
-        }
-        first
+        first.min(CURSOR_MAX_LIMIT)
     } else if let Some(last) = last {
-        if !CURSOR_LIMIT_RANGE.contains(&last) {
-            return Err(ApiGqlError::from_cursor_range_error(
-                "last",
-                CURSOR_LIMIT_RANGE,
-                last,
-            ));
-        }
-        last
+        last.min(CURSOR_MAX_LIMIT)
     } else {
         CURSOR_DEFAULT_LIMIT
     };
@@ -372,17 +351,10 @@ async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>(
         },
     };
 
-    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+    let mut redis_conn = redis_pool.get().await?;
 
     for record in records.into_iter().take(limit) {
-        let rank = ranks::get_rank_in_session(
-            &mut ranking_session,
-            map_id,
-            record.record_player_id,
-            record.time,
-            event,
-        )
-        .await?;
+        let rank = ranks::get_rank(&mut redis_conn, map_id, record.time, event).await?;
 
         connection.edges.push(connection::Edge::new(
             ID(encode_cursor_fn(&record)),

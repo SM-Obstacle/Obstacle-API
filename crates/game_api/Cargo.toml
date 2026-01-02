@@ -44,12 +44,12 @@ graphql-api = { path = "../graphql-api" }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-records-lib = { path = "../records_lib" }
+test-env = { path = "../test-env" }
+records-lib = { path = "../records_lib", features = ["tracing", "mock"] }
 
 [features]
 default = ["request_filter"]
 request_filter = ["dep:pin-project-lite", "dep:request_filter"]
 auth = []
-mysql = ["records-lib/mysql"]
-postgres = ["records-lib/postgres"]
-test = ["records-lib/test"]
+mysql = ["records-lib/mysql", "test-env/mysql"]
+postgres = ["records-lib/postgres", "test-env/postgres"]

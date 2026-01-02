@@ -1,5 +1,6 @@
 use actix_session::Session;
 use actix_web::{HttpResponse, Responder, web};
+use mkenv::Layer as _;
 use records_lib::Database;
 use reqwest::{Client, StatusCode};
 use tokio::time::timeout;
@@ -44,8 +45,8 @@ async fn test_access_token(
         .post("https://prod.live.maniaplanet.com/login/oauth2/access_token")
         .form(&MPAccessTokenBody {
             grant_type: "authorization_code",
-            client_id: &crate::env().mp_client_id,
-            client_secret: &crate::env().mp_client_secret,
+            client_id: &crate::env().dynamic.mp_client_id.get(),
+            client_secret: &crate::env().dynamic.mp_client_secret.get(),
             code,
             redirect_uri,
         })

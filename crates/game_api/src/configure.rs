@@ -9,6 +9,7 @@ use actix_web::{
     web,
 };
 use dsc_webhook::{FormattedRequestHead, WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
+use mkenv::prelude::*;
 use records_lib::{Database, pool::clone_dbconn};
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId};
 
@@ -163,7 +164,7 @@ pub(crate) fn send_internal_err_msg_detached<E>(
 
     tokio::task::spawn(async move {
         if let Err(e) = client
-            .post(&crate::env().wh_report_url)
+            .post(crate::env().wh_report_url.get())
             .json(&wh_msg)
             .send()
             .await

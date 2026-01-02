@@ -1,3 +1,4 @@
+use mkenv::prelude::*;
 use std::time::SystemTime;
 
 use deadpool_redis::redis::{self, AsyncCommands as _};
@@ -192,7 +193,7 @@ impl Mappack {
             .get(mappack_time_key(AnyMappackId::Id(&self.mappack_id)))
             .await?;
         Ok(last_upd_time
-            .map(|last| last + records_lib::env().event_scores_interval.as_secs())
+            .map(|last| last + records_lib::env().event_scores_interval.get().as_secs())
             .and_then(|last| {
                 SystemTime::UNIX_EPOCH
                     .elapsed()

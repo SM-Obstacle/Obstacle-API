@@ -40,9 +40,9 @@ async fn event_overview_original_maps_diff() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let map_id = rand::random_range(1..=100000);
+    let map_id = test_env::get_map_id();
     let original_map_id = loop {
-        let val = rand::random_range(1..=100000);
+        let val = test_env::get_map_id();
         if val != map_id {
             break val;
         }
@@ -185,7 +185,7 @@ async fn event_overview_transparent_equal() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let map_id = rand::random_range(1..=100000);
+    let map_id = test_env::get_map_id();
 
     let map = maps::ActiveModel {
         id: Set(map_id),
@@ -307,7 +307,7 @@ async fn event_overview_original_maps_empty() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let map_id = rand::random_range(1..=100000);
+    let map_id = test_env::get_map_id();
 
     let map = maps::ActiveModel {
         id: Set(map_id),

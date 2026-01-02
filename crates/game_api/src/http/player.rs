@@ -8,6 +8,7 @@ use actix_web::{
 use deadpool_redis::redis::AsyncCommands as _;
 use entity::{banishments, current_bans, maps, players, records, role, types};
 use futures::TryStreamExt;
+use mkenv::prelude::*;
 use records_lib::{Database, RedisPool, must, player, redis_key::alone_map_key, sync};
 use reqwest::Client;
 use sea_orm::{
@@ -475,7 +476,7 @@ async fn report_error(
     };
 
     client
-        .post(&crate::env().wh_report_url)
+        .post(crate::env().wh_report_url.get())
         .json(&WebhookBody {
             content,
             embeds: vec![
@@ -518,7 +519,7 @@ struct ACBody {
 
 async fn ac(Res(client): Res<Client>, Json(body): Json<ACBody>) -> RecordsResult<impl Responder> {
     client
-        .post(&crate::env().wh_ac_url)
+        .post(crate::env().wh_ac_url.get())
         .json(&WebhookBody {
             content: format!("Map has been finished in {}", body.run_time),
             embeds: vec![WebhookBodyEmbed {

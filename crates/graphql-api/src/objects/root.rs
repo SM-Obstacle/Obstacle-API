@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt};
 
 use async_graphql::{
     ID, OutputType,
-    connection::{self, CursorType as _},
+    connection::{self, CursorType},
 };
 use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
 use entity::{event as event_entity, event_edition, global_records, maps, players, records};
@@ -14,17 +14,14 @@ use records_lib::{
     sync,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, JoinType, Order, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, QueryTrait, RelationTrait, StreamTrait,
+    ColumnTrait, ConnectionTrait, DbConn, EntityTrait, Order, QueryFilter as _, QueryOrder as _,
+    QuerySelect as _, QueryTrait, Select, StreamTrait, TransactionTrait,
     prelude::Expr,
     sea_query::{ExprTrait as _, Func},
 };
 
 use crate::{
-    cursors::{
-        CURSOR_DEFAULT_LIMIT, CURSOR_LIMIT_RANGE, ConnectionParameters, F64Cursor,
-        RecordDateCursor, TextCursor,
-    },
+    cursors::{ConnectionParameters, F64Cursor, RecordDateCursor, TextCursor},
     error::{self, ApiGqlError, GqlResult},
     objects::{
         event::Event,
@@ -38,7 +35,14 @@ use crate::{
         player_with_score::PlayerWithScore,
         ranked_record::RankedRecord,
         records_filter::RecordsFilter,
+        sort::UnorderedRecordSort,
+        sort_order::SortOrder,
         sort_state::SortState,
+        sortable_fields::UnorderedRecordSortableField,
+    },
+    utils::{
+        page_input::{PaginationDirection, PaginationInput, apply_cursor_input},
+        records_filter::apply_filter,
     },
 };
 
@@ -56,17 +60,10 @@ async fn get_record<C: ConnectionTrait + StreamTrait>(
         return Err(ApiGqlError::from_record_not_found_error(record_id));
     };
 
-    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+    let mut redis_conn = redis_pool.get().await?;
 
     let out = records::RankedRecord {
-        rank: ranks::get_rank_in_session(
-            &mut ranking_session,
-            record.map_id,
-            record.record_player_id,
-            record.time,
-            event,
-        )
-        .await?,
+        rank: ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?,
         record,
     }
     .into();
@@ -94,17 +91,10 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
 
     let mut ranked_records = Vec::with_capacity(records.len());
 
-    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+    let mut redis_conn = redis_pool.get().await?;
 
     for record in records {
-        let rank = ranks::get_rank_in_session(
-            &mut ranking_session,
-            record.map_id,
-            record.record_player_id,
-            record.time,
-            event,
-        )
-        .await?;
+        let rank = ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?;
 
         ranked_records.push(
             records::RankedRecord {
@@ -118,198 +108,70 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
     Ok(ranked_records)
 }
 
-async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
+pub(crate) async fn get_connection<C: ConnectionTrait + TransactionTrait>(
     conn: &C,
     redis_pool: &RedisPool,
-    ConnectionParameters {
-        after,
-        before,
-        first,
-        last,
-    }: ConnectionParameters,
+    connection_parameters: ConnectionParameters,
     event: OptEvent<'_>,
-    filter: Option<RecordsFilter>,
+    sort: Option<UnorderedRecordSort>,
+    base_query: Select<global_records::Entity>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
-    let limit = if let Some(first) = first {
-        if !CURSOR_LIMIT_RANGE.contains(&first) {
-            return Err(ApiGqlError::from_cursor_range_error(
-                "first",
-                CURSOR_LIMIT_RANGE,
-                first,
-            ));
-        }
-        first
-    } else if let Some(last) = last {
-        if !CURSOR_LIMIT_RANGE.contains(&last) {
-            return Err(ApiGqlError::from_cursor_range_error(
-                "last",
-                CURSOR_LIMIT_RANGE,
-                last,
-            ));
-        }
-        last
-    } else {
-        CURSOR_DEFAULT_LIMIT
-    };
+    let pagination_input = <PaginationInput>::try_from_input(connection_parameters)?;
 
-    let has_previous_page = after.is_some();
+    let mut query = base_query
+        .clone()
+        .cursor_by(global_records::Column::RecordDate);
 
-    // Decode cursors if provided
-    let after_timestamp = match after {
-        Some(cursor) => {
-            let decoded = RecordDateCursor::decode_cursor(&cursor)
-                .map_err(|e| ApiGqlError::from_cursor_decode_error("after", cursor.0, e))?;
-            Some(decoded)
-        }
-        None => None,
-    };
+    apply_cursor_input(&mut query, &pagination_input);
 
-    let before_timestamp = match before {
-        Some(cursor) => {
-            let decoded = RecordDateCursor::decode_cursor(&cursor)
-                .map_err(|e| ApiGqlError::from_cursor_decode_error("before", cursor.0, e))?;
-            Some(decoded)
-        }
-        None => None,
-    };
-
-    // Build query with appropriate ordering
-    let mut query = global_records::Entity::find();
-
-    // Apply filters if provided
-    if let Some(filter) = filter {
-        // Join with players table if needed for player filters
-        if filter.player.is_some() {
-            query = query.join_as(
-                JoinType::InnerJoin,
-                global_records::Relation::Players.def(),
-                "p",
-            );
-        }
-
-        // Join with maps table if needed for map filters
-        if let Some(m) = &filter.map {
-            query = query.join_as(
-                JoinType::InnerJoin,
-                global_records::Relation::Maps.def(),
-                "m",
-            );
-
-            // Join again with players table if filtering on map author
-            if m.author.is_some() {
-                query = query.join_as(JoinType::InnerJoin, maps::Relation::Players.def(), "p2");
-            }
-        }
-
-        if let Some(filter) = filter.player {
-            // Apply player login filter
-            if let Some(login) = filter.player_login {
-                query = query
-                    .filter(Expr::col(("p", players::Column::Login)).like(format!("%{login}%")));
-            }
-
-            // Apply player name filter
-            if let Some(name) = filter.player_name {
-                query = query.filter(
-                    Func::cust("rm_mp_style")
-                        .arg(Expr::col(("p", players::Column::Name)))
-                        .like(format!("%{name}%")),
-                );
-            }
-        }
-
-        if let Some(filter) = filter.map {
-            // Apply map UID filter
-            if let Some(uid) = filter.map_uid {
-                query =
-                    query.filter(Expr::col(("m", maps::Column::GameId)).like(format!("%{uid}%")));
-            }
-
-            // Apply map name filter
-            if let Some(name) = filter.map_name {
-                query = query.filter(
-                    Func::cust("rm_mp_style")
-                        .arg(Expr::col(("m", maps::Column::Name)))
-                        .like(format!("%{name}%")),
-                );
-            }
-
-            if let Some(filter) = filter.author {
-                // Apply player login filter
-                if let Some(login) = filter.player_login {
-                    query = query.filter(
-                        Expr::col(("p2", players::Column::Login)).like(format!("%{login}%")),
-                    );
-                }
-
-                // Apply player name filter
-                if let Some(name) = filter.player_name {
-                    query = query.filter(
-                        Func::cust("rm_mp_style")
-                            .arg(Expr::col(("p2", players::Column::Name)))
-                            .like(format!("%{name}%")),
-                    );
-                }
-            }
-        }
-
-        // Apply date filters
-        if let Some(before_date) = filter.before_date {
-            query = query.filter(global_records::Column::RecordDate.lt(before_date));
-        }
-
-        if let Some(after_date) = filter.after_date {
-            query = query.filter(global_records::Column::RecordDate.gt(after_date));
-        }
-
-        // Apply time filters
-        if let Some(time_gt) = filter.time_gt {
-            query = query.filter(global_records::Column::Time.gt(time_gt));
-        }
-
-        if let Some(time_lt) = filter.time_lt {
-            query = query.filter(global_records::Column::Time.lt(time_lt));
-        }
-    }
-
-    // Apply cursor filters
-    if let Some(timestamp) = after_timestamp {
-        query = query.filter(global_records::Column::RecordDate.lt(timestamp.0));
-    }
-
-    if let Some(timestamp) = before_timestamp {
-        query = query.filter(global_records::Column::RecordDate.gt(timestamp.0));
-    }
-
-    // Apply ordering
-    query = query.order_by(
-        global_records::Column::RecordDate,
-        if last.is_some() {
-            Order::Asc
-        } else {
-            Order::Desc
-        },
+    // Record dates are ordered by desc by default
+    let is_sort_asc = matches!(
+        sort,
+        Some(UnorderedRecordSort {
+            field: UnorderedRecordSortableField::Date,
+            order: Some(SortOrder::Descending),
+        })
     );
 
-    // Fetch one extra to determine if there's a next page
-    query = query.limit((limit + 1) as u64);
+    if is_sort_asc {
+        query.asc();
+    } else {
+        query.desc();
+    }
 
-    let records = query.all(conn).await?;
+    let (mut connection, records) = match pagination_input.dir {
+        PaginationDirection::After { cursor } => {
+            let records = query
+                .first(pagination_input.limit as u64 + 1)
+                .all(conn)
+                .await?;
+            (
+                connection::Connection::new(
+                    cursor.is_some(),
+                    records.len() > pagination_input.limit,
+                ),
+                itertools::Either::Left(records.into_iter().take(pagination_input.limit)),
+            )
+        }
+        PaginationDirection::Before { .. } => {
+            let records = query
+                .last(pagination_input.limit as u64 + 1)
+                .all(conn)
+                .await?;
+            let amount_to_skip = records.len().saturating_sub(pagination_input.limit);
+            (
+                connection::Connection::new(records.len() > pagination_input.limit, true),
+                itertools::Either::Right(records.into_iter().skip(amount_to_skip)),
+            )
+        }
+    };
 
-    let mut connection = connection::Connection::new(has_previous_page, records.len() > limit);
     connection.edges.reserve(records.len());
 
-    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+    let mut redis_conn = redis_pool.get().await?;
 
-    for record in records.into_iter().take(limit) {
-        let rank = ranks::get_rank_in_session(
-            &mut ranking_session,
-            record.map_id,
-            record.record_player_id,
-            record.time,
-            event,
-        )
-        .await?;
+    for record in records {
+        let rank = ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?;
 
         connection.edges.push(connection::Edge::new(
             ID(RecordDateCursor(record.record_date.and_utc()).encode_cursor()),
@@ -322,6 +184,27 @@ async fn get_records_connection<C: ConnectionTrait + StreamTrait>(
     }
 
     Ok(connection)
+}
+
+pub(crate) async fn get_records_connection<C: ConnectionTrait + TransactionTrait>(
+    conn: &C,
+    redis_pool: &RedisPool,
+    connection_parameters: ConnectionParameters,
+    event: OptEvent<'_>,
+    sort: Option<UnorderedRecordSort>,
+    filter: Option<RecordsFilter>,
+) -> GqlResult<connection::Connection<ID, RankedRecord>> {
+    let base_query = apply_filter(global_records::Entity::find(), filter.as_ref());
+
+    get_connection(
+        conn,
+        redis_pool,
+        connection_parameters,
+        event,
+        sort,
+        base_query,
+    )
+    .await
 }
 
 #[async_graphql::Object]
@@ -519,37 +402,35 @@ impl QueryRoot {
         before: Option<String>,
         #[graphql(desc = "Number of records to fetch (default: 50, max: 100)")] first: Option<i32>,
         #[graphql(desc = "Number of records to fetch from the end (for backward pagination)")] last: Option<i32>,
+        sort: Option<UnorderedRecordSort>,
         filter: Option<RecordsFilter>,
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
-        let conn = ctx.data_unchecked::<DbConn>();
 
-        sync::transaction(conn, async |txn| {
-            connection::query(
-                after,
-                before,
-                first,
-                last,
-                |after, before, first, last| async move {
-                    get_records_connection(
-                        txn,
-                        &db.redis_pool,
-                        ConnectionParameters {
-                            after,
-                            before,
-                            first,
-                            last,
-                        },
-                        Default::default(),
-                        filter,
-                    )
-                    .await
-                },
-            )
-            .await
-            .map_err(error::map_gql_err)
-        })
+        connection::query(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                get_records_connection(
+                    &db.sql_conn,
+                    &db.redis_pool,
+                    ConnectionParameters {
+                        after,
+                        before,
+                        first,
+                        last,
+                    },
+                    Default::default(),
+                    sort,
+                    filter,
+                )
+                .await
+            },
+        )
         .await
+        .map_err(error::map_gql_err)
     }
 }
 
