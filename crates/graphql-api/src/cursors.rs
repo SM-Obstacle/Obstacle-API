@@ -104,7 +104,7 @@ where
     splitted
         .into_iter()
         .next()
-        .and_then(|t| t.as_ref().replace("\\:", ":").parse().ok())
+        .and_then(|t| t.as_ref().replace(':', "::").parse().ok())
         .ok_or(CursorDecodeErrorKind::MissingData)
 }
 
@@ -119,7 +119,7 @@ where
 
     fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
         let decoded = decode_base64(s)?;
-        let mut splitted = decoded.split(':');
+        let mut splitted = decoded.split("::");
         check_prefix("record_date", &mut splitted)?;
         let record_date = check_timestamp(&mut splitted)?;
         let data = check_data(&mut splitted)?;
@@ -129,8 +129,8 @@ where
 
     fn encode_cursor(&self) -> String {
         let timestamp = self.0.timestamp_millis();
-        let escaped_data = self.1.to_string().replace(':', "\\:");
-        encode_base64(format!("record_date:{}:{escaped_data}", timestamp))
+        let escaped_data = self.1.to_string().replace("::", ":");
+        encode_base64(format!("record_date::{}::{escaped_data}", timestamp))
     }
 }
 
@@ -158,7 +158,7 @@ where
 
     fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
         let decoded = decode_base64(s)?;
-        let mut splitted = decoded.split(':');
+        let mut splitted = decoded.split("::");
         check_prefix("record_rank", &mut splitted)?;
         let record_date = check_timestamp(&mut splitted)?;
         let time = check_time(&mut splitted)?;
@@ -173,9 +173,9 @@ where
 
     fn encode_cursor(&self) -> String {
         let timestamp = self.record_date.timestamp_millis();
-        let escaped_data = self.data.to_string().replace(':', "\\:");
+        let escaped_data = self.data.to_string().replace("::", ":");
         encode_base64(format!(
-            "record_rank:{timestamp}:{}:{escaped_data}",
+            "record_rank::{timestamp}::{}::{escaped_data}",
             self.time,
         ))
     }
@@ -200,21 +200,21 @@ where
 
     fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
         let decoded = decode_base64(s)?;
-        let mut splitted = decoded.split(':');
+        let mut splitted = decoded.split("::");
         check_prefix("text", &mut splitted)?;
         let text = splitted
             .next()
             .ok_or(CursorDecodeErrorKind::MissingText)?
-            .replace("\\:", ":");
+            .replace(":", "::");
         let data = check_data(&mut splitted)?;
         check_finished(&mut splitted)?;
         Ok(Self(text.to_owned(), data))
     }
 
     fn encode_cursor(&self) -> String {
-        let escaped_txt = self.0.replace(':', "\\:");
-        let escaped_data = self.1.to_string().replace(':', "\\:");
-        encode_base64(format!("text:{escaped_txt}:{escaped_data}"))
+        let escaped_txt = self.0.replace("::", ":");
+        let escaped_data = self.1.to_string().replace("::", ":");
+        encode_base64(format!("text::{escaped_txt}::{escaped_data}"))
     }
 }
 
@@ -237,7 +237,7 @@ where
 
     fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
         let decoded = decode_base64(s)?;
-        let mut splitted = decoded.split(':');
+        let mut splitted = decoded.split("::");
         check_prefix("score", &mut splitted)?;
         let parsed = splitted
             .next()
@@ -250,8 +250,8 @@ where
     }
 
     fn encode_cursor(&self) -> String {
-        let escaped_data = self.1.to_string().replace(':', "\\:");
-        encode_base64(format!("score:{}:{escaped_data}", self.0))
+        let escaped_data = self.1.to_string().replace("::", ":");
+        encode_base64(format!("score::{}::{escaped_data}", self.0))
     }
 }
 
@@ -303,7 +303,7 @@ mod tests {
             .decode(&cursor)
             .expect("cursor should be encoded as base64");
         assert!(
-            decoded.starts_with(format!("record_date:{}:0$", now.timestamp_millis()).as_bytes())
+            decoded.starts_with(format!("record_date::{}::0$", now.timestamp_millis()).as_bytes())
         );
     }
 
@@ -353,8 +353,9 @@ mod tests {
             .decode(&cursor)
             .expect("cursor should be encoded as base64");
         assert!(
-            decoded
-                .starts_with(format!("record_rank:{}:1000:24$", now.timestamp_millis()).as_bytes())
+            decoded.starts_with(
+                format!("record_rank::{}::1000::24$", now.timestamp_millis()).as_bytes()
+            )
         );
     }
 
