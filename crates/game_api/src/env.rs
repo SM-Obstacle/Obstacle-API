@@ -1,3 +1,4 @@
+use graphql_api::config::InitError;
 use mkenv::{error::ConfigInitError, prelude::*};
 use once_cell::sync::OnceCell;
 use records_lib::{DbEnv, LibEnv};
@@ -150,7 +151,10 @@ pub fn init_env() -> anyhow::Result<()> {
     env.try_init().map_err(map_err)?;
     lib_env.try_init().map_err(map_err)?;
     records_lib::init_env(lib_env);
-    graphql_api::init_config().map_err(|e| anyhow::anyhow!("{e}"))?;
+    match graphql_api::init_config() {
+        Ok(_) | Err(InitError::ConfigAlreadySet) => (),
+        Err(InitError::Config(e)) => anyhow::bail!("{e}"),
+    }
     let _ = ENV.set(env);
 
     Ok(())

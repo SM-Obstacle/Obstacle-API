@@ -1,27 +1,25 @@
-use std::{collections::HashMap, fmt};
-
 use async_graphql::{
-    ID, OutputType,
+    ID,
     connection::{self, CursorType},
 };
 use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
 use entity::{event as event_entity, event_edition, global_records, maps, players, records};
 use records_lib::{
-    Database, RedisConnection, RedisPool, internal, must,
+    Database, RedisConnection, RedisPool, must,
     opt_event::OptEvent,
     ranks,
-    redis_key::{map_ranking, player_ranking},
+    redis_key::{MapRanking, PlayerRanking, map_ranking, player_ranking},
     sync,
 };
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbConn, EntityTrait, Order, QueryFilter as _, QueryOrder as _,
-    QuerySelect as _, QueryTrait, Select, StreamTrait, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DbConn, EntityTrait, FromQueryResult, QueryFilter as _,
+    QueryOrder as _, QuerySelect as _, QueryTrait, Select, StreamTrait, TransactionTrait,
     prelude::Expr,
     sea_query::{ExprTrait as _, Func},
 };
 
 use crate::{
-    cursors::{ConnectionParameters, F64Cursor, RecordDateCursor, TextCursor},
+    cursors::{ConnectionParameters, F64Cursor, RecordDateCursor},
     error::{self, ApiGqlError, GqlResult},
     objects::{
         event::Event,
@@ -118,9 +116,10 @@ pub(crate) async fn get_connection<C: ConnectionTrait + TransactionTrait>(
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let pagination_input = <PaginationInput>::try_from_input(connection_parameters)?;
 
-    let mut query = base_query
-        .clone()
-        .cursor_by(global_records::Column::RecordDate);
+    let mut query = base_query.cursor_by((
+        global_records::Column::RecordDate,
+        global_records::Column::RecordId,
+    ));
 
     apply_cursor_input(&mut query, &pagination_input);
 
@@ -174,7 +173,7 @@ pub(crate) async fn get_connection<C: ConnectionTrait + TransactionTrait>(
         let rank = ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?;
 
         connection.edges.push(connection::Edge::new(
-            ID(RecordDateCursor(record.record_date.and_utc()).encode_cursor()),
+            ID(RecordDateCursor(record.record_date.and_utc(), record.record_id).encode_cursor()),
             records::RankedRecord {
                 rank,
                 record: record.into(),
@@ -337,18 +336,18 @@ impl QueryRoot {
             first,
             last,
             |after, before, first, last| async move {
-                get_players_connection(
-                    &db.sql_conn,
-                    &mut redis_conn,
-                    ConnectionParameters {
-                        after,
-                        before,
-                        first,
-                        last,
-                    },
-                    filter,
-                )
-                .await
+                let input = <PlayersConnectionInput>::new(ConnectionParameters {
+                    after,
+                    before,
+                    first,
+                    last,
+                });
+                let input = match filter {
+                    Some(filter) => input.with_filter(filter),
+                    None => input,
+                };
+
+                get_players_connection(&db.sql_conn, &mut redis_conn, input).await
             },
         )
         .await
@@ -373,18 +372,18 @@ impl QueryRoot {
             first,
             last,
             |after, before, first, last| async move {
-                get_maps_connection(
-                    &db.sql_conn,
-                    &mut redis_conn,
-                    ConnectionParameters {
-                        after,
-                        before,
-                        first,
-                        last,
-                    },
-                    filter,
-                )
-                .await
+                let input = <MapsConnectionInput>::new(ConnectionParameters {
+                    after,
+                    before,
+                    first,
+                    last,
+                });
+                let input = match filter {
+                    Some(filter) => input.with_filter(filter),
+                    None => input,
+                };
+
+                get_maps_connection(&db.sql_conn, &mut redis_conn, input).await
             },
         )
         .await
@@ -434,167 +433,192 @@ impl QueryRoot {
     }
 }
 
-/// If a filter is provided, the result is ordered by the login of the players, so the cursors become
-/// based on them. Otherwise, the result is ordered by the score of the players.
-async fn get_players_connection<C: ConnectionTrait>(
-    conn: &C,
-    redis_conn: &mut RedisConnection,
-    ConnectionParameters {
-        after,
-        before,
-        first,
-        last,
-    }: ConnectionParameters,
-    filter: Option<PlayersFilter>,
-) -> GqlResult<connection::Connection<ID, PlayerWithScore>> {
-    match filter {
-        Some(filter) => {
-            let after = after
-                .map(|after| {
-                    TextCursor::decode_cursor(&after.0)
-                        .map_err(|e| ApiGqlError::from_cursor_decode_error("after", after.0, e))
-                })
-                .transpose()?;
+#[derive(FromQueryResult)]
+struct PlayerWithUnstyledName {
+    #[sea_orm(nested)]
+    player: players::Model,
+    unstyled_player_name: String,
+}
 
-            let before = before
-                .map(|before| {
-                    TextCursor::decode_cursor(&before.0)
-                        .map_err(|e| ApiGqlError::from_cursor_decode_error("before", before.0, e))
-                })
-                .transpose()?;
+pub(crate) type PlayersConnectionInput<S = PlayerRanking> = ConnectionInput<PlayersFilter, S>;
 
-            let limit = first
-                .map(|f| f as u64)
-                .or(last.map(|l| l as _))
-                .map(|l| l.min(100))
-                .unwrap_or(50);
+enum EitherRedisKey<A, B> {
+    A(A),
+    B(B),
+}
 
-            let has_previous_page = after.is_some();
-
-            let query = players::Entity::find()
-                .apply_if(filter.player_login, |query, login| {
-                    query.filter(players::Column::Login.like(format!("%{login}%")))
-                })
-                .apply_if(filter.player_name, |query, name| {
-                    query.filter(
-                        Func::cust("rm_mp_style")
-                            .arg(Expr::col((players::Entity, players::Column::Name)))
-                            .like(format!("%{name}%")),
-                    )
-                })
-                .apply_if(after, |query, after| {
-                    query.filter(players::Column::Login.gt(after.0))
-                })
-                .apply_if(before, |query, before| {
-                    query.filter(players::Column::Login.lt(before.0))
-                })
-                .order_by(
-                    players::Column::Login,
-                    if first.is_some() {
-                        Order::Asc
-                    } else {
-                        Order::Desc
-                    },
-                )
-                .limit(limit + 1)
-                .all(conn)
-                .await?;
-
-            let mut connection =
-                connection::Connection::new(has_previous_page, query.len() > limit as _);
-            connection.edges.reserve(limit as _);
-
-            for player in query.into_iter().take(limit as _) {
-                let score = redis_conn.zscore(player_ranking(), player.id).await?;
-                let rank: i32 = redis_conn.zrevrank(player_ranking(), player.id).await?;
-                connection.edges.push(connection::Edge::new(
-                    ID(TextCursor(player.login.clone()).encode_cursor()),
-                    PlayerWithScore {
-                        score,
-                        rank: rank + 1,
-                        player: player.into(),
-                    },
-                ));
-            }
-
-            Ok(connection)
-        }
-        None => {
-            let has_previous_page = after.is_some();
-
-            let player_with_scores =
-                build_scores(redis_conn, player_ranking(), after, before, first, last).await?;
-
-            let players = players::Entity::find()
-                .filter(players::Column::Id.is_in(player_with_scores.keys().copied()))
-                .all(conn)
-                .await?;
-
-            let limit = first.or(last).unwrap_or(50);
-            let mut connection = connection::Connection::<_, PlayerWithScore>::new(
-                has_previous_page,
-                players.len() > limit,
-            );
-
-            build_connections(
-                redis_conn,
-                player_ranking(),
-                &mut connection,
-                players,
-                limit,
-                &player_with_scores,
-            )
-            .await?;
-
-            if last.is_some() {
-                connection.edges.sort_by_key(|edge| -edge.node.rank);
-            } else {
-                connection.edges.sort_by_key(|edge| edge.node.rank);
-            }
-
-            Ok(connection)
+impl<A, B> ToRedisArgs for EitherRedisKey<A, B>
+where
+    A: ToRedisArgs,
+    B: ToRedisArgs,
+{
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + deadpool_redis::redis::RedisWrite,
+    {
+        match self {
+            EitherRedisKey::A(a) => ToRedisArgs::write_redis_args(a, out),
+            EitherRedisKey::B(b) => ToRedisArgs::write_redis_args(b, out),
         }
     }
 }
 
-/// If a filter is provided, the result is ordered by the UID of the maps, so the cursors become
-/// based on them. Otherwise, the result is ordered by the score of the maps.
-async fn get_maps_connection<C: ConnectionTrait>(
+fn custom_source_or<S, F, D>(source: Option<S>, default: F) -> EitherRedisKey<D, S>
+where
+    F: FnOnce() -> D,
+{
+    source
+        .map(EitherRedisKey::B)
+        .unwrap_or_else(|| EitherRedisKey::A(default()))
+}
+
+pub(crate) async fn get_players_connection<C, S>(
     conn: &C,
     redis_conn: &mut RedisConnection,
-    ConnectionParameters {
-        after,
-        before,
-        first,
-        last,
-    }: ConnectionParameters,
-    filter: Option<MapsFilter>,
-) -> GqlResult<connection::Connection<ID, MapWithScore>> {
-    match filter {
-        Some(filter) => {
-            let after = after
-                .map(|after| {
-                    TextCursor::decode_cursor(&after.0)
-                        .map_err(|e| ApiGqlError::from_cursor_decode_error("after", after.0, e))
+    input: PlayersConnectionInput<S>,
+) -> GqlResult<connection::Connection<ID, PlayerWithScore>>
+where
+    C: ConnectionTrait,
+    S: ToRedisArgs + Send + Sync,
+{
+    let pagination_input =
+        PaginationInput::<F64Cursor>::try_from_input(input.connection_parameters)?;
+
+    let query = players::Entity::find()
+        .expr_as(
+            Func::cust("rm_mp_style").arg(Expr::col((players::Entity, players::Column::Name))),
+            "unstyled_player_name",
+        )
+        .apply_if(input.filter, |query, filter| {
+            query
+                .apply_if(filter.player_login, |query, login| {
+                    query.filter(players::Column::Login.like(format!("%{login}%")))
                 })
-                .transpose()?;
-
-            let before = before
-                .map(|before| {
-                    TextCursor::decode_cursor(&before.0)
-                        .map_err(|e| ApiGqlError::from_cursor_decode_error("before", before.0, e))
+                .apply_if(filter.player_name, |query, name| {
+                    query.filter(Expr::col("unstyled_player_name").like(format!("%{name}%")))
                 })
-                .transpose()?;
+        })
+        .order_by_desc(players::Column::Score)
+        .order_by_desc(players::Column::Id);
 
-            let limit = first
-                .map(|f| f as u64)
-                .or(last.map(|l| l as _))
-                .map(|l| l.min(100))
-                .unwrap_or(50);
+    let mut query = query
+        .cursor_by((players::Column::Score, players::Column::Id))
+        .into_model::<PlayerWithUnstyledName>();
 
-            let has_previous_page = after.is_some();
+    apply_cursor_input(&mut query, &pagination_input);
 
-            let query = maps::Entity::find()
+    let (mut connection, players) = match pagination_input.dir {
+        PaginationDirection::After { cursor } => {
+            let players = query
+                .first(pagination_input.limit as u64 + 1)
+                .all(conn)
+                .await?;
+            (
+                connection::Connection::new(
+                    cursor.is_some(),
+                    players.len() > pagination_input.limit,
+                ),
+                itertools::Either::Left(players.into_iter().take(pagination_input.limit)),
+            )
+        }
+        PaginationDirection::Before { .. } => {
+            let players = query
+                .last(pagination_input.limit as u64 + 1)
+                .all(conn)
+                .await?;
+            let amount_to_skip = players.len().saturating_sub(pagination_input.limit);
+            (
+                connection::Connection::new(players.len() > pagination_input.limit, true),
+                itertools::Either::Right(players.into_iter().skip(amount_to_skip)),
+            )
+        }
+    };
+
+    connection.edges.reserve(players.len());
+    let source = custom_source_or(input.source, player_ranking);
+
+    for player in players {
+        let rank: i32 = redis_conn.zrevrank(&source, player.player.id).await?;
+        connection.edges.push(connection::Edge::new(
+            ID(F64Cursor(player.player.score, player.player.id).encode_cursor()),
+            PlayerWithScore {
+                rank: rank + 1,
+                player: player.player.into(),
+            },
+        ));
+    }
+
+    Ok(connection)
+}
+
+#[derive(FromQueryResult)]
+struct MapWithUnstyledName {
+    #[sea_orm(nested)]
+    map: maps::Model,
+    unstyled_map_name: String,
+}
+
+pub(crate) struct ConnectionInput<F, S> {
+    connection_parameters: ConnectionParameters,
+    filter: Option<F>,
+    source: Option<S>,
+}
+
+impl<F, S> Default for ConnectionInput<F, S> {
+    fn default() -> Self {
+        Self {
+            connection_parameters: Default::default(),
+            filter: Default::default(),
+            source: Default::default(),
+        }
+    }
+}
+
+impl<F, S> ConnectionInput<F, S> {
+    pub(crate) fn new(connection_parameters: ConnectionParameters) -> Self {
+        Self {
+            connection_parameters,
+            filter: None,
+            source: None,
+        }
+    }
+
+    pub(crate) fn with_filter(mut self, filter: F) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    #[allow(unused)] // used for testing
+    pub(crate) fn with_source<U>(self, source: U) -> ConnectionInput<F, U> {
+        ConnectionInput {
+            connection_parameters: self.connection_parameters,
+            filter: self.filter,
+            source: Some(source),
+        }
+    }
+}
+
+pub(crate) type MapsConnectionInput<S = MapRanking> = ConnectionInput<MapsFilter, S>;
+
+pub(crate) async fn get_maps_connection<C, S>(
+    conn: &C,
+    redis_conn: &mut RedisConnection,
+    input: MapsConnectionInput<S>,
+) -> GqlResult<connection::Connection<ID, MapWithScore>>
+where
+    C: ConnectionTrait,
+    S: ToRedisArgs + Send + Sync,
+{
+    let pagination_input =
+        PaginationInput::<F64Cursor>::try_from_input(input.connection_parameters)?;
+
+    let query = maps::Entity::find()
+        .expr_as(
+            Func::cust("rm_mp_style").arg(Expr::col((maps::Entity, maps::Column::Name))),
+            "unstyled_map_name",
+        )
+        .apply_if(input.filter, |query, filter| {
+            query
                 .apply_if(filter.author, |query, filter| {
                     query
                         .inner_join(players::Entity)
@@ -613,220 +637,55 @@ async fn get_maps_connection<C: ConnectionTrait>(
                     query.filter(maps::Column::GameId.like(format!("%{uid}%")))
                 })
                 .apply_if(filter.map_name, |query, name| {
-                    query.filter(
-                        Func::cust("rm_mp_style")
-                            .arg(Expr::col((maps::Entity, maps::Column::Name)))
-                            .like(format!("%{name}%")),
-                    )
+                    query.filter(Expr::col("unstyled_map_name").like(format!("%{name}%")))
                 })
-                .apply_if(after, |query, after| {
-                    query.filter(maps::Column::GameId.gt(after.0))
-                })
-                .apply_if(before, |query, before| {
-                    query.filter(maps::Column::GameId.lt(before.0))
-                })
-                .order_by(
-                    maps::Column::GameId,
-                    if first.is_some() {
-                        Order::Asc
-                    } else {
-                        Order::Desc
-                    },
-                )
-                .limit(limit + 1)
+        })
+        .order_by_desc(maps::Column::Score)
+        .order_by_desc(maps::Column::Id);
+
+    let mut query = query
+        .cursor_by((maps::Column::Score, maps::Column::Id))
+        .into_model::<MapWithUnstyledName>();
+
+    apply_cursor_input(&mut query, &pagination_input);
+
+    let (mut connection, maps) = match pagination_input.dir {
+        PaginationDirection::After { cursor } => {
+            let maps = query
+                .first(pagination_input.limit as u64 + 1)
                 .all(conn)
                 .await?;
-
-            let mut connection =
-                connection::Connection::new(has_previous_page, query.len() > limit as _);
-            connection.edges.reserve(limit as _);
-
-            for map in query.into_iter().take(limit as _) {
-                let score = redis_conn.zscore(map_ranking(), map.id).await?;
-                let rank: i32 = redis_conn.zrevrank(map_ranking(), map.id).await?;
-                connection.edges.push(connection::Edge::new(
-                    ID(TextCursor(map.game_id.clone()).encode_cursor()),
-                    MapWithScore {
-                        score,
-                        rank: rank + 1,
-                        map: map.into(),
-                    },
-                ));
-            }
-
-            Ok(connection)
-        }
-        None => {
-            let has_previous_page = after.is_some();
-
-            let map_with_scores =
-                build_scores(redis_conn, map_ranking(), after, before, first, last).await?;
-
-            let maps = maps::Entity::find()
-                .filter(maps::Column::Id.is_in(map_with_scores.keys().copied()))
-                .all(conn)
-                .await?;
-
-            let limit = first.or(last).unwrap_or(50);
-            let mut connection = connection::Connection::<_, MapWithScore>::new(
-                has_previous_page,
-                maps.len() > limit,
-            );
-
-            build_connections(
-                redis_conn,
-                map_ranking(),
-                &mut connection,
-                maps,
-                limit,
-                &map_with_scores,
+            (
+                connection::Connection::new(cursor.is_some(), maps.len() > pagination_input.limit),
+                itertools::Either::Left(maps.into_iter().take(pagination_input.limit)),
             )
-            .await?;
-
-            if last.is_some() {
-                connection.edges.sort_by_key(|edge| -edge.node.rank);
-            } else {
-                connection.edges.sort_by_key(|edge| edge.node.rank);
-            }
-
-            Ok(connection)
         }
-    }
-}
+        PaginationDirection::Before { .. } => {
+            let maps = query
+                .last(pagination_input.limit as u64 + 1)
+                .all(conn)
+                .await?;
+            let amount_to_skip = maps.len().saturating_sub(pagination_input.limit);
+            (
+                connection::Connection::new(maps.len() > pagination_input.limit, true),
+                itertools::Either::Right(maps.into_iter().skip(amount_to_skip)),
+            )
+        }
+    };
 
-async fn build_connections<K, I, T, U>(
-    redis_conn: &mut RedisConnection,
-    redis_key: K,
-    connection: &mut connection::Connection<ID, T>,
-    items: I,
-    limit: usize,
-    scores: &HashMap<u32, f64>,
-) -> GqlResult<()>
-where
-    K: ToRedisArgs + Sync,
-    I: IntoIterator<Item = U>,
-    U: HasId,
-    T: Ranking<Item = U> + OutputType,
-{
-    connection.edges.reserve(limit);
+    connection.edges.reserve(maps.len());
+    let source = custom_source_or(input.source, map_ranking);
 
-    for map in items.into_iter().take(limit) {
-        let score = scores
-            .get(&map.get_id())
-            .copied()
-            .ok_or_else(|| internal!("missing score entry for ID {}", map.get_id()))?;
-        let rank: i32 = redis_conn.zrevrank(&redis_key, map.get_id()).await?;
+    for map in maps {
+        let rank: i32 = redis_conn.zrevrank(&source, map.map.id).await?;
         connection.edges.push(connection::Edge::new(
-            ID(F64Cursor(score).encode_cursor()),
-            T::from_node(rank + 1, score, map),
+            ID(F64Cursor(map.map.score, map.map.id).encode_cursor()),
+            MapWithScore {
+                rank: rank + 1,
+                map: map.map.into(),
+            },
         ));
     }
 
-    Ok(())
-}
-
-trait Ranking {
-    type Item;
-
-    fn from_node(rank: i32, score: f64, node: Self::Item) -> Self;
-}
-
-trait HasId {
-    fn get_id(&self) -> u32;
-}
-
-impl HasId for maps::Model {
-    fn get_id(&self) -> u32 {
-        self.id
-    }
-}
-
-impl HasId for players::Model {
-    fn get_id(&self) -> u32 {
-        self.id
-    }
-}
-
-impl Ranking for MapWithScore {
-    type Item = maps::Model;
-
-    fn from_node(rank: i32, score: f64, node: Self::Item) -> Self {
-        Self {
-            rank,
-            score,
-            map: node.into(),
-        }
-    }
-}
-
-impl Ranking for PlayerWithScore {
-    type Item = players::Model;
-
-    fn from_node(rank: i32, score: f64, node: Self::Item) -> Self {
-        Self {
-            rank,
-            score,
-            player: node.into(),
-        }
-    }
-}
-
-async fn build_scores<K>(
-    redis_conn: &mut deadpool_redis::Connection,
-    redis_key: K,
-    after: Option<ID>,
-    before: Option<ID>,
-    first: Option<usize>,
-    last: Option<usize>,
-) -> Result<HashMap<u32, f64>, ApiGqlError>
-where
-    K: ToRedisArgs + Sync + fmt::Display,
-{
-    let ids: Vec<String> = match after {
-        Some(after) => {
-            let decoded = F64Cursor::decode_cursor(&after.0)
-                .map_err(|e| ApiGqlError::from_cursor_decode_error("after", after.0, e))?;
-            let first = first.map(|f| f.min(100)).unwrap_or(50);
-            redis_conn
-                .zrevrangebyscore_limit_withscores(&redis_key, decoded.0, "-inf", 1, first as _)
-                .await?
-        }
-        None => match before {
-            Some(before) => {
-                let decoded = F64Cursor::decode_cursor(&before.0)
-                    .map_err(|e| ApiGqlError::from_cursor_decode_error("before", before.0, e))?;
-                let last = last.map(|l| l.min(100)).unwrap_or(50);
-                redis_conn
-                    .zrangebyscore_limit_withscores(&redis_key, decoded.0, "+inf", 1, last as _)
-                    .await?
-            }
-            None => match last {
-                Some(last) => {
-                    redis_conn
-                        .zrange_withscores(&redis_key, 0, last.min(100) as isize - 1)
-                        .await?
-                }
-                None => {
-                    let first = first.map(|f| f.min(100)).unwrap_or(50);
-                    redis_conn
-                        .zrevrange_withscores(&redis_key, 0, first as isize - 1)
-                        .await?
-                }
-            },
-        },
-    };
-    let (ids, _) = ids.as_chunks::<2>();
-    let with_scores = ids
-        .iter()
-        .map(|[id, score]| {
-            let id = id
-                .parse::<u32>()
-                .map_err(|e| internal!("got invalid ID `{id}` in {redis_key} ZSET: {e}"))?;
-            let score = score
-                .parse::<f64>()
-                .map_err(|e| internal!("got invalid score `{score}` in {redis_key} ZSET: {e}"))?;
-            GqlResult::Ok((id, score))
-        })
-        .collect::<GqlResult<HashMap<_, _>>>()?;
-    Ok(with_scores)
+    Ok(connection)
 }

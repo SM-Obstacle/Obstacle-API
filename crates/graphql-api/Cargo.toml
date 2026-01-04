@@ -24,6 +24,7 @@ itertools.workspace = true
 test-env = { path = "../test-env" }
 anyhow = { workspace = true }
 tracing.workspace = true
+rand.workspace = true
 
 [features]
 default = []

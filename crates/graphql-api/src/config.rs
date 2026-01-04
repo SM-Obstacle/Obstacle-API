@@ -97,6 +97,6 @@ pub fn init_config() -> Result<(), InitError> {
     CONFIG.set(config).map_err(|_| InitError::ConfigAlreadySet)
 }
 
-pub fn config() -> &'static ApiConfig {
+pub(crate) fn config() -> &'static ApiConfig {
     CONFIG.get().unwrap()
 }

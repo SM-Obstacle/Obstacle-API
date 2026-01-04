@@ -25,6 +25,10 @@ pub enum CursorDecodeErrorKind {
     NoTime,
     NoScore,
     InvalidTimestamp(i64),
+    MissingText,
+    MissingScore,
+    MissingData,
+    TooLong,
 }
 
 impl fmt::Display for CursorDecodeErrorKind {
@@ -42,6 +46,10 @@ impl fmt::Display for CursorDecodeErrorKind {
                 f.write_str("invalid timestamp: ")?;
                 fmt::Display::fmt(t, f)
             }
+            CursorDecodeErrorKind::MissingText => f.write_str("missing text"),
+            CursorDecodeErrorKind::MissingScore => f.write_str("missing score"),
+            CursorDecodeErrorKind::MissingData => f.write_str("missing data"),
+            CursorDecodeErrorKind::TooLong => f.write_str("input too long"),
         }
     }
 }

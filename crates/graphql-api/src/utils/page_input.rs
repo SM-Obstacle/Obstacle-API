@@ -17,6 +17,25 @@ pub struct PaginationInput<C = RecordDateCursor> {
     pub limit: usize,
 }
 
+impl<C> PaginationInput<C> {
+    pub fn map_cursor<F, U>(self, f: F) -> PaginationInput<U>
+    where
+        F: FnOnce(C) -> U,
+    {
+        PaginationInput {
+            dir: match self.dir {
+                PaginationDirection::After { cursor } => PaginationDirection::After {
+                    cursor: cursor.map(f),
+                },
+                PaginationDirection::Before { cursor } => {
+                    PaginationDirection::Before { cursor: f(cursor) }
+                }
+            },
+            limit: self.limit,
+        }
+    }
+}
+
 impl<C> PaginationInput<C>
 where
     C: CursorType<Error = CursorDecodeErrorKind>,

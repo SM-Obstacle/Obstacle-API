@@ -1,7 +1,7 @@
 use sea_orm::entity::prelude::*;
 
 /// A ShootMania Obstacle map in the database.
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "maps")]
 pub struct Model {
     /// The map ID.
@@ -32,6 +32,8 @@ pub struct Model {
     pub gold_time: Option<i32>,
     /// The author time of the map.
     pub author_time: Option<i32>,
+    /// The score of the player, calculated periodically.
+    pub score: f64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

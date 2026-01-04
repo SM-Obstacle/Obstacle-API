@@ -6,5 +6,4 @@ use crate::objects::player::Player;
 pub struct PlayerWithScore {
     pub rank: i32,
     pub player: Player,
-    pub score: f64,
 }

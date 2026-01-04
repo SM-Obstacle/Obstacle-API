@@ -5,7 +5,7 @@ pub mod schema;
 
 pub mod cursors;
 
-mod config;
+pub mod config;
 pub(crate) use config::config;
 pub use config::init_config;
 

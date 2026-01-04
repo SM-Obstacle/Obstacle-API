@@ -27,6 +27,7 @@ fn setup() {
 
 #[derive(Debug, PartialEq)]
 struct Record {
+    record_id: u32,
     cursor: String,
     rank: i32,
     map_id: u32,
@@ -53,8 +54,8 @@ async fn test_default_page(is_desc: bool) -> anyhow::Result<()> {
     let map_id = test_env::get_map_id();
     let map = maps::ActiveModel {
         id: Set(map_id),
-        game_id: Set("player_uid".to_owned()),
-        name: Set("player_name".to_owned()),
+        game_id: Set("map_uid".to_owned()),
+        name: Set("map_name".to_owned()),
         player_id: Set(1),
         ..Default::default()
     };
@@ -66,6 +67,7 @@ async fn test_default_page(is_desc: bool) -> anyhow::Result<()> {
         .collect_vec();
 
     let records = (0..player_amount).map(|i| records::ActiveModel {
+        record_id: Set((i + 1) as _),
         map_id: Set(map_id),
         record_player_id: Set((i + 1) as _),
         flags: Set(682),
@@ -104,6 +106,7 @@ async fn test_default_page(is_desc: bool) -> anyhow::Result<()> {
 
         itertools::assert_equal(
             result.edges.into_iter().map(|edge| Record {
+                record_id: edge.node.inner.record.record_id,
                 cursor: edge.cursor.0,
                 rank: edge.node.inner.rank,
                 map_id: edge.node.inner.record.map_id,
@@ -117,7 +120,8 @@ async fn test_default_page(is_desc: bool) -> anyhow::Result<()> {
                 let i = if is_desc { player_amount - 1 - i } else { i };
                 let record_date = record_dates[i].and_utc();
                 Record {
-                    cursor: RecordDateCursor(record_date).encode_cursor(),
+                    record_id: i as u32 + 1,
+                    cursor: RecordDateCursor(record_date, i + 1).encode_cursor(),
                     rank: 1,
                     map_id,
                     flags: 682,
@@ -267,8 +271,8 @@ async fn test_first_x_after_y(
     let map_id = test_env::get_map_id();
     let map = maps::ActiveModel {
         id: Set(map_id),
-        game_id: Set("player_uid".to_owned()),
-        name: Set("player_name".to_owned()),
+        game_id: Set("map_uid".to_owned()),
+        name: Set("map_name".to_owned()),
         player_id: Set(1),
         ..Default::default()
     };
@@ -280,6 +284,7 @@ async fn test_first_x_after_y(
         .collect_vec();
 
     let records = (0..params.player_amount).map(|i| records::ActiveModel {
+        record_id: Set((i + 1) as _),
         map_id: Set(map_id),
         record_player_id: Set((i + 1) as _),
         flags: Set(682),
@@ -303,18 +308,17 @@ async fn test_first_x_after_y(
             &db.redis_pool,
             ConnectionParameters {
                 before: None,
-                after: Some(ID(RecordDateCursor(
-                    record_dates[if params.is_desc {
+                after: Some(ID({
+                    let idx = if params.is_desc {
                         params
                             .player_amount
                             .saturating_sub(1)
                             .saturating_sub(params.after_idx)
                     } else {
                         params.after_idx
-                    }]
-                    .and_utc(),
-                )
-                .encode_cursor())),
+                    };
+                    RecordDateCursor(record_dates[idx].and_utc(), idx + 1).encode_cursor()
+                })),
                 first: params.first,
                 last: None,
             },
@@ -329,6 +333,7 @@ async fn test_first_x_after_y(
 
         itertools::assert_equal(
             result.edges.into_iter().map(|edge| Record {
+                record_id: edge.node.inner.record.record_id,
                 cursor: edge.cursor.0,
                 rank: edge.node.inner.rank,
                 map_id: edge.node.inner.record.map_id,
@@ -351,7 +356,8 @@ async fn test_first_x_after_y(
                 };
                 let record_date = record_dates[i].and_utc();
                 Record {
-                    cursor: RecordDateCursor(record_date).encode_cursor(),
+                    record_id: i as u32 + 1,
+                    cursor: RecordDateCursor(record_date, i as u32 + 1).encode_cursor(),
                     rank: 1,
                     map_id,
                     flags: 682,
@@ -422,8 +428,8 @@ async fn test_last_x_before_y(
     let map_id = test_env::get_map_id();
     let map = maps::ActiveModel {
         id: Set(map_id),
-        game_id: Set("player_uid".to_owned()),
-        name: Set("player_name".to_owned()),
+        game_id: Set("map_uid".to_owned()),
+        name: Set("map_name".to_owned()),
         player_id: Set(1),
         ..Default::default()
     };
@@ -435,6 +441,7 @@ async fn test_last_x_before_y(
         .collect_vec();
 
     let records = (0..params.player_amount).map(|i| records::ActiveModel {
+        record_id: Set((i + 1) as _),
         map_id: Set(map_id),
         record_player_id: Set((i + 1) as _),
         flags: Set(682),
@@ -457,18 +464,17 @@ async fn test_last_x_before_y(
             &db.sql_conn,
             &db.redis_pool,
             ConnectionParameters {
-                before: Some(ID(RecordDateCursor(
-                    record_dates[if params.is_desc {
+                before: Some(ID({
+                    let idx = if params.is_desc {
                         params
                             .player_amount
                             .saturating_sub(1)
                             .saturating_sub(params.before_idx)
                     } else {
                         params.before_idx
-                    }]
-                    .and_utc(),
-                )
-                .encode_cursor())),
+                    };
+                    RecordDateCursor(record_dates[idx].and_utc(), idx + 1).encode_cursor()
+                })),
                 after: None,
                 first: None,
                 last: params.last,
@@ -484,6 +490,7 @@ async fn test_last_x_before_y(
 
         itertools::assert_equal(
             result.edges.into_iter().map(|edge| Record {
+                record_id: edge.node.inner.record.record_id,
                 cursor: edge.cursor.0,
                 rank: edge.node.inner.rank,
                 map_id: edge.node.inner.record.map_id,
@@ -501,7 +508,8 @@ async fn test_last_x_before_y(
                 };
                 let record_date = record_dates[i].and_utc();
                 Record {
-                    cursor: RecordDateCursor(record_date).encode_cursor(),
+                    record_id: i as u32 + 1,
+                    cursor: RecordDateCursor(record_date, i as u32 + 1).encode_cursor(),
                     rank: 1,
                     map_id,
                     flags: 682,

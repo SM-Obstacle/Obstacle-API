@@ -70,6 +70,10 @@ impl Player {
         self.inner.zone_path.as_deref()
     }
 
+    async fn score(&self) -> f64 {
+        self.inner.score
+    }
+
     async fn role(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<PlayerRole> {
         let conn = ctx.data_unchecked::<DbConn>();
 
@@ -187,7 +191,7 @@ async fn get_player_records<C: ConnectionTrait + StreamTrait>(
     Ok(ranked_records)
 }
 
-async fn get_player_records_connection<C>(
+pub(crate) async fn get_player_records_connection<C>(
     conn: &C,
     redis_pool: &RedisPool,
     player_id: u32,

@@ -1,7 +1,7 @@
 use sea_orm::entity::prelude::*;
 
 /// A player in the database.
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "players")]
 pub struct Model {
     /// The player ID.
@@ -20,6 +20,8 @@ pub struct Model {
     pub admins_note: Option<String>,
     /// The player role.
     pub role: u8,
+    /// The score of the player, calculated periodically.
+    pub score: f64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

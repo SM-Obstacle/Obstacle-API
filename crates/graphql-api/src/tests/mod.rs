@@ -1,1 +1,6 @@
-mod cursor_pagination;
+mod queryroot_maps_connection;
+mod queryroot_players_connection;
+mod queryroot_records_connection;
+
+mod maps_records_connection;
+mod players_records_connection;

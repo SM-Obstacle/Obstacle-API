@@ -6,5 +6,4 @@ use crate::objects::map::Map;
 pub struct MapWithScore {
     pub rank: i32,
     pub map: Map,
-    pub score: f64,
 }
