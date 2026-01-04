@@ -104,7 +104,7 @@ where
     splitted
         .into_iter()
         .next()
-        .and_then(|t| t.as_ref().parse().ok())
+        .and_then(|t| t.as_ref().replace("\\:", ":").parse().ok())
         .ok_or(CursorDecodeErrorKind::MissingData)
 }
 
@@ -129,7 +129,8 @@ where
 
     fn encode_cursor(&self) -> String {
         let timestamp = self.0.timestamp_millis();
-        encode_base64(format!("record_date:{}:{}", timestamp, self.1))
+        let escaped_data = self.1.to_string().replace(':', "\\:");
+        encode_base64(format!("record_date:{}:{escaped_data}", timestamp))
     }
 }
 
@@ -172,9 +173,10 @@ where
 
     fn encode_cursor(&self) -> String {
         let timestamp = self.record_date.timestamp_millis();
+        let escaped_data = self.data.to_string().replace(':', "\\:");
         encode_base64(format!(
-            "record_rank:{timestamp}:{}:{}",
-            self.time, self.data
+            "record_rank:{timestamp}:{}:{escaped_data}",
+            self.time,
         ))
     }
 }
@@ -200,14 +202,19 @@ where
         let decoded = decode_base64(s)?;
         let mut splitted = decoded.split(':');
         check_prefix("text", &mut splitted)?;
-        let text = splitted.next().ok_or(CursorDecodeErrorKind::MissingText)?;
+        let text = splitted
+            .next()
+            .ok_or(CursorDecodeErrorKind::MissingText)?
+            .replace("\\:", ":");
         let data = check_data(&mut splitted)?;
         check_finished(&mut splitted)?;
         Ok(Self(text.to_owned(), data))
     }
 
     fn encode_cursor(&self) -> String {
-        encode_base64(format!("text:{}:{}", self.0, self.1))
+        let escaped_txt = self.0.replace(':', "\\:");
+        let escaped_data = self.1.to_string().replace(':', "\\:");
+        encode_base64(format!("text:{escaped_txt}:{escaped_data}"))
     }
 }
 
@@ -243,7 +250,8 @@ where
     }
 
     fn encode_cursor(&self) -> String {
-        encode_base64(format!("score:{}:{}", self.0, self.1))
+        let escaped_data = self.1.to_string().replace(':', "\\:");
+        encode_base64(format!("score:{}:{escaped_data}", self.0))
     }
 }
 
@@ -294,7 +302,9 @@ mod tests {
         let decoded = BASE64_URL_SAFE
             .decode(&cursor)
             .expect("cursor should be encoded as base64");
-        assert!(decoded.starts_with(format!("record:{}:0$", now.timestamp_millis()).as_bytes()));
+        assert!(
+            decoded.starts_with(format!("record_date:{}:0$", now.timestamp_millis()).as_bytes())
+        );
     }
 
     #[test]
@@ -343,7 +353,8 @@ mod tests {
             .decode(&cursor)
             .expect("cursor should be encoded as base64");
         assert!(
-            decoded.starts_with(format!("record:{}:1000:24$", now.timestamp_millis()).as_bytes())
+            decoded
+                .starts_with(format!("record_rank:{}:1000:24$", now.timestamp_millis()).as_bytes())
         );
     }
 
