@@ -33,7 +33,10 @@ use crate::{
         sort_state::SortState, sortable_fields::MapRecordSortableField,
     },
     utils::{
-        page_input::{PaginationDirection, PaginationInput, apply_cursor_input},
+        page_input::{
+            PaginationDirection, PaginationInput, ParsedPaginationInput, apply_cursor_input,
+        },
+        pagination_result::{PaginationResult, get_paginated},
         records_filter::apply_filter,
     },
 };
@@ -174,13 +177,26 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
     sort: Option<MapRecordSort>,
     filter: Option<RecordsFilter>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
-    let pagination_input = match sort.map(|s| s.field) {
-        Some(MapRecordSortableField::Date) => {
+    let sort_input = match sort.map(|s| s.field) {
+        Some(MapRecordSortableField::Date) => ParsedPaginationInput::new(
             PaginationInput::<RecordDateCursor>::try_from_input(connection_parameters)?
-                .map_cursor(MapRecordCursor::Date)
-        }
-        _ => PaginationInput::<RecordRankCursor>::try_from_input(connection_parameters)?
-            .map_cursor(MapRecordCursor::Rank),
+                .map_cursor(MapRecordCursor::Date),
+            |record: &global_records::Model| {
+                RecordDateCursor(record.record_date.and_utc(), record.record_id).encode_cursor()
+            },
+        ),
+        _ => ParsedPaginationInput::new(
+            PaginationInput::<RecordRankCursor>::try_from_input(connection_parameters)?
+                .map_cursor(MapRecordCursor::Rank),
+            |record: &global_records::Model| {
+                RecordRankCursor {
+                    time: record.time,
+                    record_date: record.record_date.and_utc(),
+                    data: record.record_id,
+                }
+                .encode_cursor()
+            },
+        ),
     };
 
     let base_query = apply_filter(
@@ -188,11 +204,22 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
         filter.as_ref(),
     );
 
-    let mut query = match sort.map(|s| s.field) {
-        Some(MapRecordSortableField::Date) => base_query.cursor_by((
-            global_records::Column::RecordDate,
-            global_records::Column::RecordId,
-        )),
+    let mut query = match (&sort_input.page_input().dir, sort.map(|s| s.field)) {
+        (
+            PaginationDirection::After {
+                cursor: Some(MapRecordCursor::Date(_)),
+            }
+            | PaginationDirection::Before {
+                cursor: MapRecordCursor::Date(_),
+            },
+            _,
+        )
+        | (PaginationDirection::After { cursor: None }, Some(MapRecordSortableField::Date)) => {
+            base_query.cursor_by((
+                global_records::Column::RecordDate,
+                global_records::Column::RecordId,
+            ))
+        }
         _ => base_query.cursor_by((
             global_records::Column::Time,
             global_records::Column::RecordDate,
@@ -200,55 +227,19 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
         )),
     };
 
-    apply_cursor_input(&mut query, &pagination_input);
+    apply_cursor_input(&mut query, sort_input.page_input());
 
     match sort.and_then(|s| s.order) {
         Some(SortOrder::Descending) => query.desc(),
         _ => query.asc(),
     };
 
-    let (mut connection, records) = match pagination_input.dir {
-        PaginationDirection::After { cursor } => {
-            let records = query
-                .first(pagination_input.limit as u64 + 1)
-                .all(conn)
-                .await?;
-            (
-                connection::Connection::new(
-                    cursor.is_some(),
-                    records.len() > pagination_input.limit,
-                ),
-                itertools::Either::Left(records.into_iter().take(pagination_input.limit)),
-            )
-        }
-        PaginationDirection::Before { .. } => {
-            let records = query
-                .last(pagination_input.limit as u64 + 1)
-                .all(conn)
-                .await?;
-            let amount_to_skip = records.len().saturating_sub(pagination_input.limit);
-            (
-                connection::Connection::new(records.len() > pagination_input.limit, true),
-                itertools::Either::Right(records.into_iter().skip(amount_to_skip)),
-            )
-        }
-    };
+    let PaginationResult {
+        mut connection,
+        iter: records,
+    } = get_paginated(conn, query, sort_input.page_input()).await?;
 
     connection.edges.reserve(records.len());
-
-    let cursor_encoder = match sort.map(|s| s.field) {
-        Some(MapRecordSortableField::Date) => |record: &global_records::Model| {
-            RecordDateCursor(record.record_date.and_utc(), record.record_id).encode_cursor()
-        },
-        _ => |record: &global_records::Model| {
-            RecordRankCursor {
-                time: record.time,
-                record_date: record.record_date.and_utc(),
-                data: record.record_id,
-            }
-            .encode_cursor()
-        },
-    };
 
     ranks::update_leaderboard(conn, redis_pool, map_id, event).await?;
 
@@ -258,7 +249,7 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
         let rank = ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?;
 
         connection.edges.push(connection::Edge::new(
-            ID(cursor_encoder(&record)),
+            ID(sort_input.encode_cursor(&record)),
             records::RankedRecord {
                 rank,
                 record: record.into(),

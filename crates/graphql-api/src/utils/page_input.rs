@@ -104,3 +104,34 @@ where
         }
     }
 }
+
+pub struct ParsedPaginationInput<C, D> {
+    pagination_input: PaginationInput<C>,
+    cursor_encoder: fn(&D) -> String,
+}
+
+impl<C, D> ParsedPaginationInput<C, D> {
+    pub fn new(pagination_input: PaginationInput<C>, cursor_encoder: fn(&D) -> String) -> Self {
+        Self {
+            pagination_input,
+            cursor_encoder,
+        }
+    }
+
+    #[inline]
+    pub fn page_input(&self) -> &PaginationInput<C> {
+        self.as_ref()
+    }
+
+    #[inline(always)]
+    pub fn encode_cursor(&self, player: &D) -> String {
+        (self.cursor_encoder)(player)
+    }
+}
+
+impl<C, D> AsRef<PaginationInput<C>> for ParsedPaginationInput<C, D> {
+    #[inline(always)]
+    fn as_ref(&self) -> &PaginationInput<C> {
+        &self.pagination_input
+    }
+}
