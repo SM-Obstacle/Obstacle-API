@@ -130,7 +130,11 @@ async fn default_page() -> anyhow::Result<()> {
                 score: edge.node.map.inner.score,
             }),
             (0..default_limit).map(|i| Map {
-                cursor: F64Cursor(i as _, (i + 1) as u32).encode_cursor(),
+                cursor: F64Cursor {
+                    score: i as _,
+                    data: (i + 1),
+                }
+                .encode_cursor(),
                 id: (i + 1) as _,
                 uid: format!("map_{i}_uid"),
                 name: format!("map_{i}_name"),
@@ -223,9 +227,11 @@ async fn test_first_x_after_y(
             &mut redis_conn,
             <MapsConnectionInput>::new(ConnectionParameters {
                 first: params.first,
-                after: Some(ID(
-                    F64Cursor(params.after_idx as _, params.after_idx + 1).encode_cursor()
-                )),
+                after: Some(ID(F64Cursor {
+                    score: params.after_idx as _,
+                    data: params.after_idx + 1,
+                }
+                .encode_cursor())),
                 ..Default::default()
             })
             .with_source(source),
@@ -244,7 +250,11 @@ async fn test_first_x_after_y(
             (0..expected_len).map(|i| {
                 let i = params.after_idx + 1 + i;
                 Map {
-                    cursor: F64Cursor(i as _, (i + 1) as u32).encode_cursor(),
+                    cursor: F64Cursor {
+                        score: i as _,
+                        data: (i + 1),
+                    }
+                    .encode_cursor(),
                     id: (i + 1) as _,
                     uid: format!("map_{i}_uid"),
                     name: format!("map_{i}_name"),
@@ -333,9 +343,11 @@ async fn test_last_x_before_y(
             &mut redis_conn,
             <MapsConnectionInput>::new(ConnectionParameters {
                 last: params.last,
-                before: Some(ID(
-                    F64Cursor(params.before_idx as _, params.before_idx + 1).encode_cursor()
-                )),
+                before: Some(ID(F64Cursor {
+                    score: params.before_idx as _,
+                    data: params.before_idx + 1,
+                }
+                .encode_cursor())),
                 ..Default::default()
             })
             .with_source(source),
@@ -354,7 +366,11 @@ async fn test_last_x_before_y(
             (0..expected_len).map(|i| {
                 let i = i + params.before_idx - expected_len;
                 Map {
-                    cursor: F64Cursor(i as _, (i + 1) as u32).encode_cursor(),
+                    cursor: F64Cursor {
+                        score: i as _,
+                        data: (i + 1),
+                    }
+                    .encode_cursor(),
                     id: (i + 1) as _,
                     uid: format!("map_{i}_uid"),
                     name: format!("map_{i}_name"),

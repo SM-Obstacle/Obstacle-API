@@ -154,7 +154,11 @@ pub(crate) async fn get_connection<C: ConnectionTrait + TransactionTrait>(
         let rank = ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?;
 
         connection.edges.push(connection::Edge::new(
-            ID(RecordDateCursor(record.record_date.and_utc(), record.record_id).encode_cursor()),
+            ID(RecordDateCursor {
+                record_date: record.record_date.and_utc(),
+                data: record.record_id,
+            }
+            .encode_cursor()),
             records::RankedRecord {
                 rank,
                 record: record.into(),
@@ -542,14 +546,22 @@ where
             PaginationInput::<TextCursor>::try_from_input(input.connection_parameters)?
                 .map_cursor(PlayerMapRankingCursor::Name),
             |player: &PlayerWithUnstyledName| {
-                TextCursor(player.unstyled_player_name.clone(), player.player.id).encode_cursor()
+                TextCursor {
+                    text: player.unstyled_player_name.clone(),
+                    data: player.player.id,
+                }
+                .encode_cursor()
             },
         ),
         _ => ParsedPaginationInput::new(
             PaginationInput::<F64Cursor>::try_from_input(input.connection_parameters)?
                 .map_cursor(PlayerMapRankingCursor::Score),
             |player: &PlayerWithUnstyledName| {
-                F64Cursor(player.player.score, player.player.id).encode_cursor()
+                F64Cursor {
+                    score: player.player.score,
+                    data: player.player.id,
+                }
+                .encode_cursor()
             },
         ),
     };
@@ -646,13 +658,23 @@ where
             PaginationInput::<TextCursor>::try_from_input(input.connection_parameters)?
                 .map_cursor(PlayerMapRankingCursor::Name),
             |map: &MapWithUnstyledName| {
-                TextCursor(map.unstyled_map_name.clone(), map.map.id).encode_cursor()
+                TextCursor {
+                    text: map.unstyled_map_name.clone(),
+                    data: map.map.id,
+                }
+                .encode_cursor()
             },
         ),
         _ => ParsedPaginationInput::new(
             PaginationInput::<F64Cursor>::try_from_input(input.connection_parameters)?
                 .map_cursor(PlayerMapRankingCursor::Score),
-            |map: &MapWithUnstyledName| F64Cursor(map.map.score, map.map.id).encode_cursor(),
+            |map: &MapWithUnstyledName| {
+                F64Cursor {
+                    score: map.map.score,
+                    data: map.map.id,
+                }
+                .encode_cursor()
+            },
         ),
     };
 

@@ -18,17 +18,11 @@ pub(crate) fn map_gql_err(e: async_graphql::Error) -> ApiGqlError {
 pub enum CursorDecodeErrorKind {
     NotBase64,
     NotUtf8,
-    WrongPrefix,
-    NoTimestamp,
+    MissingPrefix,
+    InvalidPrefix,
     NoSignature,
     InvalidSignature(MacError),
-    NoTime,
-    NoScore,
-    InvalidTimestamp(i64),
-    MissingText,
-    MissingScore,
-    MissingData,
-    TooLong,
+    InvalidData,
 }
 
 impl fmt::Display for CursorDecodeErrorKind {
@@ -36,20 +30,11 @@ impl fmt::Display for CursorDecodeErrorKind {
         match self {
             CursorDecodeErrorKind::NotBase64 => f.write_str("not base64"),
             CursorDecodeErrorKind::NotUtf8 => f.write_str("not UTF-8"),
-            CursorDecodeErrorKind::WrongPrefix => f.write_str("wrong prefix"),
-            CursorDecodeErrorKind::NoTimestamp => f.write_str("no timestamp"),
+            CursorDecodeErrorKind::MissingPrefix => f.write_str("missing prefix"),
+            CursorDecodeErrorKind::InvalidPrefix => f.write_str("invalid prefix"),
             CursorDecodeErrorKind::NoSignature => f.write_str("no signature"),
             CursorDecodeErrorKind::InvalidSignature(e) => write!(f, "invalid signature: {e}"),
-            CursorDecodeErrorKind::NoTime => f.write_str("no time"),
-            CursorDecodeErrorKind::NoScore => f.write_str("no score"),
-            CursorDecodeErrorKind::InvalidTimestamp(t) => {
-                f.write_str("invalid timestamp: ")?;
-                fmt::Display::fmt(t, f)
-            }
-            CursorDecodeErrorKind::MissingText => f.write_str("missing text"),
-            CursorDecodeErrorKind::MissingScore => f.write_str("missing score"),
-            CursorDecodeErrorKind::MissingData => f.write_str("missing data"),
-            CursorDecodeErrorKind::TooLong => f.write_str("input too long"),
+            CursorDecodeErrorKind::InvalidData => f.write_str("invalid data"),
         }
     }
 }

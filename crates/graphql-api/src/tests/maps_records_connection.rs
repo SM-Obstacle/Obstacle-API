@@ -316,7 +316,11 @@ async fn default_page_date() -> anyhow::Result<()> {
                 let record_date = record_dates[i].and_utc();
                 Record {
                     record_id: i as u32 + 1,
-                    cursor: RecordDateCursor(record_date, i as u32 + 1).encode_cursor(),
+                    cursor: RecordDateCursor {
+                        record_date,
+                        data: i as u32 + 1,
+                    }
+                    .encode_cursor(),
                     rank: i as i32 + 1,
                     map_id,
                     flags: 682,
@@ -422,7 +426,11 @@ async fn default_page_date_desc() -> anyhow::Result<()> {
                 let record_date = record_dates[i].and_utc();
                 Record {
                     record_id: i as u32 + 1,
-                    cursor: RecordDateCursor(record_date, i as u32 + 1).encode_cursor(),
+                    cursor: RecordDateCursor {
+                        record_date,
+                        data: i as u32 + 1,
+                    }
+                    .encode_cursor(),
                     rank: i as i32 + 1,
                     map_id,
                     flags: 682,
@@ -662,7 +670,11 @@ async fn test_first_x_after_y_date(
                     } else {
                         record_amount.saturating_sub(1).saturating_sub(after_idx)
                     };
-                    RecordDateCursor(record_dates[idx].and_utc(), idx as u32 + 1).encode_cursor()
+                    RecordDateCursor {
+                        record_date: record_dates[idx].and_utc(),
+                        data: idx as u32 + 1,
+                    }
+                    .encode_cursor()
                 })),
                 ..Default::default()
             },
@@ -688,7 +700,11 @@ async fn test_first_x_after_y_date(
                 let record_date = record_dates[i].and_utc();
                 Record {
                     record_id: i as u32 + 1,
-                    cursor: RecordDateCursor(record_date, i as u32 + 1).encode_cursor(),
+                    cursor: RecordDateCursor {
+                        record_date,
+                        data: i as u32 + 1,
+                    }
+                    .encode_cursor(),
                     rank: i as i32 + 1,
                     map_id,
                     flags: 682,
@@ -1086,7 +1102,11 @@ async fn test_last_x_before_y_date(
                     } else {
                         record_amount.saturating_sub(1).saturating_sub(before_idx)
                     };
-                    RecordDateCursor(record_dates[idx].and_utc(), idx as u32 + 1).encode_cursor()
+                    RecordDateCursor {
+                        record_date: record_dates[idx].and_utc(),
+                        data: idx as u32 + 1,
+                    }
+                    .encode_cursor()
                 })),
                 ..Default::default()
             },
@@ -1108,7 +1128,11 @@ async fn test_last_x_before_y_date(
                 let record_date = record_dates[i].and_utc();
                 Record {
                     record_id: i as u32 + 1,
-                    cursor: RecordDateCursor(record_date, i as u32 + 1).encode_cursor(),
+                    cursor: RecordDateCursor {
+                        record_date,
+                        data: i as u32 + 1,
+                    }
+                    .encode_cursor(),
                     rank: i as i32 + 1,
                     map_id,
                     flags: 682,

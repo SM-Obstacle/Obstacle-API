@@ -182,7 +182,11 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
             PaginationInput::<RecordDateCursor>::try_from_input(connection_parameters)?
                 .map_cursor(MapRecordCursor::Date),
             |record: &global_records::Model| {
-                RecordDateCursor(record.record_date.and_utc(), record.record_id).encode_cursor()
+                RecordDateCursor {
+                    record_date: record.record_date.and_utc(),
+                    data: record.record_id,
+                }
+                .encode_cursor()
             },
         ),
         _ => ParsedPaginationInput::new(
