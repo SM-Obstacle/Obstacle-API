@@ -7,6 +7,7 @@ use sea_orm::{
     QueryOrder as _, QuerySelect as _, StreamTrait, TransactionTrait,
 };
 
+use crate::cursors::RecordDateCursor;
 use crate::objects::records_filter::RecordsFilter;
 use crate::objects::root::get_connection;
 use crate::objects::sort::UnorderedRecordSort;
@@ -122,7 +123,7 @@ impl Player {
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
 
-        connection::query(
+        connection::query_with(
             after,
             before,
             first,
@@ -196,7 +197,7 @@ pub(crate) async fn get_player_records_connection<C>(
     redis_pool: &RedisPool,
     player_id: u32,
     event: OptEvent<'_>,
-    connection_parameters: ConnectionParameters,
+    connection_parameters: ConnectionParameters<RecordDateCursor>,
     sort: Option<UnorderedRecordSort>,
     filter: Option<RecordsFilter>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>>

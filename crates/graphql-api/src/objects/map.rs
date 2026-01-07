@@ -24,7 +24,7 @@ use sea_orm::{
 
 use crate::{
     cursors::{ConnectionParameters, RecordDateCursor, RecordRankCursor},
-    error::{self, ApiGqlError, GqlResult},
+    error::{self, ApiGqlError, CursorDecodeErrorKind, GqlResult},
     loaders::{map::MapLoader, player::PlayerLoader},
     objects::{
         event_edition::EventEdition, player::Player, player_rating::PlayerRating,
@@ -33,9 +33,7 @@ use crate::{
         sort_state::SortState, sortable_fields::MapRecordSortableField,
     },
     utils::{
-        page_input::{
-            PaginationDirection, PaginationInput, ParsedPaginationInput, apply_cursor_input,
-        },
+        page_input::{PaginationInput, apply_cursor_input},
         pagination_result::{PaginationResult, get_paginated},
         records_filter::apply_filter,
     },
@@ -150,9 +148,45 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
     Ok(ranked_records)
 }
 
-enum MapRecordCursor {
+pub(crate) enum MapRecordCursor {
     Date(RecordDateCursor),
     Rank(RecordRankCursor),
+}
+
+impl From<RecordDateCursor> for MapRecordCursor {
+    #[inline]
+    fn from(value: RecordDateCursor) -> Self {
+        Self::Date(value)
+    }
+}
+
+impl From<RecordRankCursor> for MapRecordCursor {
+    #[inline]
+    fn from(value: RecordRankCursor) -> Self {
+        Self::Rank(value)
+    }
+}
+
+impl CursorType for MapRecordCursor {
+    type Error = CursorDecodeErrorKind;
+
+    fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
+        match RecordRankCursor::decode_cursor(s) {
+            Ok(rank) => Ok(rank.into()),
+            Err(CursorDecodeErrorKind::InvalidPrefix) => match RecordDateCursor::decode_cursor(s) {
+                Ok(date) => Ok(date.into()),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    fn encode_cursor(&self) -> String {
+        match self {
+            MapRecordCursor::Date(record_date_cursor) => record_date_cursor.encode_cursor(),
+            MapRecordCursor::Rank(record_rank_cursor) => record_rank_cursor.encode_cursor(),
+        }
+    }
 }
 
 impl IntoValueTuple for &MapRecordCursor {
@@ -173,108 +207,80 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
     redis_pool: &RedisPool,
     map_id: u32,
     event: OptEvent<'_>,
-    connection_parameters: ConnectionParameters,
+    connection_parameters: ConnectionParameters<MapRecordCursor>,
     sort: Option<MapRecordSort>,
     filter: Option<RecordsFilter>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
-    let sort_input = match sort.map(|s| s.field) {
-        Some(MapRecordSortableField::Date) => ParsedPaginationInput::new(
-            PaginationInput::<RecordDateCursor>::try_from_input(connection_parameters)?
-                .map_cursor(MapRecordCursor::Date),
-            |record: &records::Model| {
-                RecordDateCursor {
-                    record_date: record.record_date.and_utc(),
-                    data: record.record_id,
-                }
-                .encode_cursor()
-            },
-        ),
-        _ => ParsedPaginationInput::new(
-            PaginationInput::<RecordRankCursor>::try_from_input(connection_parameters)?
-                .map_cursor(MapRecordCursor::Rank),
-            |record: &records::Model| {
-                RecordRankCursor {
-                    time: record.time,
-                    record_date: record.record_date.and_utc(),
-                    data: record.record_id,
-                }
-                .encode_cursor()
-            },
-        ),
+    let pagination_input = PaginationInput::try_from_input(connection_parameters)?;
+    let cursor_encoder = match sort.map(|s| s.field) {
+        Some(MapRecordSortableField::Date) => |record: &records::Model| {
+            RecordDateCursor {
+                record_date: record.record_date.and_utc(),
+                data: record.record_id,
+            }
+            .encode_cursor()
+        },
+        _ => |record: &records::Model| {
+            RecordRankCursor {
+                time: record.time,
+                record_date: record.record_date.and_utc(),
+                data: record.record_id,
+            }
+            .encode_cursor()
+        },
     };
 
-    let mut query = match event.get() {
-        Some((ev, ed)) => {
-            let base_query = apply_filter(
-                global_event_records::Entity::find().filter(
-                    global_event_records::Column::MapId
-                        .eq(map_id)
-                        .and(global_event_records::Column::EventId.eq(ev.id))
-                        .and(global_event_records::Column::EditionId.eq(ed.id)),
-                ),
-                filter.as_ref(),
-            );
+    let mut query =
+        match event.get() {
+            Some((ev, ed)) => {
+                let base_query = apply_filter(
+                    global_event_records::Entity::find().filter(
+                        global_event_records::Column::MapId
+                            .eq(map_id)
+                            .and(global_event_records::Column::EventId.eq(ev.id))
+                            .and(global_event_records::Column::EditionId.eq(ed.id)),
+                    ),
+                    filter.as_ref(),
+                );
 
-            match (&sort_input.page_input().dir, sort.map(|s| s.field)) {
-                (
-                    PaginationDirection::After {
-                        cursor: Some(MapRecordCursor::Date(_)),
-                    }
-                    | PaginationDirection::Before {
-                        cursor: MapRecordCursor::Date(_),
-                    },
-                    _,
-                )
-                | (
-                    PaginationDirection::After { cursor: None },
-                    Some(MapRecordSortableField::Date),
-                ) => base_query.cursor_by((
-                    global_event_records::Column::RecordDate,
-                    global_event_records::Column::RecordId,
-                )),
-                _ => base_query.cursor_by((
-                    global_event_records::Column::Time,
-                    global_event_records::Column::RecordDate,
-                    global_event_records::Column::RecordId,
-                )),
+                match (pagination_input.get_cursor(), sort.map(|s| s.field)) {
+                    (Some(MapRecordCursor::Date(_)), _)
+                    | (_, Some(MapRecordSortableField::Date)) => base_query.cursor_by((
+                        global_event_records::Column::RecordDate,
+                        global_event_records::Column::RecordId,
+                    )),
+                    _ => base_query.cursor_by((
+                        global_event_records::Column::Time,
+                        global_event_records::Column::RecordDate,
+                        global_event_records::Column::RecordId,
+                    )),
+                }
+                .into_model::<records::Model>()
             }
-            .into_model::<records::Model>()
-        }
 
-        None => {
-            let base_query = apply_filter(
-                global_records::Entity::find().filter(global_records::Column::MapId.eq(map_id)),
-                filter.as_ref(),
-            );
+            None => {
+                let base_query = apply_filter(
+                    global_records::Entity::find().filter(global_records::Column::MapId.eq(map_id)),
+                    filter.as_ref(),
+                );
 
-            match (&sort_input.page_input().dir, sort.map(|s| s.field)) {
-                (
-                    PaginationDirection::After {
-                        cursor: Some(MapRecordCursor::Date(_)),
-                    }
-                    | PaginationDirection::Before {
-                        cursor: MapRecordCursor::Date(_),
-                    },
-                    _,
-                )
-                | (
-                    PaginationDirection::After { cursor: None },
-                    Some(MapRecordSortableField::Date),
-                ) => base_query.cursor_by((
-                    global_records::Column::RecordDate,
-                    global_records::Column::RecordId,
-                )),
-                _ => base_query.cursor_by((
-                    global_records::Column::Time,
-                    global_records::Column::RecordDate,
-                    global_records::Column::RecordId,
-                )),
+                match (pagination_input.get_cursor(), sort.map(|s| s.field)) {
+                    (Some(MapRecordCursor::Date(_)), _)
+                    | (_, Some(MapRecordSortableField::Date)) => base_query.cursor_by((
+                        global_event_records::Column::RecordDate,
+                        global_event_records::Column::RecordId,
+                    )),
+                    _ => base_query.cursor_by((
+                        global_records::Column::Time,
+                        global_records::Column::RecordDate,
+                        global_records::Column::RecordId,
+                    )),
+                }
+                .into_model::<records::Model>()
             }
-            .into_model::<records::Model>()
-        }
-    };
+        };
 
-    apply_cursor_input(&mut query, sort_input.page_input());
+    apply_cursor_input(&mut query, &pagination_input);
 
     match sort.and_then(|s| s.order) {
         Some(SortOrder::Descending) => query.desc(),
@@ -284,7 +290,7 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
     let PaginationResult {
         mut connection,
         iter: records,
-    } = get_paginated(conn, query, sort_input.page_input()).await?;
+    } = get_paginated(conn, query, &pagination_input).await?;
 
     connection.edges.reserve(records.len());
 
@@ -296,7 +302,7 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
         let rank = ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?;
 
         connection.edges.push(connection::Edge::new(
-            ID(sort_input.encode_cursor(&record)),
+            ID((cursor_encoder)(&record)),
             records::RankedRecord { rank, record }.into(),
         ));
     }
@@ -342,34 +348,31 @@ impl Map {
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = gql_ctx.data_unchecked::<Database>();
 
-        records_lib::assert_future_send(sync::transaction(&db.sql_conn, async |txn| {
-            connection::query(
-                after,
-                before,
-                first,
-                last,
-                |after, before, first, last| async move {
-                    get_map_records_connection(
-                        txn,
-                        &db.redis_pool,
-                        self.inner.id,
-                        event,
-                        ConnectionParameters {
-                            after,
-                            before,
-                            first,
-                            last,
-                        },
-                        sort,
-                        filter,
-                    )
-                    .await
-                },
-            )
-            .await
-            .map_err(error::map_gql_err)
-        }))
+        connection::query_with(
+            after,
+            before,
+            first,
+            last,
+            |after, before, first, last| async move {
+                get_map_records_connection(
+                    &db.sql_conn,
+                    &db.redis_pool,
+                    self.inner.id,
+                    event,
+                    ConnectionParameters {
+                        after,
+                        before,
+                        first,
+                        last,
+                    },
+                    sort,
+                    filter,
+                )
+                .await
+            },
+        )
         .await
+        .map_err(error::map_gql_err)
     }
 }
 

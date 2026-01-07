@@ -40,16 +40,8 @@ impl fmt::Display for CursorDecodeErrorKind {
 }
 
 #[derive(Debug)]
-pub struct CursorDecodeError {
-    arg_name: &'static str,
-    value: String,
-    kind: CursorDecodeErrorKind,
-}
-
-#[derive(Debug)]
 pub enum ApiGqlErrorKind {
     Lib(RecordsError),
-    CursorDecode(CursorDecodeError),
     PaginationInput,
     GqlError(async_graphql::Error),
     RecordNotFound { record_id: u32 },
@@ -66,13 +58,6 @@ impl fmt::Display for ApiGqlErrorKind {
                 must provide either: `after`, `after` with `first`, \
                 `before`, or `before` with `last`.",
             ),
-            ApiGqlErrorKind::CursorDecode(decode_error) => {
-                write!(
-                    f,
-                    "cursor argument `{}` couldn't be decoded: {}. got `{}`",
-                    decode_error.arg_name, decode_error.kind, decode_error.value
-                )
-            }
             ApiGqlErrorKind::GqlError(error) => f.write_str(&error.message),
             ApiGqlErrorKind::RecordNotFound { record_id } => {
                 write!(f, "record `{record_id}` not found")
@@ -91,7 +76,6 @@ impl std::error::Error for ApiGqlErrorKind {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ApiGqlErrorKind::Lib(records_error) => Some(records_error),
-            ApiGqlErrorKind::CursorDecode(_) => None,
             ApiGqlErrorKind::PaginationInput => None,
             ApiGqlErrorKind::GqlError(_) => None,
             ApiGqlErrorKind::RecordNotFound { .. } => None,
@@ -116,20 +100,6 @@ impl ApiGqlError {
     pub(crate) fn from_pagination_input_error() -> Self {
         Self {
             inner: Arc::new(ApiGqlErrorKind::PaginationInput),
-        }
-    }
-
-    pub(crate) fn from_cursor_decode_error(
-        arg_name: &'static str,
-        value: String,
-        decode_error: CursorDecodeErrorKind,
-    ) -> Self {
-        Self {
-            inner: Arc::new(ApiGqlErrorKind::CursorDecode(CursorDecodeError {
-                arg_name,
-                value,
-                kind: decode_error,
-            })),
         }
     }
 

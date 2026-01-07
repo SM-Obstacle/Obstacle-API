@@ -1,7 +1,7 @@
 use mkenv::prelude::*;
 use std::time::Duration;
 
-use async_graphql::{ID, connection::CursorType};
+use async_graphql::connection::CursorType;
 use chrono::SubsecRound;
 use entity::{maps, players, records};
 use itertools::Itertools;
@@ -526,7 +526,7 @@ async fn test_first_x_after_y(
             Default::default(),
             ConnectionParameters {
                 first,
-                after: Some(ID({
+                after: Some({
                     let idx = if is_desc {
                         record_amount.saturating_sub(1).saturating_sub(after_idx)
                     } else {
@@ -537,8 +537,8 @@ async fn test_first_x_after_y(
                         record_date: record_dates[idx].and_utc(),
                         data: idx as u32 + 1,
                     }
-                    .encode_cursor()
-                })),
+                    .into()
+                }),
                 ..Default::default()
             },
             is_desc.then_some(MapRecordSort {
@@ -664,7 +664,7 @@ async fn test_first_x_after_y_date(
             Default::default(),
             ConnectionParameters {
                 first,
-                after: Some(ID({
+                after: Some({
                     let idx = if is_desc {
                         after_idx
                     } else {
@@ -674,8 +674,8 @@ async fn test_first_x_after_y_date(
                         record_date: record_dates[idx].and_utc(),
                         data: idx as u32 + 1,
                     }
-                    .encode_cursor()
-                })),
+                    .into()
+                }),
                 ..Default::default()
             },
             Some(MapRecordSort {
@@ -968,7 +968,7 @@ async fn test_last_x_before_y(
             Default::default(),
             ConnectionParameters {
                 last,
-                before: Some(ID({
+                before: Some({
                     let idx = if is_desc {
                         record_amount.saturating_sub(1).saturating_sub(before_idx)
                     } else {
@@ -979,8 +979,8 @@ async fn test_last_x_before_y(
                         record_date: record_dates[idx].and_utc(),
                         data: idx as u32 + 1,
                     }
-                    .encode_cursor()
-                })),
+                    .into()
+                }),
                 ..Default::default()
             },
             is_desc.then_some(MapRecordSort {
@@ -1096,7 +1096,7 @@ async fn test_last_x_before_y_date(
             Default::default(),
             ConnectionParameters {
                 last,
-                before: Some(ID({
+                before: Some({
                     let idx = if is_desc {
                         before_idx
                     } else {
@@ -1106,8 +1106,8 @@ async fn test_last_x_before_y_date(
                         record_date: record_dates[idx].and_utc(),
                         data: idx as u32 + 1,
                     }
-                    .encode_cursor()
-                })),
+                    .into()
+                }),
                 ..Default::default()
             },
             Some(MapRecordSort {

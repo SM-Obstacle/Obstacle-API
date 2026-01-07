@@ -1,7 +1,7 @@
 use mkenv::prelude::*;
 use std::time::Duration;
 
-use async_graphql::{ID, connection::CursorType};
+use async_graphql::connection::CursorType;
 use chrono::SubsecRound;
 use entity::{maps, players, records};
 use itertools::Itertools;
@@ -312,7 +312,7 @@ async fn test_first_x_after_y(
             &db.redis_pool,
             ConnectionParameters {
                 before: None,
-                after: Some(ID({
+                after: Some({
                     let idx = if params.is_desc {
                         params
                             .player_amount
@@ -323,10 +323,9 @@ async fn test_first_x_after_y(
                     };
                     RecordDateCursor {
                         record_date: record_dates[idx].and_utc(),
-                        data: idx + 1,
+                        data: idx as u32 + 1,
                     }
-                    .encode_cursor()
-                })),
+                }),
                 first: params.first,
                 last: None,
             },
@@ -476,7 +475,7 @@ async fn test_last_x_before_y(
             &db.sql_conn,
             &db.redis_pool,
             ConnectionParameters {
-                before: Some(ID({
+                before: Some({
                     let idx = if params.is_desc {
                         params
                             .player_amount
@@ -487,10 +486,9 @@ async fn test_last_x_before_y(
                     };
                     RecordDateCursor {
                         record_date: record_dates[idx].and_utc(),
-                        data: idx + 1,
+                        data: idx as u32 + 1,
                     }
-                    .encode_cursor()
-                })),
+                }),
                 after: None,
                 first: None,
                 last: params.last,

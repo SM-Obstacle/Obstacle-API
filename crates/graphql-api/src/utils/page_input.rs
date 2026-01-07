@@ -1,10 +1,9 @@
-use async_graphql::connection::CursorType;
 use mkenv::prelude::*;
 use sea_orm::{Cursor, SelectorTrait, sea_query::IntoValueTuple};
 
 use crate::{
-    cursors::{ConnectionParameters, RecordDateCursor},
-    error::{ApiGqlError, CursorDecodeErrorKind, GqlResult},
+    cursors::ConnectionParameters,
+    error::{ApiGqlError, GqlResult},
 };
 
 pub enum PaginationDirection<C> {
@@ -12,35 +11,22 @@ pub enum PaginationDirection<C> {
     Before { cursor: C },
 }
 
-pub struct PaginationInput<C = RecordDateCursor> {
+pub struct PaginationInput<C> {
     pub dir: PaginationDirection<C>,
     pub limit: usize,
 }
 
 impl<C> PaginationInput<C> {
-    pub fn map_cursor<F, U>(self, f: F) -> PaginationInput<U>
-    where
-        F: FnOnce(C) -> U,
-    {
-        PaginationInput {
-            dir: match self.dir {
-                PaginationDirection::After { cursor } => PaginationDirection::After {
-                    cursor: cursor.map(f),
-                },
-                PaginationDirection::Before { cursor } => {
-                    PaginationDirection::Before { cursor: f(cursor) }
-                }
-            },
-            limit: self.limit,
+    pub fn get_cursor(&self) -> Option<&C> {
+        match &self.dir {
+            PaginationDirection::After { cursor } => cursor.as_ref(),
+            PaginationDirection::Before { cursor } => Some(cursor),
         }
     }
 }
 
-impl<C> PaginationInput<C>
-where
-    C: CursorType<Error = CursorDecodeErrorKind>,
-{
-    pub fn try_from_input(input: ConnectionParameters) -> GqlResult<Self> {
+impl<C> PaginationInput<C> {
+    pub fn try_from_input(input: ConnectionParameters<C>) -> GqlResult<Self> {
         match input {
             ConnectionParameters {
                 first,
@@ -51,19 +37,9 @@ where
                 let limit = first
                     .map(|t| t.min(crate::config().cursor_max_limit.get()))
                     .unwrap_or(crate::config().cursor_default_limit.get());
-                let cursor = match after {
-                    Some(after) => {
-                        let decoded = C::decode_cursor(&after).map_err(|e| {
-                            ApiGqlError::from_cursor_decode_error("after", after.0, e)
-                        })?;
-                        Some(decoded)
-                    }
-                    None => None,
-                };
-
                 Ok(Self {
                     limit,
-                    dir: PaginationDirection::After { cursor },
+                    dir: PaginationDirection::After { cursor: after },
                 })
             }
             ConnectionParameters {
@@ -75,11 +51,9 @@ where
                 let limit = last
                     .map(|t| t.min(crate::config().cursor_max_limit.get()))
                     .unwrap_or(crate::config().cursor_default_limit.get());
-                let cursor = C::decode_cursor(&before)
-                    .map_err(|e| ApiGqlError::from_cursor_decode_error("before", before.0, e))?;
                 Ok(Self {
                     limit,
-                    dir: PaginationDirection::Before { cursor },
+                    dir: PaginationDirection::Before { cursor: before },
                 })
             }
             _ => Err(ApiGqlError::from_pagination_input_error()),
@@ -102,36 +76,5 @@ where
         PaginationDirection::Before { cursor: before } => {
             cursor.last(input.limit as _).before(before);
         }
-    }
-}
-
-pub struct ParsedPaginationInput<C, D> {
-    pagination_input: PaginationInput<C>,
-    cursor_encoder: fn(&D) -> String,
-}
-
-impl<C, D> ParsedPaginationInput<C, D> {
-    pub fn new(pagination_input: PaginationInput<C>, cursor_encoder: fn(&D) -> String) -> Self {
-        Self {
-            pagination_input,
-            cursor_encoder,
-        }
-    }
-
-    #[inline]
-    pub fn page_input(&self) -> &PaginationInput<C> {
-        self.as_ref()
-    }
-
-    #[inline(always)]
-    pub fn encode_cursor(&self, player: &D) -> String {
-        (self.cursor_encoder)(player)
-    }
-}
-
-impl<C, D> AsRef<PaginationInput<C>> for ParsedPaginationInput<C, D> {
-    #[inline(always)]
-    fn as_ref(&self) -> &PaginationInput<C> {
-        &self.pagination_input
     }
 }

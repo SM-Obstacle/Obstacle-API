@@ -1,4 +1,4 @@
-use async_graphql::{ID, connection::CursorType};
+use async_graphql::connection::CursorType;
 use deadpool_redis::redis::{self, ToRedisArgs};
 use entity::players;
 use mkenv::Layer as _;
@@ -213,11 +213,13 @@ async fn test_first_x_after_y(
             &mut redis_conn,
             <PlayersConnectionInput>::new(ConnectionParameters {
                 first: params.first,
-                after: Some(ID(F64Cursor {
-                    score: params.after_idx as _,
-                    data: params.after_idx + 1,
-                }
-                .encode_cursor())),
+                after: Some(
+                    F64Cursor {
+                        score: params.after_idx as _,
+                        data: params.after_idx as u32 + 1,
+                    }
+                    .into(),
+                ),
                 ..Default::default()
             })
             .with_source(source),
@@ -321,11 +323,13 @@ async fn test_last_x_before_y(
             &mut redis_conn,
             <PlayersConnectionInput>::new(ConnectionParameters {
                 last: params.last,
-                before: Some(ID(F64Cursor {
-                    score: params.before_idx as _,
-                    data: params.before_idx + 1,
-                }
-                .encode_cursor())),
+                before: Some(
+                    F64Cursor {
+                        score: params.before_idx as _,
+                        data: params.before_idx as u32 + 1,
+                    }
+                    .into(),
+                ),
                 ..Default::default()
             })
             .with_source(source),

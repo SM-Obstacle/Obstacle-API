@@ -20,7 +20,7 @@ use sea_orm::{
 
 use crate::{
     cursors::{ConnectionParameters, F64Cursor, RecordDateCursor, TextCursor},
-    error::{self, ApiGqlError, GqlResult},
+    error::{self, ApiGqlError, CursorDecodeErrorKind, GqlResult},
     objects::{
         event::Event,
         event_edition::EventEdition,
@@ -39,9 +39,7 @@ use crate::{
         sortable_fields::{PlayerMapRankingSortableField, UnorderedRecordSortableField},
     },
     utils::{
-        page_input::{
-            PaginationDirection, PaginationInput, ParsedPaginationInput, apply_cursor_input,
-        },
+        page_input::{PaginationInput, apply_cursor_input},
         pagination_result::{PaginationResult, get_paginated},
         records_filter::apply_filter,
     },
@@ -112,12 +110,12 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
 pub(crate) async fn get_connection<C: ConnectionTrait + TransactionTrait>(
     conn: &C,
     redis_pool: &RedisPool,
-    connection_parameters: ConnectionParameters,
+    connection_parameters: ConnectionParameters<RecordDateCursor>,
     event: OptEvent<'_>,
     sort: Option<UnorderedRecordSort>,
     base_query: Select<global_records::Entity>,
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
-    let pagination_input = <PaginationInput>::try_from_input(connection_parameters)?;
+    let pagination_input = PaginationInput::try_from_input(connection_parameters)?;
 
     let mut query = base_query.cursor_by((
         global_records::Column::RecordDate,
@@ -173,7 +171,7 @@ pub(crate) async fn get_connection<C: ConnectionTrait + TransactionTrait>(
 pub(crate) async fn get_records_connection<C: ConnectionTrait + TransactionTrait>(
     conn: &C,
     redis_pool: &RedisPool,
-    connection_parameters: ConnectionParameters,
+    connection_parameters: ConnectionParameters<RecordDateCursor>,
     event: OptEvent<'_>,
     sort: Option<UnorderedRecordSort>,
     filter: Option<RecordsFilter>,
@@ -317,7 +315,7 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        connection::query(
+        connection::query_with(
             after,
             before,
             first,
@@ -328,15 +326,9 @@ impl QueryRoot {
                     before,
                     first,
                     last,
-                });
-                let input = match filter {
-                    Some(filter) => input.with_filter(filter),
-                    None => input,
-                };
-                let input = match sort {
-                    Some(sort) => input.with_sort(sort),
-                    None => input,
-                };
+                })
+                .with_filter(filter)
+                .with_sort(sort);
 
                 get_players_connection(&db.sql_conn, &mut redis_conn, input).await
             },
@@ -359,7 +351,7 @@ impl QueryRoot {
         let db = ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
 
-        connection::query(
+        connection::query_with(
             after,
             before,
             first,
@@ -370,15 +362,9 @@ impl QueryRoot {
                     before,
                     first,
                     last,
-                });
-                let input = match filter {
-                    Some(filter) => input.with_filter(filter),
-                    None => input,
-                };
-                let input = match sort {
-                    Some(sort) => input.with_sort(sort),
-                    None => input,
-                };
+                })
+                .with_filter(filter)
+                .with_sort(sort);
 
                 get_maps_connection(&db.sql_conn, &mut redis_conn, input).await
             },
@@ -403,7 +389,7 @@ impl QueryRoot {
     ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
         let db = ctx.data_unchecked::<Database>();
 
-        connection::query(
+        connection::query_with(
             after,
             before,
             first,
@@ -460,15 +446,15 @@ where
         .unwrap_or_else(|| EitherRedisKey::A(default()))
 }
 
-pub(crate) struct ConnectionInput<F, O, S> {
-    connection_parameters: ConnectionParameters,
+pub(crate) struct ConnectionInput<C, F, O, S> {
+    connection_parameters: ConnectionParameters<C>,
     filter: Option<F>,
     sort: Option<O>,
     source: Option<S>,
 }
 
 // derive(Default) adds Default: bound to the generics
-impl<F, O, S> Default for ConnectionInput<F, O, S> {
+impl<C, F, O, S> Default for ConnectionInput<C, F, O, S> {
     fn default() -> Self {
         Self {
             connection_parameters: Default::default(),
@@ -479,26 +465,26 @@ impl<F, O, S> Default for ConnectionInput<F, O, S> {
     }
 }
 
-impl<F, O, S> ConnectionInput<F, O, S> {
-    pub(crate) fn new(connection_parameters: ConnectionParameters) -> Self {
+impl<C, F, O, S> ConnectionInput<C, F, O, S> {
+    pub(crate) fn new(connection_parameters: ConnectionParameters<C>) -> Self {
         Self {
             connection_parameters,
             ..Default::default()
         }
     }
 
-    pub(crate) fn with_filter(mut self, filter: F) -> Self {
-        self.filter = Some(filter);
+    pub(crate) fn with_filter(mut self, filter: Option<F>) -> Self {
+        self.filter = filter;
         self
     }
 
-    pub(crate) fn with_sort(mut self, sort: O) -> Self {
-        self.sort = Some(sort);
+    pub(crate) fn with_sort(mut self, sort: Option<O>) -> Self {
+        self.sort = sort;
         self
     }
 
     #[allow(unused)] // used for testing
-    pub(crate) fn with_source<U>(self, source: U) -> ConnectionInput<F, O, U> {
+    pub(crate) fn with_source<U>(self, source: U) -> ConnectionInput<C, F, O, U> {
         ConnectionInput {
             connection_parameters: self.connection_parameters,
             filter: self.filter,
@@ -508,9 +494,45 @@ impl<F, O, S> ConnectionInput<F, O, S> {
     }
 }
 
-enum PlayerMapRankingCursor {
+pub(crate) enum PlayerMapRankingCursor {
     Name(TextCursor),
     Score(F64Cursor),
+}
+
+impl From<TextCursor> for PlayerMapRankingCursor {
+    #[inline]
+    fn from(value: TextCursor) -> Self {
+        Self::Name(value)
+    }
+}
+
+impl From<F64Cursor> for PlayerMapRankingCursor {
+    #[inline]
+    fn from(value: F64Cursor) -> Self {
+        Self::Score(value)
+    }
+}
+
+impl CursorType for PlayerMapRankingCursor {
+    type Error = CursorDecodeErrorKind;
+
+    fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
+        match F64Cursor::decode_cursor(s) {
+            Ok(score) => Ok(score.into()),
+            Err(CursorDecodeErrorKind::InvalidPrefix) => match TextCursor::decode_cursor(s) {
+                Ok(text) => Ok(text.into()),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    fn encode_cursor(&self) -> String {
+        match self {
+            PlayerMapRankingCursor::Name(text_cursor) => text_cursor.encode_cursor(),
+            PlayerMapRankingCursor::Score(f64_cursor) => f64_cursor.encode_cursor(),
+        }
+    }
 }
 
 impl IntoValueTuple for &PlayerMapRankingCursor {
@@ -523,7 +545,7 @@ impl IntoValueTuple for &PlayerMapRankingCursor {
 }
 
 pub(crate) type PlayersConnectionInput<S = PlayerRanking> =
-    ConnectionInput<PlayersFilter, PlayerMapRankingSort, S>;
+    ConnectionInput<PlayerMapRankingCursor, PlayersFilter, PlayerMapRankingSort, S>;
 
 #[derive(FromQueryResult)]
 struct PlayerWithUnstyledName {
@@ -541,29 +563,22 @@ where
     C: ConnectionTrait,
     S: ToRedisArgs + Send + Sync,
 {
-    let sort_input = match input.sort.map(|s| s.field) {
-        Some(PlayerMapRankingSortableField::Name) => ParsedPaginationInput::new(
-            PaginationInput::<TextCursor>::try_from_input(input.connection_parameters)?
-                .map_cursor(PlayerMapRankingCursor::Name),
-            |player: &PlayerWithUnstyledName| {
-                TextCursor {
-                    text: player.unstyled_player_name.clone(),
-                    data: player.player.id,
-                }
-                .encode_cursor()
-            },
-        ),
-        _ => ParsedPaginationInput::new(
-            PaginationInput::<F64Cursor>::try_from_input(input.connection_parameters)?
-                .map_cursor(PlayerMapRankingCursor::Score),
-            |player: &PlayerWithUnstyledName| {
-                F64Cursor {
-                    score: player.player.score,
-                    data: player.player.id,
-                }
-                .encode_cursor()
-            },
-        ),
+    let pagination_input = PaginationInput::try_from_input(input.connection_parameters)?;
+    let cursor_encoder = match input.sort.map(|s| s.field) {
+        Some(PlayerMapRankingSortableField::Name) => |player: &PlayerWithUnstyledName| {
+            TextCursor {
+                text: player.unstyled_player_name.clone(),
+                data: player.player.id,
+            }
+            .encode_cursor()
+        },
+        _ => |player: &PlayerWithUnstyledName| {
+            F64Cursor {
+                score: player.player.score,
+                data: player.player.id,
+            }
+            .encode_cursor()
+        },
     };
 
     let query = players::Entity::find()
@@ -582,22 +597,11 @@ where
         });
 
     let mut query = match (
-        &sort_input.page_input().dir,
+        pagination_input.get_cursor(),
         input.sort.as_ref().map(|s| s.field),
     ) {
-        (
-            PaginationDirection::After {
-                cursor: Some(PlayerMapRankingCursor::Name(_)),
-            }
-            | PaginationDirection::Before {
-                cursor: PlayerMapRankingCursor::Name(_),
-            },
-            _,
-        )
-        | (
-            PaginationDirection::After { cursor: None },
-            Some(PlayerMapRankingSortableField::Name),
-        ) => query.cursor_by(Identity::Binary(
+        (Some(PlayerMapRankingCursor::Name(_)), _)
+        | (None, Some(PlayerMapRankingSortableField::Name)) => query.cursor_by(Identity::Binary(
             "unstyled_player_name".into_iden(),
             players::Column::Id.into_iden(),
         )),
@@ -605,7 +609,7 @@ where
     }
     .into_model::<PlayerWithUnstyledName>();
 
-    apply_cursor_input(&mut query, sort_input.page_input());
+    apply_cursor_input(&mut query, &pagination_input);
 
     match input.sort.and_then(|s| s.order) {
         Some(SortOrder::Descending) => query.desc(),
@@ -615,7 +619,7 @@ where
     let PaginationResult {
         mut connection,
         iter: players,
-    } = get_paginated(conn, query, sort_input.page_input()).await?;
+    } = get_paginated(conn, query, &pagination_input).await?;
 
     connection.edges.reserve(players.len());
     let source = custom_source_or(input.source, player_ranking);
@@ -623,7 +627,7 @@ where
     for player in players {
         let rank: i32 = redis_conn.zrevrank(&source, player.player.id).await?;
         connection.edges.push(connection::Edge::new(
-            ID(sort_input.encode_cursor(&player)),
+            ID((cursor_encoder)(&player)),
             PlayerWithScore {
                 rank: rank + 1,
                 player: player.player.into(),
@@ -635,7 +639,7 @@ where
 }
 
 pub(crate) type MapsConnectionInput<S = MapRanking> =
-    ConnectionInput<MapsFilter, PlayerMapRankingSort, S>;
+    ConnectionInput<PlayerMapRankingCursor, MapsFilter, PlayerMapRankingSort, S>;
 
 #[derive(FromQueryResult)]
 struct MapWithUnstyledName {
@@ -653,29 +657,22 @@ where
     C: ConnectionTrait,
     S: ToRedisArgs + Send + Sync,
 {
-    let sort_input = match input.sort.map(|s| s.field) {
-        Some(PlayerMapRankingSortableField::Name) => ParsedPaginationInput::new(
-            PaginationInput::<TextCursor>::try_from_input(input.connection_parameters)?
-                .map_cursor(PlayerMapRankingCursor::Name),
-            |map: &MapWithUnstyledName| {
-                TextCursor {
-                    text: map.unstyled_map_name.clone(),
-                    data: map.map.id,
-                }
-                .encode_cursor()
-            },
-        ),
-        _ => ParsedPaginationInput::new(
-            PaginationInput::<F64Cursor>::try_from_input(input.connection_parameters)?
-                .map_cursor(PlayerMapRankingCursor::Score),
-            |map: &MapWithUnstyledName| {
-                F64Cursor {
-                    score: map.map.score,
-                    data: map.map.id,
-                }
-                .encode_cursor()
-            },
-        ),
+    let pagination_input = PaginationInput::try_from_input(input.connection_parameters)?;
+    let cursor_encoder = match input.sort.map(|s| s.field) {
+        Some(PlayerMapRankingSortableField::Name) => |map: &MapWithUnstyledName| {
+            TextCursor {
+                text: map.unstyled_map_name.clone(),
+                data: map.map.id,
+            }
+            .encode_cursor()
+        },
+        _ => |map: &MapWithUnstyledName| {
+            F64Cursor {
+                score: map.map.score,
+                data: map.map.id,
+            }
+            .encode_cursor()
+        },
     };
 
     let query = maps::Entity::find()
@@ -708,22 +705,11 @@ where
         });
 
     let mut query = match (
-        &sort_input.page_input().dir,
+        pagination_input.get_cursor(),
         input.sort.as_ref().map(|s| s.field),
     ) {
-        (
-            PaginationDirection::After {
-                cursor: Some(PlayerMapRankingCursor::Name(_)),
-            }
-            | PaginationDirection::Before {
-                cursor: PlayerMapRankingCursor::Name(_),
-            },
-            _,
-        )
-        | (
-            PaginationDirection::After { cursor: None },
-            Some(PlayerMapRankingSortableField::Name),
-        ) => query.cursor_by(Identity::Binary(
+        (Some(PlayerMapRankingCursor::Name(_)), _)
+        | (_, Some(PlayerMapRankingSortableField::Name)) => query.cursor_by(Identity::Binary(
             "unstyled_map_name".into_iden(),
             maps::Column::Id.into_iden(),
         )),
@@ -731,7 +717,7 @@ where
     }
     .into_model::<MapWithUnstyledName>();
 
-    apply_cursor_input(&mut query, sort_input.page_input());
+    apply_cursor_input(&mut query, &pagination_input);
 
     match input.sort.and_then(|s| s.order) {
         Some(SortOrder::Descending) => query.desc(),
@@ -741,7 +727,7 @@ where
     let PaginationResult {
         mut connection,
         iter: maps,
-    } = get_paginated(conn, query, sort_input.page_input()).await?;
+    } = get_paginated(conn, query, &pagination_input).await?;
 
     connection.edges.reserve(maps.len());
     let source = custom_source_or(input.source, map_ranking);
@@ -749,7 +735,7 @@ where
     for map in maps {
         let rank: i32 = redis_conn.zrevrank(&source, map.map.id).await?;
         connection.edges.push(connection::Edge::new(
-            ID(sort_input.encode_cursor(&map)),
+            ID((cursor_encoder)(&map)),
             MapWithScore {
                 rank: rank + 1,
                 map: map.map.into(),

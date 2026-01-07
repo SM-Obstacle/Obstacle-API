@@ -252,12 +252,22 @@ where
     }
 }
 
-#[derive(Default)]
-pub struct ConnectionParameters {
-    pub before: Option<ID>,
-    pub after: Option<ID>,
+pub struct ConnectionParameters<C = ID> {
+    pub before: Option<C>,
+    pub after: Option<C>,
     pub first: Option<usize>,
     pub last: Option<usize>,
+}
+
+impl<C> Default for ConnectionParameters<C> {
+    fn default() -> Self {
+        Self {
+            before: Default::default(),
+            after: Default::default(),
+            first: Default::default(),
+            last: Default::default(),
+        }
+    }
 }
 
 #[cfg(test)]
