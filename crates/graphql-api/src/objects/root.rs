@@ -13,13 +13,16 @@ use records_lib::{
 };
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DbConn, EntityTrait, FromQueryResult, Identity, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, QueryTrait, Select, StreamTrait, TransactionTrait,
+    QueryOrder as _, QuerySelect, Select, SelectModel, StreamTrait, TransactionTrait,
     prelude::Expr,
-    sea_query::{ExprTrait as _, Func, IntoIden, IntoValueTuple},
+    sea_query::{Asterisk, ExprTrait as _, Func, IntoIden, IntoValueTuple, SelectStatement},
 };
 
 use crate::{
-    cursors::{ConnectionParameters, F64Cursor, RecordDateCursor, TextCursor},
+    cursors::{
+        ConnectionParameters, F64Cursor, RecordDateCursor, TextCursor, expr_tuple::IntoExprTuple,
+        query_builder::CursorQueryBuilder, query_trait::CursorPaginable,
+    },
     error::{self, ApiGqlError, CursorDecodeErrorKind, GqlResult},
     objects::{
         event::Event,
@@ -107,7 +110,7 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
     Ok(ranked_records)
 }
 
-pub(crate) async fn get_connection<C: ConnectionTrait + TransactionTrait>(
+pub(crate) async fn get_records_connection_impl<C: ConnectionTrait + TransactionTrait>(
     conn: &C,
     redis_pool: &RedisPool,
     connection_parameters: ConnectionParameters<RecordDateCursor>,
@@ -117,7 +120,7 @@ pub(crate) async fn get_connection<C: ConnectionTrait + TransactionTrait>(
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let pagination_input = PaginationInput::try_from_input(connection_parameters)?;
 
-    let mut query = base_query.cursor_by((
+    let mut query = base_query.paginate_cursor_by((
         global_records::Column::RecordDate,
         global_records::Column::RecordId,
     ));
@@ -139,6 +142,7 @@ pub(crate) async fn get_connection<C: ConnectionTrait + TransactionTrait>(
         query.desc();
     }
 
+    // inline get_paginated
     let PaginationResult {
         mut connection,
         iter: records,
@@ -178,7 +182,7 @@ pub(crate) async fn get_records_connection<C: ConnectionTrait + TransactionTrait
 ) -> GqlResult<connection::Connection<ID, RankedRecord>> {
     let base_query = apply_filter(global_records::Entity::find(), filter.as_ref());
 
-    get_connection(
+    get_records_connection_impl(
         conn,
         redis_pool,
         connection_parameters,
@@ -535,6 +539,15 @@ impl CursorType for PlayerMapRankingCursor {
     }
 }
 
+impl IntoExprTuple for &PlayerMapRankingCursor {
+    fn into_expr_tuple(self) -> crate::cursors::expr_tuple::ExprTuple {
+        match self {
+            PlayerMapRankingCursor::Name(name) => IntoExprTuple::into_expr_tuple(name),
+            PlayerMapRankingCursor::Score(score) => IntoExprTuple::into_expr_tuple(score),
+        }
+    }
+}
+
 impl IntoValueTuple for &PlayerMapRankingCursor {
     fn into_value_tuple(self) -> sea_orm::sea_query::ValueTuple {
         match self {
@@ -581,31 +594,48 @@ where
         },
     };
 
-    let query = players::Entity::find()
-        .expr_as(
-            Func::cust("rm_mp_style").arg(Expr::col((players::Entity, players::Column::Name))),
-            "unstyled_player_name",
-        )
+    let mut query = players::Entity::find().expr_as(
+        Func::cust("rm_mp_style").arg(Expr::col((players::Entity, players::Column::Name))),
+        "unstyled_player_name",
+    );
+    let query = SelectStatement::new()
+        .column(Asterisk)
+        .from_subquery(QuerySelect::query(&mut query).take(), "player")
         .apply_if(input.filter, |query, filter| {
             query
                 .apply_if(filter.player_login, |query, login| {
-                    query.filter(players::Column::Login.like(format!("%{login}%")))
+                    query.and_where(
+                        Expr::col(("player", players::Column::Login)).like(format!("%{login}%")),
+                    );
                 })
                 .apply_if(filter.player_name, |query, name| {
-                    query.filter(Expr::col("unstyled_player_name").like(format!("%{name}%")))
-                })
-        });
+                    query.and_where(
+                        Expr::col(("player", "unstyled_player_name")).like(format!("%{name}%")),
+                    );
+                });
+        })
+        .take();
 
     let mut query = match (
         pagination_input.get_cursor(),
         input.sort.as_ref().map(|s| s.field),
     ) {
         (Some(PlayerMapRankingCursor::Name(_)), _)
-        | (None, Some(PlayerMapRankingSortableField::Name)) => query.cursor_by(Identity::Binary(
-            "unstyled_player_name".into_iden(),
-            players::Column::Id.into_iden(),
-        )),
-        _ => query.cursor_by((players::Column::Score, players::Column::Id)),
+        | (None, Some(PlayerMapRankingSortableField::Name)) => {
+            CursorQueryBuilder::<SelectModel<players::Model>>::new(
+                query,
+                "player".into_iden(),
+                Identity::Binary(
+                    "unstyled_player_name".into_iden(),
+                    players::Column::Id.into_iden(),
+                ),
+            )
+        }
+        _ => CursorQueryBuilder::new(
+            query,
+            "player".into_iden(),
+            (players::Column::Score, players::Column::Id),
+        ),
     }
     .into_model::<PlayerWithUnstyledName>();
 
@@ -675,45 +705,71 @@ where
         },
     };
 
-    let query = maps::Entity::find()
-        .expr_as(
-            Func::cust("rm_mp_style").arg(Expr::col((maps::Entity, maps::Column::Name))),
-            "unstyled_map_name",
-        )
+    let mut query = maps::Entity::find().expr_as(
+        Func::cust("rm_mp_style").arg(Expr::col((maps::Entity, maps::Column::Name))),
+        "unstyled_map_name",
+    );
+    let query = SelectStatement::new()
+        .column(Asterisk)
+        .from_subquery(QuerySelect::query(&mut query).take(), "map")
         .apply_if(input.filter, |query, filter| {
             query
                 .apply_if(filter.author, |query, filter| {
                     query
-                        .inner_join(players::Entity)
+                        .join_as(
+                            sea_orm::JoinType::InnerJoin,
+                            players::Entity,
+                            "author",
+                            Expr::col(("author", players::Column::Id))
+                                .eq(Expr::col(("map", maps::Column::PlayerId))),
+                        )
                         .apply_if(filter.player_login, |query, login| {
-                            query.filter(players::Column::Login.like(format!("%{login}%")))
+                            query.and_where(
+                                Expr::col(("author", players::Column::Login))
+                                    .like(format!("%{login}%")),
+                            );
                         })
                         .apply_if(filter.player_name, |query, name| {
-                            query.filter(
+                            query.and_where(
                                 Func::cust("rm_mp_style")
-                                    .arg(Expr::col((players::Entity, players::Column::Name)))
+                                    .arg(Expr::col(("author", players::Column::Name)))
                                     .like(format!("%{name}%")),
-                            )
-                        })
+                            );
+                        });
                 })
                 .apply_if(filter.map_uid, |query, uid| {
-                    query.filter(maps::Column::GameId.like(format!("%{uid}%")))
+                    query.and_where(
+                        Expr::col(("map", maps::Column::GameId)).like(format!("%{uid}%")),
+                    );
                 })
                 .apply_if(filter.map_name, |query, name| {
-                    query.filter(Expr::col("unstyled_map_name").like(format!("%{name}%")))
-                })
-        });
+                    query.and_where(
+                        Expr::col(("map", "unstyled_map_name")).like(format!("%{name}%")),
+                    );
+                });
+        })
+        .take();
 
     let mut query = match (
         pagination_input.get_cursor(),
         input.sort.as_ref().map(|s| s.field),
     ) {
         (Some(PlayerMapRankingCursor::Name(_)), _)
-        | (_, Some(PlayerMapRankingSortableField::Name)) => query.cursor_by(Identity::Binary(
-            "unstyled_map_name".into_iden(),
-            maps::Column::Id.into_iden(),
-        )),
-        _ => query.cursor_by((maps::Column::Score, maps::Column::Id)),
+        | (_, Some(PlayerMapRankingSortableField::Name)) => {
+            CursorQueryBuilder::<SelectModel<maps::Model>>::new(
+                query,
+                "map".into_iden(),
+                Identity::Binary(
+                    "unstyled_map_name".into_iden(),
+                    maps::Column::Id.into_iden(),
+                ),
+            )
+        }
+        _ => CursorQueryBuilder::new(
+            query,
+            "map".into_iden(),
+            (maps::Column::Score, maps::Column::Id),
+        ),
     }
     .into_model::<MapWithUnstyledName>();
 

@@ -8,9 +8,7 @@ use records_lib::{
     redis_key::{map_ranking, player_ranking},
     sync,
 };
-use sea_orm::{
-    ActiveValue::Set, ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter, TransactionTrait,
-};
+use sea_orm::{ActiveValue::Set, ConnectionTrait, EntityTrait, TransactionTrait};
 
 async fn do_update<C: ConnectionTrait + TransactionTrait>(
     conn: &C,
@@ -32,10 +30,10 @@ async fn do_update<C: ConnectionTrait + TransactionTrait>(
     sync::transaction(conn, async |txn| {
         for (player, score) in scores.player_scores {
             players::Entity::update(players::ActiveModel {
+                id: Set(player.inner.id),
                 score: Set(score),
                 ..Default::default()
             })
-            .filter(players::Column::Id.eq(player.inner.id))
             .exec(txn)
             .await?;
 
@@ -44,10 +42,10 @@ async fn do_update<C: ConnectionTrait + TransactionTrait>(
 
         for (map, score) in scores.map_scores {
             maps::Entity::update(maps::ActiveModel {
+                id: Set(map.inner.id),
                 score: Set(score),
                 ..Default::default()
             })
-            .filter(maps::Column::Id.eq(map.inner.id))
             .exec(txn)
             .await?;
 

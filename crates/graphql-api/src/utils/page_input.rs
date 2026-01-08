@@ -1,8 +1,8 @@
 use mkenv::prelude::*;
-use sea_orm::{Cursor, SelectorTrait, sea_query::IntoValueTuple};
+use sea_orm::SelectorTrait;
 
 use crate::{
-    cursors::ConnectionParameters,
+    cursors::{ConnectionParameters, expr_tuple::IntoExprTuple, query_builder::CursorQueryBuilder},
     error::{ApiGqlError, GqlResult},
 };
 
@@ -61,10 +61,10 @@ impl<C> PaginationInput<C> {
     }
 }
 
-pub fn apply_cursor_input<C, S>(cursor: &mut Cursor<S>, input: &PaginationInput<C>)
+pub fn apply_cursor_input<C, S>(cursor: &mut CursorQueryBuilder<S>, input: &PaginationInput<C>)
 where
     S: SelectorTrait,
-    for<'a> &'a C: IntoValueTuple,
+    for<'a> &'a C: IntoExprTuple,
 {
     match &input.dir {
         PaginationDirection::After { cursor: after } => {

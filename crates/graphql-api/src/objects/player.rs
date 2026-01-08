@@ -9,7 +9,7 @@ use sea_orm::{
 
 use crate::cursors::RecordDateCursor;
 use crate::objects::records_filter::RecordsFilter;
-use crate::objects::root::get_connection;
+use crate::objects::root::get_records_connection_impl;
 use crate::objects::sort::UnorderedRecordSort;
 use crate::utils::records_filter::apply_filter;
 use crate::{
@@ -209,7 +209,7 @@ where
         filter.as_ref(),
     );
 
-    get_connection(
+    get_records_connection_impl(
         conn,
         redis_pool,
         connection_parameters,

@@ -23,7 +23,10 @@ use sea_orm::{
 };
 
 use crate::{
-    cursors::{ConnectionParameters, RecordDateCursor, RecordRankCursor},
+    cursors::{
+        ConnectionParameters, RecordDateCursor, RecordRankCursor, expr_tuple::IntoExprTuple,
+        query_trait::CursorPaginable,
+    },
     error::{self, ApiGqlError, CursorDecodeErrorKind, GqlResult},
     loaders::{map::MapLoader, player::PlayerLoader},
     objects::{
@@ -189,6 +192,19 @@ impl CursorType for MapRecordCursor {
     }
 }
 
+impl IntoExprTuple for &MapRecordCursor {
+    fn into_expr_tuple(self) -> crate::cursors::expr_tuple::ExprTuple {
+        match self {
+            MapRecordCursor::Date(record_date_cursor) => {
+                IntoExprTuple::into_expr_tuple(record_date_cursor)
+            }
+            MapRecordCursor::Rank(record_rank_cursor) => {
+                IntoExprTuple::into_expr_tuple(record_rank_cursor)
+            }
+        }
+    }
+}
+
 impl IntoValueTuple for &MapRecordCursor {
     fn into_value_tuple(self) -> sea_orm::sea_query::ValueTuple {
         match self {
@@ -245,11 +261,11 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
 
                 match (pagination_input.get_cursor(), sort.map(|s| s.field)) {
                     (Some(MapRecordCursor::Date(_)), _)
-                    | (_, Some(MapRecordSortableField::Date)) => base_query.cursor_by((
+                    | (_, Some(MapRecordSortableField::Date)) => base_query.paginate_cursor_by((
                         global_event_records::Column::RecordDate,
                         global_event_records::Column::RecordId,
                     )),
-                    _ => base_query.cursor_by((
+                    _ => base_query.paginate_cursor_by((
                         global_event_records::Column::Time,
                         global_event_records::Column::RecordDate,
                         global_event_records::Column::RecordId,
@@ -266,11 +282,11 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
 
                 match (pagination_input.get_cursor(), sort.map(|s| s.field)) {
                     (Some(MapRecordCursor::Date(_)), _)
-                    | (_, Some(MapRecordSortableField::Date)) => base_query.cursor_by((
+                    | (_, Some(MapRecordSortableField::Date)) => base_query.paginate_cursor_by((
                         global_event_records::Column::RecordDate,
                         global_event_records::Column::RecordId,
                     )),
-                    _ => base_query.cursor_by((
+                    _ => base_query.paginate_cursor_by((
                         global_records::Column::Time,
                         global_records::Column::RecordDate,
                         global_records::Column::RecordId,

@@ -1,7 +1,8 @@
 use async_graphql::{ID, OutputType, connection};
-use sea_orm::{ConnectionTrait, Cursor, SelectorTrait};
+use sea_orm::{ConnectionTrait, SelectorTrait};
 
 use crate::{
+    cursors::query_builder::CursorQueryBuilder,
     error::GqlResult,
     utils::page_input::{PaginationDirection, PaginationInput},
 };
@@ -16,7 +17,7 @@ where
 
 pub(crate) async fn get_paginated<C, S, T, Cur>(
     conn: &C,
-    mut query: Cursor<S>,
+    mut query: CursorQueryBuilder<S>,
     pagination_input: &PaginationInput<Cur>,
 ) -> GqlResult<PaginationResult<impl ExactSizeIterator<Item = <S as SelectorTrait>::Item>, T>>
 where

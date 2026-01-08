@@ -1,3 +1,7 @@
+pub mod expr_tuple;
+pub mod query_builder;
+pub mod query_trait;
+
 use std::str;
 
 use async_graphql::{ID, connection::CursorType};
@@ -7,10 +11,13 @@ use hmac::Mac;
 use mkenv::Layer;
 use sea_orm::{
     Value,
-    sea_query::{IntoValueTuple, ValueTuple},
+    sea_query::{IntoValueTuple, SimpleExpr, ValueTuple},
 };
 
-use crate::error::CursorDecodeErrorKind;
+use crate::{
+    cursors::expr_tuple::{ExprTuple, IntoExprTuple},
+    error::CursorDecodeErrorKind,
+};
 
 fn decode_base64(s: &str) -> Result<String, CursorDecodeErrorKind> {
     let decoded = BASE64_URL_SAFE
@@ -151,6 +158,15 @@ where
     }
 }
 
+impl<T> IntoExprTuple for &RecordDateCursor<T>
+where
+    T: Into<SimpleExpr> + Clone,
+{
+    fn into_expr_tuple(self) -> ExprTuple {
+        (self.record_date, self.data.clone()).into_expr_tuple()
+    }
+}
+
 impl<T> IntoValueTuple for &RecordDateCursor<T>
 where
     T: Into<Value> + Clone,
@@ -180,6 +196,15 @@ where
 
     fn encode_cursor(&self) -> String {
         encode_cursor("record_rank", self)
+    }
+}
+
+impl<T> IntoExprTuple for &RecordRankCursor<T>
+where
+    T: Into<SimpleExpr> + Clone,
+{
+    fn into_expr_tuple(self) -> ExprTuple {
+        (self.time, self.record_date, self.data.clone()).into_expr_tuple()
     }
 }
 
@@ -213,6 +238,15 @@ where
     }
 }
 
+impl<T> IntoExprTuple for &TextCursor<T>
+where
+    T: Into<SimpleExpr> + Clone,
+{
+    fn into_expr_tuple(self) -> ExprTuple {
+        (self.text.clone(), self.data.clone()).into_expr_tuple()
+    }
+}
+
 impl<T> IntoValueTuple for &TextCursor<T>
 where
     T: Into<Value> + Clone,
@@ -240,6 +274,15 @@ where
 
     fn encode_cursor(&self) -> String {
         encode_cursor("score", self)
+    }
+}
+
+impl<T> IntoExprTuple for &F64Cursor<T>
+where
+    T: Into<SimpleExpr> + Clone,
+{
+    fn into_expr_tuple(self) -> ExprTuple {
+        (self.score, self.data.clone()).into_expr_tuple()
     }
 }
 
