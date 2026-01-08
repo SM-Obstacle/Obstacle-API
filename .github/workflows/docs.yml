@@ -17,7 +17,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.89.0
+        uses: dtolnay/rust-toolchain@1.92.0
       - name: Configure cache
         uses: Swatinem/rust-cache@v2
       - name: Setup pages
