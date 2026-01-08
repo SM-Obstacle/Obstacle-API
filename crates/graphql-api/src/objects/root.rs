@@ -23,7 +23,7 @@ use crate::{
         ConnectionParameters, F64Cursor, RecordDateCursor, TextCursor, expr_tuple::IntoExprTuple,
         query_builder::CursorQueryBuilder, query_trait::CursorPaginable,
     },
-    error::{self, ApiGqlError, CursorDecodeErrorKind, GqlResult},
+    error::{self, ApiGqlError, CursorDecodeError, CursorDecodeErrorKind, GqlResult},
     objects::{
         event::Event,
         event_edition::EventEdition,
@@ -518,12 +518,14 @@ impl From<F64Cursor> for PlayerMapRankingCursor {
 }
 
 impl CursorType for PlayerMapRankingCursor {
-    type Error = CursorDecodeErrorKind;
+    type Error = CursorDecodeError;
 
     fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
         match F64Cursor::decode_cursor(s) {
             Ok(score) => Ok(score.into()),
-            Err(CursorDecodeErrorKind::InvalidPrefix) => match TextCursor::decode_cursor(s) {
+            Err(CursorDecodeError {
+                kind: CursorDecodeErrorKind::InvalidPrefix,
+            }) => match TextCursor::decode_cursor(s) {
                 Ok(text) => Ok(text.into()),
                 Err(e) => Err(e),
             },

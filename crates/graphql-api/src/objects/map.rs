@@ -27,7 +27,7 @@ use crate::{
         ConnectionParameters, RecordDateCursor, RecordRankCursor, expr_tuple::IntoExprTuple,
         query_trait::CursorPaginable,
     },
-    error::{self, ApiGqlError, CursorDecodeErrorKind, GqlResult},
+    error::{self, ApiGqlError, CursorDecodeError, CursorDecodeErrorKind, GqlResult},
     loaders::{map::MapLoader, player::PlayerLoader},
     objects::{
         event_edition::EventEdition, player::Player, player_rating::PlayerRating,
@@ -171,12 +171,14 @@ impl From<RecordRankCursor> for MapRecordCursor {
 }
 
 impl CursorType for MapRecordCursor {
-    type Error = CursorDecodeErrorKind;
+    type Error = CursorDecodeError;
 
     fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
         match RecordRankCursor::decode_cursor(s) {
             Ok(rank) => Ok(rank.into()),
-            Err(CursorDecodeErrorKind::InvalidPrefix) => match RecordDateCursor::decode_cursor(s) {
+            Err(CursorDecodeError {
+                kind: CursorDecodeErrorKind::InvalidPrefix,
+            }) => match RecordDateCursor::decode_cursor(s) {
                 Ok(date) => Ok(date.into()),
                 Err(e) => Err(e),
             },

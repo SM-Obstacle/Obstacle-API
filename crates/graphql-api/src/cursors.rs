@@ -16,27 +16,28 @@ use sea_orm::{
 
 use crate::{
     cursors::expr_tuple::{ExprTuple, IntoExprTuple},
-    error::CursorDecodeErrorKind,
+    error::{CursorDecodeError, CursorDecodeErrorKind},
 };
 
-fn decode_base64(s: &str) -> Result<String, CursorDecodeErrorKind> {
+fn decode_base64(s: &str) -> Result<String, CursorDecodeError> {
     let decoded = BASE64_URL_SAFE
         .decode(s)
-        .map_err(|_| CursorDecodeErrorKind::NotBase64)?;
+        .map_err(|_| CursorDecodeError::from(CursorDecodeErrorKind::NotBase64))?;
     // TODO: replace this with `slice::split_once` once it's stabilized
     // https://github.com/rust-lang/rust/issues/112811
     let idx = decoded
         .iter()
         .position(|b| *b == b'$')
-        .ok_or(CursorDecodeErrorKind::NoSignature)?;
+        .ok_or(CursorDecodeError::from(CursorDecodeErrorKind::NoSignature))?;
     let (content, signature) = (&decoded[..idx], &decoded[idx + 1..]);
 
     let mut mac = crate::config().cursor_secret_key.cursor_secret_key.get();
     mac.update(content);
     mac.verify_slice(signature)
-        .map_err(CursorDecodeErrorKind::InvalidSignature)?;
+        .map_err(|e| CursorDecodeError::from(CursorDecodeErrorKind::InvalidSignature(e)))?;
 
-    let content = str::from_utf8(content).map_err(|_| CursorDecodeErrorKind::NotUtf8)?;
+    let content = str::from_utf8(content)
+        .map_err(|_| CursorDecodeError::from(CursorDecodeErrorKind::NotUtf8))?;
 
     Ok(content.to_owned())
 }
@@ -119,21 +120,21 @@ where
     ))
 }
 
-fn decode_cursor<T>(prefix: &str, input: &str) -> Result<T, CursorDecodeErrorKind>
+fn decode_cursor<T>(prefix: &str, input: &str) -> Result<T, CursorDecodeError>
 where
     T: serde::de::DeserializeOwned,
 {
     let decoded = decode_base64(input)?;
 
     let Some((input_prefix, input)) = decoded.split_once(':') else {
-        return Err(CursorDecodeErrorKind::MissingPrefix);
+        return Err(CursorDecodeErrorKind::MissingPrefix.into());
     };
 
     if input_prefix != prefix {
-        return Err(CursorDecodeErrorKind::InvalidPrefix);
+        return Err(CursorDecodeErrorKind::InvalidPrefix.into());
     }
 
-    serde_json::from_str(input).map_err(|_| CursorDecodeErrorKind::InvalidData)
+    serde_json::from_str(input).map_err(|_| CursorDecodeErrorKind::InvalidData.into())
 }
 
 #[derive(PartialEq, Debug, serde::Serialize, serde::Deserialize)]
@@ -147,7 +148,7 @@ impl<T> CursorType for RecordDateCursor<T>
 where
     T: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
-    type Error = CursorDecodeErrorKind;
+    type Error = CursorDecodeError;
 
     fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
         decode_cursor("record_date", s)
@@ -188,7 +189,7 @@ impl<T> CursorType for RecordRankCursor<T>
 where
     T: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
-    type Error = CursorDecodeErrorKind;
+    type Error = CursorDecodeError;
 
     fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
         decode_cursor("record_rank", s)
@@ -227,7 +228,7 @@ impl<T> CursorType for TextCursor<T>
 where
     T: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
-    type Error = CursorDecodeErrorKind;
+    type Error = CursorDecodeError;
 
     fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
         decode_cursor("text", s)
@@ -266,7 +267,7 @@ impl<T> CursorType for F64Cursor<T>
 where
     T: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
-    type Error = CursorDecodeErrorKind;
+    type Error = CursorDecodeError;
 
     fn decode_cursor(s: &str) -> Result<Self, Self::Error> {
         decode_cursor("score", s)
@@ -325,7 +326,7 @@ mod tests {
     use crate::{
         config::InitError,
         cursors::{F64Cursor, TextCursor},
-        error::CursorDecodeErrorKind,
+        error::{CursorDecodeError, CursorDecodeErrorKind},
     };
 
     use super::{RecordDateCursor, RecordRankCursor};
@@ -351,19 +352,25 @@ mod tests {
 
     fn test_decode_cursor_errors<C>()
     where
-        C: CursorType<Error = CursorDecodeErrorKind>,
+        C: CursorType<Error = CursorDecodeError>,
     {
         let decoded = <C>::decode_cursor("foobar").err();
-        assert_eq!(decoded, Some(CursorDecodeErrorKind::NotBase64));
+        assert_eq!(
+            decoded.map(|e| e.kind),
+            Some(CursorDecodeErrorKind::NotBase64)
+        );
 
         let encoded = BASE64_URL_SAFE.encode("foobar");
         let decoded = <C>::decode_cursor(&encoded).err();
-        assert_eq!(decoded, Some(CursorDecodeErrorKind::NoSignature));
+        assert_eq!(
+            decoded.map(|e| e.kind),
+            Some(CursorDecodeErrorKind::NoSignature)
+        );
 
         let encoded = BASE64_URL_SAFE.encode("foobar$signature");
         let decoded = <C>::decode_cursor(&encoded).err();
         assert_eq!(
-            decoded,
+            decoded.map(|e| e.kind),
             Some(CursorDecodeErrorKind::InvalidSignature(MacError))
         );
     }

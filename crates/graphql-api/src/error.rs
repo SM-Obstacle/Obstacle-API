@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc};
+use std::{error::Error, fmt, sync::Arc};
 
 use records_lib::error::RecordsError;
 use sha2::digest::MacError;
@@ -36,6 +36,44 @@ impl fmt::Display for CursorDecodeErrorKind {
             CursorDecodeErrorKind::InvalidSignature(e) => write!(f, "invalid signature: {e}"),
             CursorDecodeErrorKind::InvalidData => f.write_str("invalid data"),
         }
+    }
+}
+
+impl Error for CursorDecodeErrorKind {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            CursorDecodeErrorKind::NotBase64
+            | CursorDecodeErrorKind::NotUtf8
+            | CursorDecodeErrorKind::MissingPrefix
+            | CursorDecodeErrorKind::InvalidPrefix
+            | CursorDecodeErrorKind::NoSignature
+            | CursorDecodeErrorKind::InvalidData => None,
+            CursorDecodeErrorKind::InvalidSignature(mac_error) => Some(mac_error),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct CursorDecodeError {
+    pub kind: CursorDecodeErrorKind,
+}
+
+impl From<CursorDecodeErrorKind> for CursorDecodeError {
+    fn from(kind: CursorDecodeErrorKind) -> Self {
+        Self { kind }
+    }
+}
+
+impl fmt::Display for CursorDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("cursor decode error: ")?;
+        fmt::Display::fmt(&self.kind, f)
+    }
+}
+
+impl Error for CursorDecodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.kind)
     }
 }
 
