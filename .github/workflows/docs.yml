@@ -26,7 +26,7 @@ jobs:
       - name: Clean docs folder
         run: cargo clean --doc
       - name: Build docs
-        run: cargo +nightly doc --all-features --no-deps --workspace --exclude clear_redis_mappacks --exclude admin
+        run: cargo +nightly doc --all-features --no-deps --workspace --exclude admin
       - name: Add redirect
         run: echo '<meta http-equiv="refresh" content="0;url=records_lib/index.html">' > target/doc/index.html
       - name: Remove lock file

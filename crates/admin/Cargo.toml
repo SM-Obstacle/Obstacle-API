@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
-clap = { version = "4.5.16", features = ["derive"] }
+clap = { version = "4.5.54", features = ["derive"] }
 csv = { workspace = true }
 deadpool-redis = { workspace = true }
 dotenvy = { workspace = true }

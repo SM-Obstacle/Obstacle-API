@@ -1,4 +1,4 @@
-use std::panic;
+use std::{env, panic};
 
 use anyhow::Context as _;
 use futures::FutureExt as _;
@@ -7,6 +7,10 @@ use mkenv::prelude::*;
 use records_lib::{Database, DbEnv, pool::get_redis_pool};
 use sea_orm::{ConnectionTrait as _, DbConn};
 use tracing_subscriber::fmt::TestWriter;
+
+fn is_db_drop_forced() -> bool {
+    env::args_os().any(|arg| arg == "--force-drop-db")
+}
 
 pub fn get_map_id() -> u32 {
     rand::random_range(..u32::MAX)
@@ -94,7 +98,7 @@ where
             let db = sqlx::postgres::PgPool::connect_with(options).await?;
             DbConn::from(db)
         }
-        _ => panic!("must enable either `mysql` or `postgres` feature for testing"),
+        _ => unreachable!("must enable either `mysql` or `postgres` feature for testing"),
     };
 
     migration::Migrator::up(&db, None).await?;
@@ -106,8 +110,7 @@ where
     .catch_unwind()
     .await;
 
-    #[cfg(test_force_db_deletion)]
-    {
+    if is_db_drop_forced() {
         master_db
             .execute_unprepared(&format!("drop database {db_name}"))
             .await?;
@@ -119,9 +122,7 @@ where
                 panic::resume_unwind(e)
             }
         }
-    }
-    #[cfg(not(test_force_db_deletion))]
-    {
+    } else {
         match r.map(IntoResult::into_result) {
             Ok(Ok(out)) => {
                 master_db
@@ -132,7 +133,7 @@ where
             other => {
                 tracing::info!(
                     "Test failed, leaving database {db_name} as-is. \
-                    Run with cfg `test_force_db_deletion` to drop the database everytime."
+                    Run with `--force-drop-db` to drop the database everytime."
                 );
                 match other {
                     Ok(Err(e)) => Err(e),
