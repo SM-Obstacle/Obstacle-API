@@ -78,7 +78,7 @@ fn player_id_to_row(player_id: i32) -> Row {
 }
 
 async fn insert_sample_map<C: ConnectionTrait>(conn: &C) -> anyhow::Result<u32> {
-    let map_id = rand::random_range(..100000);
+    let map_id = test_env::get_map_id();
 
     maps::Entity::insert(maps::ActiveModel {
         id: Set(map_id),
@@ -372,9 +372,7 @@ async fn competition_ranking() -> anyhow::Result<()> {
         let app = base::get_app(db.clone()).await;
 
         let req = test::TestRequest::get()
-            .uri(&format!(
-                "/overview?mapId=test_map_uid&playerId=player_1_login"
-            ))
+            .uri("/overview?mapId=test_map_uid&playerId=player_1_login")
             .to_request();
 
         let resp = test::call_service(&app, req).await;
@@ -448,8 +446,8 @@ async fn overview_event_version_map_non_empty() -> anyhow::Result<()> {
         .await
         .context("couldn't insert players")?;
 
-        let map_id = rand::random_range(1..=100000);
-        let event_map_id = rand::random_range(1..=100000);
+        let map_id = test_env::get_map_id();
+        let event_map_id = test_env::get_map_id();
 
         let map = maps::ActiveModel {
             id: Set(map_id),

@@ -10,8 +10,25 @@ chrono = { workspace = true }
 deadpool-redis = { workspace = true }
 entity = { path = "../entity" }
 futures = { workspace = true }
+hmac = "0.12.1"
+mkenv = { workspace = true }
 records-lib = { path = "../records_lib" }
 reqwest = { workspace = true }
 sea-orm = { workspace = true }
 serde = { workspace = true }
+sha2 = "0.10.9"
 tokio = { workspace = true, features = ["macros"] }
+itertools.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+test-env = { path = "../test-env" }
+anyhow = { workspace = true }
+tracing.workspace = true
+rand.workspace = true
+
+[features]
+default = []
+mysql = ["records-lib/mysql", "test-env/mysql"]
+postgres = ["records-lib/postgres", "test-env/postgres"]
+sqlite = ["records-lib/sqlite"]

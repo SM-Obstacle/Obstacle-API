@@ -1,163 +1,160 @@
-use mkenv::{Env as _, EnvSplitIncluded as _};
+use mkenv::{make_config, prelude::*};
 use once_cell::sync::OnceCell;
 use records_lib::{DbEnv, LibEnv};
 
-#[cfg(feature = "test")]
-const DEFAULT_SESSION_KEY: &str = "";
+#[cfg(not(debug_assertions))]
+mkenv::make_config! {
+    pub struct DynamicApiEnv {
+        pub sess_key: {
+            var_name: "RECORDS_API_SESSION_KEY_FILE",
+            layers: [file_read()],
+            description: "The path to the file containing the session key used by the API",
+        },
 
-mkenv::make_env! {pub ApiEnvUsedOnce:
-    #[cfg(not(feature = "test"))]
-    sess_key: {
-        id: SessKey(String),
-        kind: file,
-        var: "RECORDS_API_SESSION_KEY_FILE",
-        desc: "The path to the file containing the session key used by the API",
-    },
+        pub mp_client_id: {
+            var_name: "RECORDS_MP_APP_CLIENT_ID_FILE",
+            layers: [file_read()],
+            description: "The path to the file containing the Obstacle ManiaPlanet client ID",
+        },
 
-    #[cfg(feature = "test")]
-    sess_key: {
-        id: SessKey(String),
-        kind: normal,
-        var: "RECORDS_API_SESSION_KEY",
-        desc: "The session key used by the API",
-        default: DEFAULT_SESSION_KEY,
-    },
-
-    wh_invalid_req_url: {
-        id: WebhookInvalidReqUrl(String),
-        kind: normal,
-        var: "WEBHOOK_INVALID_REQ_URL",
-        desc: "The URL to the Discord webhook used to flag invalid requests",
-        default: DEFAULT_WH_INVALID_REQ_URL,
-    },
+        pub mp_client_secret: {
+            var_name: "RECORDS_MP_APP_CLIENT_SECRET_FILE",
+            layers: [file_read()],
+            description: "The path to the file containing the Obstacle ManiaPlanet client secret",
+        },
+    }
 }
 
-const DEFAULT_PORT: u16 = 3000;
-const DEFAULT_TOKEN_TTL: u32 = 15_552_000;
-#[cfg(feature = "test")]
-const DEFAULT_MP_CLIENT_ID: &str = "";
-#[cfg(feature = "test")]
-const DEFAULT_MP_CLIENT_SECRET: &str = "";
-const DEFAULT_WH_REPORT_URL: &str = "";
-const DEFAULT_WH_AC_URL: &str = "";
-const DEFAULT_WH_INVALID_REQ_URL: &str = "";
-const DEFAULT_WH_RANK_COMPUTE_ERROR: &str = "";
-const DEFAULT_GQL_ENDPOINT: &str = "/graphql";
+#[cfg(debug_assertions)]
+mkenv::make_config! {
+    pub struct DynamicApiEnv {
+        pub sess_key: {
+            var_name: "RECORDS_API_SESSION_KEY",
+            layers: [or_default()],
+            description: "The session key used by the API",
+            default_val_fmt: "empty",
+        },
 
-mkenv::make_env! {pub ApiEnv includes [
-    DbEnv as db_env,
-    LibEnv as lib_env,
-    ApiEnvUsedOnce as used_once
-]:
-    port: {
-        id: Port(u16),
-        kind: parse,
-        var: "RECORDS_API_PORT",
-        desc: "The port used to expose the API",
-        default: DEFAULT_PORT,
-    },
+        pub mp_client_id: {
+            var_name: "RECORDS_MP_APP_CLIENT_ID",
+            layers: [or_default()],
+            description: "The Obstacle ManiaPlanet client ID",
+            default_val_fmt: "empty",
+        },
 
-    #[cfg(not(debug_assertions))]
-    host: {
-        id: Host(String),
-        kind: normal,
-        var: "RECORDS_API_HOST",
-        desc: "The hostname of the server where the API is running (e.g. https://obstacle.titlepack.io)",
-    },
-
-    auth_token_ttl: {
-        id: AuthTokenTtl(u32),
-        kind: parse,
-        var: "RECORDS_API_TOKEN_TTL",
-        desc: "The TTL (time-to-live) of an authentication token or anything related to it (in seconds)",
-        default: DEFAULT_TOKEN_TTL,
-    },
-
-    #[cfg(not(feature = "test"))]
-    mp_client_id: {
-        id: MpClientId(String),
-        kind: file,
-        var: "RECORDS_MP_APP_CLIENT_ID_FILE",
-        desc: "The path to the file containing the Obstacle ManiaPlanet client ID",
-    },
-    #[cfg(feature = "test")]
-    mp_client_id: {
-        id: MpClientId(String),
-        kind: normal,
-        var: "RECORDS_MP_APP_CLIENT_ID",
-        desc: "The Obstacle ManiaPlanet client ID",
-        default: DEFAULT_MP_CLIENT_ID,
-    },
-
-    #[cfg(not(feature = "test"))]
-    mp_client_secret: {
-        id: MpClientSecret(String),
-        kind: file,
-        var: "RECORDS_MP_APP_CLIENT_SECRET_FILE",
-        desc: "The path to the file containing the Obstacle ManiaPlanet client secret",
-    },
-    #[cfg(feature = "test")]
-    mp_client_secret: {
-        id: MpClientSecret(String),
-        kind: normal,
-        var: "RECORDS_MP_APP_CLIENT_SECRET",
-        desc: "The Obstacle ManiaPlanet client secret",
-        default: DEFAULT_MP_CLIENT_SECRET,
-    },
-
-    wh_report_url: {
-        id: WebhookReportUrl(String),
-        kind: normal,
-        var: "WEBHOOK_REPORT_URL",
-        desc: "The URL to the Discord webhook used to report errors",
-        default: DEFAULT_WH_REPORT_URL,
-    },
-
-    wh_ac_url: {
-        id: WebhookAcUrl(String),
-        kind: normal,
-        var: "WEBHOOK_AC_URL",
-        desc: "The URL to the Discord webhook used to share in-game statistics",
-        default: DEFAULT_WH_AC_URL,
-    },
-
-    gql_endpoint: {
-        id: GqlEndpoint(String),
-        kind: normal,
-        var: "GQL_ENDPOINT",
-        desc: "The route to the GraphQL endpoint (e.g. /graphql)",
-        default: DEFAULT_GQL_ENDPOINT,
-    },
-
-    wh_rank_compute_err: {
-        id: WebhookRankComputeError(String),
-        kind: normal,
-        var: "WEBHOOK_RANK_COMPUTE_ERROR",
-        desc: "The URL to the Discord webhook used to send rank compute errors",
-        default: DEFAULT_WH_RANK_COMPUTE_ERROR,
-    },
+        pub mp_client_secret: {
+            var_name: "RECORDS_MP_APP_CLIENT_SECRET",
+            layers: [or_default()],
+            description: "The Obstacle ManiaPlanet client secret",
+            default_val_fmt: "empty",
+        },
+    }
 }
 
-pub struct InitEnvOut {
-    pub db_env: DbEnv,
-    pub used_once: ApiEnvUsedOnce,
+#[cfg(debug_assertions)]
+mkenv::make_config! {
+    pub struct Hostname {}
 }
 
-static ENV: OnceCell<mkenv::init_env!(ApiEnv)> = OnceCell::new();
-
-pub fn env() -> &'static mkenv::init_env!(ApiEnv) {
-    // SAFETY: this function is always called when the `init_env()` is called at the start.
-    unsafe { ENV.get_unchecked() }
+#[cfg(not(debug_assertions))]
+mkenv::make_config! {
+    pub struct Hostname {
+        pub host: {
+            var_name: "RECORDS_API_HOST",
+            description: "The hostname of the server where the API is running (e.g. https://obstacle.titlepack.io)",
+        }
+    }
 }
 
-pub fn init_env() -> anyhow::Result<InitEnvOut> {
-    let env = ApiEnv::try_get()?;
-    let (included, rest) = env.split();
-    records_lib::init_env(included.lib_env);
-    let _ = ENV.set(rest);
+mkenv::make_config! {
+    pub struct ApiEnv {
+        pub db_env: { DbEnv },
 
-    Ok(InitEnvOut {
-        db_env: included.db_env,
-        used_once: included.used_once,
-    })
+        pub dynamic: { DynamicApiEnv },
+
+        pub wh_invalid_req_url: {
+            var_name: "WEBHOOK_INVALID_REQ_URL",
+            layers: [or_default()],
+            description: "The URL to the Discord webhook used to flag invalid requests",
+            default_val_fmt: "empty",
+        },
+
+        pub port: {
+            var_name: "RECORDS_API_PORT",
+            layers: [
+                parsed_from_str<u16>(),
+                or_default(),
+            ],
+            description: "The port used to expose the API",
+            default_val_fmt: "3000",
+        },
+
+        pub host: { Hostname },
+
+        pub auth_token_ttl: {
+            var_name: "RECORDS_API_TOKEN_TTL",
+            layers: [
+                parsed_from_str<u32>(),
+                or_default_val(|| 180 * 24 * 3600),
+            ],
+            description: "The TTL (time-to-live) of an authentication token or anything related to it (in seconds)",
+            default_val_fmt: "180 days",
+        },
+
+        pub wh_report_url: {
+            var_name: "WEBHOOK_REPORT_URL",
+            layers: [or_default()],
+            description: "The URL to the Discord webhook used to report errors",
+            default_val_fmt: "empty",
+        },
+
+        pub wh_ac_url: {
+            var_name: "WEBHOOK_AC_URL",
+            layers: [or_default()],
+            description: "The URL to the Discord webhook used to share in-game statistics",
+            default_val_fmt: "empty",
+        },
+
+
+        pub gql_endpoint: {
+            var_name: "GQL_ENDPOINT",
+            layers: [
+                or_default_val(|| "/graphql".to_owned()),
+            ],
+            description: "The route to the GraphQL endpoint (e.g. /graphql)",
+            default_val_fmt: "/graphql",
+        },
+
+        pub wh_rank_compute_err: {
+            var_name: "WEBHOOK_RANK_COMPUTE_ERROR",
+            layers: [or_default()],
+            description: "The URL to the Discord webhook used to send rank compute errors",
+            default_val_fmt: "empty",
+        },
+    }
+}
+
+make_config! {
+    struct All {
+        api_env: { ApiEnv },
+        lib_env: { LibEnv },
+        gql_env: { graphql_api::config::ApiConfig },
+    }
+}
+
+static ENV: OnceCell<ApiEnv> = OnceCell::new();
+
+pub fn env() -> &'static ApiEnv {
+    ENV.get().unwrap()
+}
+
+pub fn init_env() -> anyhow::Result<()> {
+    let env = All::define();
+    env.try_init().map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    records_lib::init_env(env.lib_env);
+    let _ = graphql_api::set_config(env.gql_env);
+    let _ = ENV.set(env.api_env);
+
+    Ok(())
 }

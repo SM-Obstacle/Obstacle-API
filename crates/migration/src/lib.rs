@@ -8,6 +8,7 @@ mod m20250918_215914_add_event_edition_maps_availability;
 mod m20250918_222203_add_event_edition_maps_disability;
 mod m20251002_100827_add_rm_mp_style_func;
 mod m20251004_214656_add_maps_medal_times;
+mod m20260103_142202_players_maps_score;
 
 use sea_orm_migration::prelude::*;
 
@@ -29,6 +30,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20250918_222203_add_event_edition_maps_disability::Migration),
             Box::new(m20251002_100827_add_rm_mp_style_func::Migration),
             Box::new(m20251004_214656_add_maps_medal_times::Migration),
+            Box::new(m20260103_142202_players_maps_score::Migration),
         ]
     }
 }

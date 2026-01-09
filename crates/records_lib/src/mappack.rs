@@ -1,5 +1,6 @@
 //! This module contains anything related to mappacks in this library.
 
+use mkenv::prelude::*;
 use std::{fmt, time::SystemTime};
 
 use deadpool_redis::redis::{self, AsyncCommands, SetExpiry, SetOptions, ToRedisArgs};
@@ -132,7 +133,7 @@ impl AnyMappackId<'_> {
     ///
     /// Only regular MX mappacks have a time-to-live.
     fn get_ttl(&self) -> Option<i64> {
-        self.has_ttl().then_some(crate::env().mappack_ttl)
+        self.has_ttl().then_some(crate::env().mappack_ttl.get())
     }
 }
 
@@ -365,7 +366,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
 
     let mut scores = Vec::<PlayerScore>::with_capacity(mappack.len());
 
-    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+    let mut redis_conn = redis_pool.get().await?;
 
     for (i, map) in mappack.iter().enumerate() {
         let mut query = Query::select();
@@ -420,14 +421,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
             }
 
             let record = RankedRecordRow {
-                rank: ranks::get_rank_in_session(
-                    &mut ranking_session,
-                    map.id,
-                    record.record.record_player_id,
-                    record.record.time,
-                    event,
-                )
-                .await?,
+                rank: ranks::get_rank(&mut redis_conn, map.id, record.record.time, event).await?,
                 record,
             };
             records.push(record);

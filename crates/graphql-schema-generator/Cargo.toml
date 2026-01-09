@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
-clap = { version = "4.5.48", features = ["derive"] }
+clap = { version = "4.5.54", features = ["derive"] }
 graphql-api = { path = "../graphql-api" }

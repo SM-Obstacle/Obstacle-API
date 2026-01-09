@@ -38,7 +38,7 @@ async fn finished_on_transparent_event() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let map_id = rand::random_range(1..=100000);
+    let map_id = test_env::get_map_id();
 
     let map = maps::ActiveModel {
         id: Set(map_id),
@@ -166,9 +166,9 @@ async fn event_finish_transitive_save() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let original_map_id = rand::random_range(1..=100000);
+    let original_map_id = test_env::get_map_id();
     let map_id = loop {
-        let val = rand::random_range(1..=100000);
+        let val = test_env::get_map_id();
         if val != original_map_id {
             break val;
         }
@@ -313,9 +313,9 @@ async fn event_finish_save_to_original() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let original_map_id = rand::random_range(1..=100000);
+    let original_map_id = test_env::get_map_id();
     let map_id = loop {
-        let val = rand::random_range(1..=100000);
+        let val = test_env::get_map_id();
         if val != original_map_id {
             break val;
         }
@@ -459,9 +459,9 @@ async fn event_finish_non_transitive_save() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let original_map_id = rand::random_range(1..=100000);
+    let original_map_id = test_env::get_map_id();
     let map_id = loop {
-        let val = rand::random_range(1..=100000);
+        let val = test_env::get_map_id();
         if val != original_map_id {
             break val;
         }
@@ -576,9 +576,9 @@ async fn event_finish_save_non_event_record() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let original_map_id = rand::random_range(1..=100000);
+    let original_map_id = test_env::get_map_id();
     let map_id = loop {
-        let val = rand::random_range(1..=100000);
+        let val = test_env::get_map_id();
         if val != original_map_id {
             break val;
         }

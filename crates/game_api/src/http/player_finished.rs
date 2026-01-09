@@ -232,12 +232,14 @@ where
     })
     .await?;
 
+    let mut redis_conn = redis_pool.get().await.with_api_err()?;
+
     let (old, new, has_improved, old_rank) = match result.old_record {
         Some(records::Model { time: old, .. }) => (
             old,
             params.body.time,
             params.body.time < old,
-            Some(ranks::get_rank(redis_pool, map.id, player_id, old, params.event).await?),
+            Some(ranks::get_rank(&mut redis_conn, map.id, old, params.event).await?),
         ),
         None => (params.body.time, params.body.time, true, None),
     };
@@ -261,7 +263,7 @@ where
         let (count,): (i32,) = pipe.query_async(&mut redis_conn).await.with_api_err()?;
         count + 1
     } else {
-        ranks::get_rank(redis_pool, map.id, player_id, old, params.event)
+        ranks::get_rank(&mut redis_conn, map.id, old, params.event)
             .await
             .with_api_err()?
     };

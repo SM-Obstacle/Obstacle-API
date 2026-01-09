@@ -7,7 +7,7 @@
 use std::{future::Future, time::Duration};
 
 use anyhow::Context;
-use mkenv::Env as _;
+use mkenv::prelude::*;
 use records_lib::{Database, DbEnv, LibEnv};
 use tokio::{task::JoinHandle, time};
 use tracing::info;
@@ -44,19 +44,28 @@ fn setup_tracing() -> anyhow::Result<()> {
         .map_err(|e| anyhow::format_err!("{e}"))
 }
 
-mkenv::make_env! {Env includes [DbEnv as db_env, LibEnv as lib_env]:}
+mkenv::make_config! {
+    struct Env {
+        db_env: { DbEnv },
+        lib_env: { LibEnv },
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv()?;
     setup_tracing()?;
-    let env = Env::try_get()?;
-    let event_scores_interval = env.lib_env.event_scores_interval;
-    let player_ranking_scores_interval = env.lib_env.player_map_ranking_scores_interval;
+    let env = Env::define();
+    env.init();
+    let event_scores_interval = env.lib_env.event_scores_interval.get();
+    let player_ranking_scores_interval = env.lib_env.player_map_ranking_scores_interval.get();
     records_lib::init_env(env.lib_env);
 
-    let db =
-        Database::from_db_url(env.db_env.db_url.db_url, env.db_env.redis_url.redis_url).await?;
+    let db = Database::from_db_url(
+        env.db_env.db_url.db_url.get(),
+        env.db_env.redis_url.redis_url.get(),
+    )
+    .await?;
 
     let event_scores_handle = tokio::spawn(handle(
         db.clone(),

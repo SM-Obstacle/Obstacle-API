@@ -113,7 +113,6 @@ impl<I: Iterator> CompetRankingByKeyIter for I {}
 
 #[derive(Debug, Clone, FromQueryResult)]
 struct RecordQueryRow {
-    player_id: u32,
     login: String,
     nickname: String,
     time: i32,
@@ -184,18 +183,11 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
 
     rows.reserve(result.len());
 
-    let mut ranking_session = ranks::RankingSession::try_from_pool(redis_pool).await?;
+    let mut redis_conn = redis_pool.get().await?;
 
     for r in result {
         rows.push(Row {
-            rank: ranks::get_rank_in_session(
-                &mut ranking_session,
-                map_id,
-                r.player_id,
-                r.time,
-                event,
-            )
-            .await?,
+            rank: ranks::get_rank(&mut redis_conn, map_id, r.time, event).await?,
             login: r.login,
             nickname: r.nickname,
             time: r.time,

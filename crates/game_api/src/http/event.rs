@@ -12,6 +12,7 @@ use entity::{
 };
 use futures::TryStreamExt;
 use itertools::Itertools;
+use mkenv::prelude::*;
 use records_lib::{
     Database, Expirable as _, NullableInteger, NullableReal, NullableText, RedisPool,
     error::RecordsError,
@@ -215,7 +216,7 @@ fn db_align_to_mp_align(
 ) -> NullableText {
     match alignment {
         None if pos_x.is_none() && pos_y.is_none() => {
-            Some(records_lib::env().ingame_default_titles_align)
+            Some(records_lib::env().ingame_default_titles_align.get())
         }
         Some(_) if pos_x.is_some() || pos_y.is_some() => None,
         other => other,
@@ -245,7 +246,7 @@ impl From<in_game_event_edition_params::Model> for EventEditionInGameParams {
             put_subtitle_on_newline: value
                 .put_subtitle_on_newline
                 .map(|b| b != 0)
-                .unwrap_or_else(|| records_lib::env().ingame_default_subtitle_on_newline),
+                .unwrap_or_else(|| records_lib::env().ingame_default_subtitle_on_newline.get()),
             titles_pos_x: value.titles_pos_x.into(),
             titles_pos_y: value.titles_pos_y.into(),
             lb_link_pos_x: value.lb_link_pos_x.into(),
@@ -262,22 +263,25 @@ impl Default for EventEditionInGameParams {
             titles_align: NullableText(Some(
                 records_lib::env()
                     .ingame_default_titles_align
+                    .get()
                     .to_char()
                     .to_string(),
             )),
             lb_link_align: NullableText(Some(
                 records_lib::env()
                     .ingame_default_lb_link_align
+                    .get()
                     .to_char()
                     .to_string(),
             )),
             authors_align: NullableText(Some(
                 records_lib::env()
                     .ingame_default_authors_align
+                    .get()
                     .to_char()
                     .to_string(),
             )),
-            put_subtitle_on_newline: records_lib::env().ingame_default_subtitle_on_newline,
+            put_subtitle_on_newline: records_lib::env().ingame_default_subtitle_on_newline.get(),
             titles_pos_x: NullableReal(None),
             titles_pos_y: NullableReal(None),
             lb_link_pos_x: NullableReal(None),

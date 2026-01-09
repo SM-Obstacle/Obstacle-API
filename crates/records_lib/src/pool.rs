@@ -25,7 +25,7 @@ pub enum DatabaseCreationError {
 }
 
 #[inline(always)]
-#[cfg(feature = "test")]
+#[cfg(feature = "mock")]
 const fn empty_query_results() -> std::iter::Empty<std::iter::Empty<sea_orm::MockRow>> {
     std::iter::empty::<std::iter::Empty<sea_orm::MockRow>>()
 }
@@ -55,8 +55,8 @@ impl Database {
     /// with initial data for the mock database.
     ///
     /// This is used for testing, by simulating an SQL database.
-    #[cfg(feature = "test")]
-    #[cfg_attr(nightly, doc(cfg(feature = "test")))]
+    #[cfg(feature = "mock")]
+    #[cfg_attr(nightly, doc(cfg(feature = "mock")))]
     pub fn from_mock_db_with_initial<I1, I2>(
         db_backend: sea_orm::DbBackend,
         redis_url: String,
@@ -78,8 +78,8 @@ impl Database {
     /// with initial query results for the mock database.
     ///
     /// This is used for testing, by simulating an SQL database.
-    #[cfg(feature = "test")]
-    #[cfg_attr(nightly, doc(cfg(feature = "test")))]
+    #[cfg(feature = "mock")]
+    #[cfg_attr(nightly, doc(cfg(feature = "mock")))]
     pub fn from_mock_db_with_query_results<I>(
         db_backend: sea_orm::DbBackend,
         redis_url: String,
@@ -95,8 +95,8 @@ impl Database {
     /// with initial exec results for the mock database.
     ///
     /// This is used for testing, by simulating an SQL database.
-    #[cfg(feature = "test")]
-    #[cfg_attr(nightly, doc(cfg(feature = "test")))]
+    #[cfg(feature = "mock")]
+    #[cfg_attr(nightly, doc(cfg(feature = "mock")))]
     pub fn from_mock_db_with_exec_results<I>(
         db_backend: sea_orm::DbBackend,
         redis_url: String,
@@ -112,8 +112,8 @@ impl Database {
     /// with no data in the mock database.
     ///
     /// This is used for testing, by simulating an SQL database.
-    #[cfg(feature = "test")]
-    #[cfg_attr(nightly, doc(cfg(feature = "test")))]
+    #[cfg(feature = "mock")]
+    #[cfg_attr(nightly, doc(cfg(feature = "mock")))]
     pub fn from_mock_db(
         db_backend: sea_orm::DbBackend,
         redis_url: String,
@@ -129,7 +129,7 @@ pub fn clone_dbconn(conn: &DbConn) -> DbConn {
         sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(conn) => {
             sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(conn.clone())
         }
-        #[cfg(feature = "test")]
+        #[cfg(feature = "mock")]
         sea_orm::DatabaseConnection::MockDatabaseConnection(conn) => {
             sea_orm::DatabaseConnection::MockDatabaseConnection(conn.clone())
         }

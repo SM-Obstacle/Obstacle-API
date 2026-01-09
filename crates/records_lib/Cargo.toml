@@ -27,7 +27,7 @@ mysql = ["sea-orm/sqlx-mysql"]
 postgres = ["sea-orm/sqlx-postgres"]
 sqlite = ["sea-orm/sqlx-sqlite"]
 sea-orm-proxy = ["sea-orm/proxy"]
-test = ["sea-orm/mock"]
+mock = ["sea-orm/mock"]
 
 [build-dependencies]
 rustc_version = "0.4.1"

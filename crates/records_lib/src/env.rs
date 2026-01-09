@@ -3,200 +3,214 @@ use std::time::Duration;
 use entity::types::InGameAlignment;
 use once_cell::sync::OnceCell;
 
-mkenv::make_env! {
-/// The environment used to set up a connection to the MySQL/MariaDB database.
-pub DbUrlEnv:
-    /// The database URL.
-    #[cfg(debug_assertions)]
-    db_url: {
-        id: DbUrl(String),
-        kind: normal,
-        var: "DATABASE_URL",
-        desc: "The URL to the MySQL/MariaDB database",
-    },
-    /// The path to the file containing the database URL.
-    #[cfg(not(debug_assertions))]
-    db_url: {
-        id: DbUrl(String),
-        kind: file,
-        var: "DATABASE_URL",
-        desc: "The path to the file containing the URL to the MySQL/MariaDB database",
-    },
+#[cfg(debug_assertions)]
+mkenv::make_config! {
+    /// The environment used to set up a connection to the MySQL/MariaDB database.
+    pub struct DbUrlEnv {
+        /// The database URL.
+        pub db_url: {
+            var_name: "DATABASE_URL",
+            description: "The URL to the MySQL/MariaDB database",
+        }
+    }
 }
-
-mkenv::make_env! {
-/// The environment used to set up a connection with the Redis database.
-pub RedisUrlEnv:
-    /// The URL to the Redis database.
-    redis_url: {
-        id: RedisUrl(String),
-        kind: normal,
-        var: "REDIS_URL",
-        desc: "The URL to the Redis database",
+#[cfg(not(debug_assertions))]
+mkenv::make_config! {
+    /// The environment used to set up a connection to the MySQL/MariaDB database.
+    pub struct DbUrlEnv {
+        /// The path to the file containing the database URL.
+        pub db_url: {
+            var_name: "DATABASE_URL",
+            layers: [
+                file_read(),
+            ],
+            description: "The path to the file containing the URL to the MySQL/MariaDB database",
+        }
     }
 }
 
-mkenv::make_env! {
-    /// The environment used to set up a connection to the databases of the API.
-    pub DbEnv includes [
-        /// The environment for the MySQL/MariaDB database.
-        DbUrlEnv as db_url,
-        /// The environment for the Redis database.
-        RedisUrlEnv as redis_url
-    ]:
+mkenv::make_config! {
+    /// The environment used to set up a connection with the Redis database.
+    pub struct RedisUrlEnv {
+        /// The URL to the Redis database.
+        pub redis_url: {
+            var_name: "REDIS_URL",
+            description: "The URL to the Redis database",
+        }
+    }
 }
 
-const DEFAULT_MAPPACK_TTL: i64 = 604_800;
+mkenv::make_config! {
+    /// The environment used to set up a connection to the databases of the API.
+    pub struct DbEnv {
+        /// The environment for the MySQL/MariaDB database.
+        pub db_url: { DbUrlEnv },
+        /// The environment for the Redis database.
+        pub redis_url: { RedisUrlEnv },
+    }
+}
 
-// In game default parameter values
+mkenv::make_config! {
+    /// The environment used by this crate.
+    pub struct LibEnv {
+        /// The time-to-live for the mappacks saved in the Redis database.
+        pub mappack_ttl: {
+            var_name: "RECORDS_API_MAPPACK_TTL",
+            layers: [
+                parsed_from_str<i64>(),
+                or_default_val(|| 604_800),
+            ],
+            description: "The TTL (time-to-live) of the mappacks stored in Redis",
+            default_val_fmt: "604,800",
+        },
 
-const DEFAULT_INGAME_SUBTITLE_ON_NEWLINE: bool = false;
+        /// The default alignment of the titles of an event edition in the Titlepack menu.
+        pub ingame_default_titles_align: {
+            var_name: "RECORDS_API_INGAME_DEFAULT_TITLES_ALIGN",
+            layers: [
+                parsed_from_str<InGameAlignment>(),
+                or_default_val(|| InGameAlignment::Left),
+            ],
+            description: "The default alignment (either L for left or R for right) of the titles of \
+                an event edition in the Titlepack menu",
+            default_val_fmt: "left",
+        },
 
-const DEFAULT_INGAME_TITLES_ALIGN: InGameAlignment = InGameAlignment::Left;
-const DEFAULT_INGAME_LB_LINK_ALIGN: InGameAlignment = InGameAlignment::Left;
-const DEFAULT_INGAME_AUTHORS_ALIGN: InGameAlignment = InGameAlignment::Right;
+        /// The default alignment of an event edition title in the Titlepack menu.
+        pub ingame_default_lb_link_align: {
+            var_name: "RECORDS_API_INGAME_DEFAULT_LB_LINK_ALIGN",
+            layers: [
+                parsed_from_str<InGameAlignment>(),
+                or_default_val(|| InGameAlignment::Left),
+            ],
+            description: "The default alignment (either L for left or R for right) of the leaderboards link of \
+                an event edition in the Titlepack menu",
+            default_val_fmt: "left",
+        },
 
-const DEFAULT_INGAME_TITLES_POS_X: f64 = 181.;
-const DEFAULT_INGAME_TITLES_POS_Y: f64 = -29.5;
 
-const DEFAULT_INGAME_LB_LINK_POS_X: f64 = 181.;
-const DEFAULT_INGAME_LB_LINK_POS_Y: f64 = -29.5;
+        /// The default alignment of an event edition title in the Titlepack menu.
+        pub ingame_default_authors_align: {
+            var_name: "RECORDS_API_INGAME_DEFAULT_AUTHORS_ALIGN",
+            layers: [
+                parsed_from_str<InGameAlignment>(),
+                or_default_val(|| InGameAlignment::Right),
+            ],
+            description: "The default alignment (either L for left or R for right) of the author list of \
+                an event edition in the Titlepack menu",
+            default_val_fmt: "right",
+        },
 
-const DEFAULT_INGAME_AUTHORS_POS_X: f64 = 181.;
-const DEFAULT_INGAME_AUTHORS_POS_Y: f64 = -29.5;
+        /// The default position in X axis of the titles of an event edition in the Titlepack menu.
+        pub ingame_default_titles_pos_x: {
+            var_name: "RECORDS_API_INGAME_DEFAULT_TITLES_POS_X",
+            layers: [
+                parsed_from_str<f64>(),
+                or_default_val(|| 181.),
+            ],
+            description: "The default position in X axis of the titles of an event edition in \
+                the Titlepack menu (double)",
+            default_val_fmt: "181.0",
+        },
 
-const DEFAULT_EVENT_SCORES_INTERVAL_SECONDS: u64 = 6 * 3600;
-const DEFAULT_PLAYER_MAP_RANKING_INTERVAL_SECONDS: u64 = 3600 * 24 * 7;
+        /// The default position in Y axis of the titles of an event edition in the Titlepack menu.
+        pub ingame_default_titles_pos_y: {
+            var_name: "RECORDS_API_INGAME_DEFAULT_TITLES_POS_Y",
+            layers: [
+                parsed_from_str<f64>(),
+                or_default_val(|| -29.5),
+            ],
+            description: "The default position in Y axis of the titles of an event edition in \
+                the Titlepack menu (double)",
+            default_val_fmt: "-29.5",
+        },
 
-mkenv::make_env! {
-/// The environment used by this crate.
-pub LibEnv:
-    /// The time-to-live for the mappacks saved in the Redis database.
-    mappack_ttl: {
-        id: MappackTtl(i64),
-        kind: parse,
-        var: "RECORDS_API_MAPPACK_TTL",
-        desc: "The TTL (time-to-live) of the mappacks stored in Redis",
-        default: DEFAULT_MAPPACK_TTL,
-    },
+        /// The default value of the boolean related to either to put the subtitle of an event edition
+        /// on a new line or not, in the Titlepack menu.
+        pub ingame_default_subtitle_on_newline: {
+            var_name: "RECORDS_API_INGAME_DEFAULT_SUBTITLE_ON_NEWLINE",
+            layers: [
+                parsed_from_str<bool>(),
+                or_default_val(|| false)
+            ],
+            description: "The default value of the boolean related to either to put the subtitle of an \
+                event edition on a new line or not in the Titlepack menu (boolean)",
+            default_val_fmt: "false",
+        },
 
-    /// The default alignment of the titles of an event edition in the Titlepack menu.
-    ingame_default_titles_align: {
-        id: InGameDefaultTitlesAlign(InGameAlignment),
-        kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_TITLES_ALIGN",
-        desc: "The default alignment (either L for left or R for right) of the titles of \
-            an event edition in the Titlepack menu",
-        default: DEFAULT_INGAME_TITLES_ALIGN,
-    },
+        /// The default position in X axis of the leaderboards link of an event edition in the Titlepack menu.
+        pub ingame_default_lb_link_pos_x: {
+            var_name: "RECORDS_API_INGAME_DEFAULT_LB_LINK_POS_X",
+            layers: [
+                parsed_from_str<f64>(),
+                or_default_val(|| 181.),
+            ],
+            description: "The default position in X axis of the leaderboards link of an event edition in \
+                the Titlepack menu (double)",
+            default_val_fmt: "181.0",
+        },
 
-    /// The default alignment of an event edition title in the Titlepack menu.
-    ingame_default_lb_link_align: {
-        id: InGameDefaultLbLinkAlign(InGameAlignment),
-        kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_LB_LINK_ALIGN",
-        desc: "The default alignment (either L for left or R for right) of the leaderboards link of \
-            an event edition in the Titlepack menu",
-        default: DEFAULT_INGAME_LB_LINK_ALIGN,
-    },
+        /// The default position in Y axis of the leaderboards link of an event edition in the Titlepack menu.
+        pub ingame_default_lb_link_pos_y: {
+            var_name: "RECORDS_API_INGAME_DEFAULT_LB_LINK_POS_Y",
+            layers: [
+                parsed_from_str<f64>(),
+                or_default_val(|| -29.5),
+            ],
+            description: "The default position in Y axis of the leaderboards link of an event edition in \
+                the Titlepack menu (double)",
+            default_val_fmt: "-29.5",
+        },
 
-    /// The default alignment of an event edition title in the Titlepack menu.
-    ingame_default_authors_align: {
-        id: InGameDefaultAuthorsAlign(InGameAlignment),
-        kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_AUTHORS_ALIGN",
-        desc: "The default alignment (either L for left or R for right) of the author list of \
-            an event edition in the Titlepack menu",
-        default: DEFAULT_INGAME_AUTHORS_ALIGN,
-    },
+        /// The default position in X axis of the author list of an event edition in the Titlepack menu.
+        pub ingame_default_authors_pos_x: {
+            var_name: "RECORDS_API_INGAME_DEFAULT_AUTHORS_POS_X",
+            layers: [
+                parsed_from_str<f64>(),
+                or_default_val(|| 181.),
+            ],
+            description: "The default position in X axis of the author list of an event edition in \
+                the Titlepack menu (double)",
+            default_val_fmt: "181.0",
+        },
 
-    /// The default position in X axis of the titles of an event edition in the Titlepack menu.
-    ingame_default_titles_pos_x: {
-        id: InGameDefaultTitlesPosX(f64),
-        kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_TITLES_POS_X",
-        desc: "The default position in X axis of the titles of an event edition in \
-            the Titlepack menu (double)",
-        default: DEFAULT_INGAME_TITLES_POS_X,
-    },
+        /// The default position in Y axis of the author list of an event edition in the Titlepack menu.
+        pub ingame_default_authors_pos_y: {
+            var_name: "RECORDS_API_INGAME_DEFAULT_AUTHORS_POS_Y",
+            layers: [
+                parsed_from_str<f64>(),
+                or_default_val(|| -29.5),
+            ],
+            description: "The default position in Y axis of the author list of an event edition in \
+                the Titlepack menu (double)",
+            default_val_fmt: "-29.5",
+        },
 
-    /// The default position in Y axis of the titles of an event edition in the Titlepack menu.
-    ingame_default_titles_pos_y: {
-        id: InGameDefaultTitlesPosY(f64),
-        kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_TITLES_POS_Y",
-        desc: "The default position in Y axis of the titles of an event edition in \
-            the Titlepack menu (double)",
-        default: DEFAULT_INGAME_TITLES_POS_Y,
-    },
+        /// The interval of a mappack scores update
+        pub event_scores_interval: {
+            var_name: "EVENT_SCORES_INTERVAL_SECONDS",
+            layers: [
+                parsed<Duration>(|input| {
+                    input.parse().map(Duration::from_secs).map_err(From::from)
+                }),
+                or_default_val(|| Duration::from_secs(6 * 3600)),
+            ],
+            description: "The interval of the update of the event scores, in seconds",
+            default_val_fmt: "6h",
+        },
 
-    /// The default value of the boolean related to either to put the subtitle of an event edition
-    /// on a new line or not, in the Titlepack menu.
-    ingame_default_subtitle_on_newline: {
-        id: InGameDefaultSubtitleOnNewLine(bool),
-        kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_SUBTITLE_ON_NEWLINE",
-        desc: "The default value of the boolean related to either to put the subtitle of an \
-            event edition on a new line or not in the Titlepack menu (boolean)",
-        default: DEFAULT_INGAME_SUBTITLE_ON_NEWLINE,
-    },
-
-    /// The default position in X axis of the leaderboards link of an event edition in the Titlepack menu.
-    ingame_default_lb_link_pos_x: {
-        id: InGameDefaultLbLinkPosX(f64),
-        kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_LB_LINK_POS_X",
-        desc: "The default position in X axis of the leaderboards link of an event edition in \
-            the Titlepack menu (double)",
-        default: DEFAULT_INGAME_LB_LINK_POS_X,
-    },
-
-    /// The default position in Y axis of the leaderboards link of an event edition in the Titlepack menu.
-    ingame_default_lb_link_pos_y: {
-        id: InGameDefaultLbLinkPosY(f64),
-        kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_LB_LINK_POS_Y",
-        desc: "The default position in Y axis of the leaderboards link of an event edition in \
-            the Titlepack menu (double)",
-        default: DEFAULT_INGAME_LB_LINK_POS_Y,
-    },
-
-    /// The default position in X axis of the author list of an event edition in the Titlepack menu.
-    ingame_default_authors_pos_x: {
-        id: InGameDefaultAuthorsPosX(f64),
-        kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_AUTHORS_POS_X",
-        desc: "The default position in X axis of the author list of an event edition in \
-            the Titlepack menu (double)",
-        default: DEFAULT_INGAME_AUTHORS_POS_X,
-    },
-
-    /// The default position in Y axis of the author list of an event edition in the Titlepack menu.
-    ingame_default_authors_pos_y: {
-        id: InGameDefaultAuthorsPosY(f64),
-        kind: parse,
-        var: "RECORDS_API_INGAME_DEFAULT_AUTHORS_POS_Y",
-        desc: "The default position in Y axis of the author list of an event edition in \
-            the Titlepack menu (double)",
-        default: DEFAULT_INGAME_AUTHORS_POS_Y,
-    },
-
-    /// The interval of a mappack scores update
-    event_scores_interval: {
-        id: EventScoresInterval(Duration),
-        kind: parse(from_secs),
-        var: "EVENT_SCORES_INTERVAL_SECONDS",
-        desc: "The interval of the update of the event scores, in seconds",
-        default: DEFAULT_EVENT_SCORES_INTERVAL_SECONDS,
-    },
-
-    /// The interval of the player/map ranking update
-    player_map_ranking_scores_interval: {
-        id: PlayerMapRankingScoresInterval(Duration),
-        kind: parse(from_secs),
-        var: "PLAYER_MAP_RANKING_SCORES_INTERVAL",
-        desc: "The interval of the update of the player/map ranking scores, in seconds",
-        default: DEFAULT_PLAYER_MAP_RANKING_INTERVAL_SECONDS,
+        /// The interval of the player/map ranking update
+        pub player_map_ranking_scores_interval: {
+            var_name: "PLAYER_MAP_RANKING_SCORES_INTERVAL",
+            layers: [
+                parsed<Duration>(|input| {
+                    input.parse().map(Duration::from_secs).map_err(From::from)
+                }),
+                or_default_val(|| Duration::from_secs(3600 * 24 * 7)),
+            ],
+            description: "The interval of the update of the player/map ranking scores, in seconds",
+            default_val_fmt: "every week",
+        }
     }
 }
 
@@ -214,6 +228,5 @@ pub fn init_env(env: LibEnv) {
 /// **Caution**: To use this function, the [`init_env()`] function must have been called at the start
 /// of the program.
 pub fn env() -> &'static LibEnv {
-    // SAFETY: this function is always called when `init_env()` is called at the start.
-    unsafe { ENV.get_unchecked() }
+    ENV.get().unwrap()
 }

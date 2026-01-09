@@ -1,0 +1,21 @@
+[package]
+name = "test-env"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+dotenvy.workspace = true
+sea-orm.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+records-lib = { path = "../records_lib" }
+migration = { path = "../migration" }
+futures.workspace = true
+mkenv.workspace = true
+rand.workspace = true
+
+[features]
+default = []
+mysql = ["records-lib/mysql"]
+postgres = ["records-lib/postgres"]
