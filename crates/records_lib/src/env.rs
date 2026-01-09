@@ -110,7 +110,7 @@ mkenv::make_config! {
             ],
             description: "The default position in X axis of the titles of an event edition in \
                 the Titlepack menu (double)",
-            default_val_fmt: "-181.0",
+            default_val_fmt: "181.0",
         },
 
         /// The default position in Y axis of the titles of an event edition in the Titlepack menu.
