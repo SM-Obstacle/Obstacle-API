@@ -36,6 +36,8 @@ pub struct Model {
     pub event_record_id: Option<u32>,
     /// The version of the Obstacle mode in which the player made this record.
     pub modeversion: Option<ModeVersion>,
+    /// Whether the record is hidden from the public or not.
+    pub is_hidden: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

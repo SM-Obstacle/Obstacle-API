@@ -144,8 +144,9 @@ impl From<Model> for records::Model {
             flags: value.flags,
             try_count: value.try_count,
             event_record_id: value.event_record_id,
-            // TODO: add mode version in global_event_records view
+            // TODO(#116): add mode version in global_event_records view
             modeversion: None,
+            is_hidden: false,
         }
     }
 }
