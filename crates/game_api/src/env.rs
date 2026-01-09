@@ -3,7 +3,7 @@ use mkenv::{error::ConfigInitError, prelude::*};
 use once_cell::sync::OnceCell;
 use records_lib::{DbEnv, LibEnv};
 
-#[cfg(not(test))]
+#[cfg(not(debug_assertions))]
 mkenv::make_config! {
     pub struct DynamicApiEnv {
         pub sess_key: {
@@ -26,7 +26,7 @@ mkenv::make_config! {
     }
 }
 
-#[cfg(test)]
+#[cfg(debug_assertions)]
 mkenv::make_config! {
     pub struct DynamicApiEnv {
         pub sess_key: {

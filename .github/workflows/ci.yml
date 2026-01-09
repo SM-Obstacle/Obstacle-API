@@ -69,5 +69,5 @@ jobs:
       - name: Run clippy
         run: |
           cargo clippy --no-default-features -F mysql -- -D warnings
-          cargo clippy -- -F mysql -D warnings
+          cargo clippy -F mysql -- -D warnings
           cargo clippy --all-features -- -D warnings
