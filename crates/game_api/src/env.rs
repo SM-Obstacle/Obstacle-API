@@ -1,5 +1,4 @@
-use graphql_api::config::InitError;
-use mkenv::{error::ConfigInitError, prelude::*};
+use mkenv::{make_config, prelude::*};
 use once_cell::sync::OnceCell;
 use records_lib::{DbEnv, LibEnv};
 
@@ -135,6 +134,14 @@ mkenv::make_config! {
     }
 }
 
+make_config! {
+    struct All {
+        api_env: { ApiEnv },
+        lib_env: { LibEnv },
+        gql_env: { graphql_api::config::ApiConfig },
+    }
+}
+
 static ENV: OnceCell<ApiEnv> = OnceCell::new();
 
 pub fn env() -> &'static ApiEnv {
@@ -142,20 +149,12 @@ pub fn env() -> &'static ApiEnv {
 }
 
 pub fn init_env() -> anyhow::Result<()> {
-    fn map_err(err: ConfigInitError<'_>) -> anyhow::Error {
-        anyhow::anyhow!("{err}")
-    }
+    let env = All::define();
+    env.try_init().map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let env = ApiEnv::define();
-    let lib_env = LibEnv::define();
-    env.try_init().map_err(map_err)?;
-    lib_env.try_init().map_err(map_err)?;
-    records_lib::init_env(lib_env);
-    match graphql_api::init_config() {
-        Ok(_) | Err(InitError::ConfigAlreadySet) => (),
-        Err(InitError::Config(e)) => anyhow::bail!("{e}"),
-    }
-    let _ = ENV.set(env);
+    records_lib::init_env(env.lib_env);
+    let _ = graphql_api::set_config(env.gql_env);
+    let _ = ENV.set(env.api_env);
 
     Ok(())
 }

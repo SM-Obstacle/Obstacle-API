@@ -7,7 +7,7 @@ pub mod cursors;
 
 pub mod config;
 pub(crate) use config::config;
-pub use config::init_config;
+pub use config::{init_config, set_config};
 
 pub(crate) mod utils;
 

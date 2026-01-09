@@ -1,7 +1,5 @@
 use hmac::Hmac;
-use sha2::Sha224;
-#[cfg(debug_assertions)]
-use sha2::digest::KeyInit;
+use sha2::{Sha224, digest::KeyInit};
 use std::{error::Error, fmt, sync::OnceLock};
 
 use mkenv::{ConfigDescriptor, exec::ConfigInitializer};
@@ -14,7 +12,7 @@ fn parse_secret_key(input: &str) -> Result<SecretKeyType, Box<dyn Error>> {
 
 #[cfg(debug_assertions)]
 mkenv::make_config! {
-    pub(crate) struct SecretKey {
+    pub struct SecretKey {
         pub(crate) cursor_secret_key: {
             var_name: "GQL_API_CURSOR_SECRET_KEY",
             layers: [
@@ -28,7 +26,7 @@ mkenv::make_config! {
 
 #[cfg(not(debug_assertions))]
 mkenv::make_config! {
-    pub(crate) struct SecretKey {
+    pub struct SecretKey {
         pub(crate) cursor_secret_key: {
             var_name: "GQL_API_CURSOR_SECRET_KEY_FILE",
             layers: [
@@ -42,7 +40,7 @@ mkenv::make_config! {
 }
 
 mkenv::make_config! {
-    pub(crate) struct ApiConfig {
+    pub struct ApiConfig {
         pub(crate) cursor_max_limit: {
             var_name: "GQL_API_CURSOR_MAX_LIMIT",
             layers: [
@@ -87,6 +85,10 @@ impl Error for InitError {
             InitError::Config(error) => Some(&**error),
         }
     }
+}
+
+pub fn set_config(config: ApiConfig) -> Result<(), Box<ApiConfig>> {
+    CONFIG.set(config).map_err(Box::new)
 }
 
 pub fn init_config() -> Result<(), InitError> {
