@@ -99,7 +99,7 @@ where
         // Apply player name filter
         if let Some(name) = &filter.player_name {
             query = query.filter(
-                Func::cust("rm_mp_style")
+                Func::cust("unstyled")
                     .arg(Expr::col(("p", players::Column::Name)))
                     .like(format!("%{name}%")),
             );
@@ -115,7 +115,7 @@ where
         // Apply map name filter
         if let Some(name) = &filter.map_name {
             query = query.filter(
-                Func::cust("rm_mp_style")
+                Func::cust("unstyled")
                     .arg(Expr::col(("m", maps::Column::Name)))
                     .like(format!("%{name}%")),
             );
@@ -131,7 +131,7 @@ where
             // Apply player name filter
             if let Some(name) = &filter.player_name {
                 query = query.filter(
-                    Func::cust("rm_mp_style")
+                    Func::cust("unstyled")
                         .arg(Expr::col(("p2", players::Column::Name)))
                         .like(format!("%{name}%")),
                 );

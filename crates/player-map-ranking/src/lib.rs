@@ -92,7 +92,7 @@ pub async fn compute_scores<C: ConnectionTrait>(
 ) -> anyhow::Result<Scores> {
     let mut maps = maps::Entity::find()
         .expr_as(
-            Func::cust("rm_mp_style").arg(Expr::col((maps::Entity, maps::Column::Name))),
+            Func::cust("unstyled").arg(Expr::col((maps::Entity, maps::Column::Name))),
             "unstyled_name",
         )
         .into_model::<RawMap>()
@@ -105,7 +105,7 @@ pub async fn compute_scores<C: ConnectionTrait>(
 
     let mut players = players::Entity::find()
         .expr_as(
-            Func::cust("rm_mp_style").arg(Expr::col((players::Entity, players::Column::Name))),
+            Func::cust("unstyled").arg(Expr::col((players::Entity, players::Column::Name))),
             "unstyled_name",
         )
         .into_model::<RawPlayer>()

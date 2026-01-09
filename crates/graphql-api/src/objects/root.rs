@@ -597,7 +597,7 @@ where
     };
 
     let mut query = players::Entity::find().expr_as(
-        Func::cust("rm_mp_style").arg(Expr::col((players::Entity, players::Column::Name))),
+        Func::cust("unstyled").arg(Expr::col((players::Entity, players::Column::Name))),
         "unstyled_player_name",
     );
     let query = SelectStatement::new()
@@ -708,7 +708,7 @@ where
     };
 
     let mut query = maps::Entity::find().expr_as(
-        Func::cust("rm_mp_style").arg(Expr::col((maps::Entity, maps::Column::Name))),
+        Func::cust("unstyled").arg(Expr::col((maps::Entity, maps::Column::Name))),
         "unstyled_map_name",
     );
     let query = SelectStatement::new()
@@ -733,7 +733,7 @@ where
                         })
                         .apply_if(filter.player_name, |query, name| {
                             query.and_where(
-                                Func::cust("rm_mp_style")
+                                Func::cust("unstyled")
                                     .arg(Expr::col(("author", players::Column::Name)))
                                     .like(format!("%{name}%")),
                             );
