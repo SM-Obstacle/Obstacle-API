@@ -3,7 +3,9 @@ use async_graphql::{
     connection::{self, CursorType},
 };
 use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
-use entity::{event as event_entity, event_edition, global_records, maps, players, records};
+use entity::{
+    event as event_entity, event_edition, functions, global_records, maps, players, records,
+};
 use records_lib::{
     Database, RedisConnection, RedisPool, must,
     opt_event::OptEvent,
@@ -597,7 +599,7 @@ where
     };
 
     let mut query = players::Entity::find().expr_as(
-        Func::cust("rm_mp_style").arg(Expr::col((players::Entity, players::Column::Name))),
+        functions::unstyled(players::Column::Name),
         "unstyled_player_name",
     );
     let query = SelectStatement::new()
@@ -707,10 +709,8 @@ where
         },
     };
 
-    let mut query = maps::Entity::find().expr_as(
-        Func::cust("rm_mp_style").arg(Expr::col((maps::Entity, maps::Column::Name))),
-        "unstyled_map_name",
-    );
+    let mut query =
+        maps::Entity::find().expr_as(functions::unstyled(maps::Column::Name), "unstyled_map_name");
     let query = SelectStatement::new()
         .column(Asterisk)
         .from_subquery(QuerySelect::query(&mut query).take(), "map")
@@ -733,8 +733,7 @@ where
                         })
                         .apply_if(filter.player_name, |query, name| {
                             query.and_where(
-                                Func::cust("rm_mp_style")
-                                    .arg(Expr::col(("author", players::Column::Name)))
+                                functions::unstyled(Expr::col(("author", players::Column::Name)))
                                     .like(format!("%{name}%")),
                             );
                         });

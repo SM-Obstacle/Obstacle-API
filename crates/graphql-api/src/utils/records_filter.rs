@@ -1,9 +1,7 @@
-use entity::{global_event_records, global_records, maps, players, records};
+use entity::{functions, global_event_records, global_records, maps, players, records};
 use sea_orm::{
     ColumnTrait, EntityTrait, JoinType, QueryFilter as _, QuerySelect as _, RelationDef,
-    RelationTrait as _, Select,
-    prelude::Expr,
-    sea_query::{ExprTrait as _, Func},
+    RelationTrait as _, Select, prelude::Expr,
 };
 
 use crate::objects::records_filter::RecordsFilter;
@@ -99,8 +97,7 @@ where
         // Apply player name filter
         if let Some(name) = &filter.player_name {
             query = query.filter(
-                Func::cust("rm_mp_style")
-                    .arg(Expr::col(("p", players::Column::Name)))
+                functions::unstyled(Expr::col(("p", players::Column::Name)))
                     .like(format!("%{name}%")),
             );
         }
@@ -115,9 +112,7 @@ where
         // Apply map name filter
         if let Some(name) = &filter.map_name {
             query = query.filter(
-                Func::cust("rm_mp_style")
-                    .arg(Expr::col(("m", maps::Column::Name)))
-                    .like(format!("%{name}%")),
+                functions::unstyled(Expr::col(("m", maps::Column::Name))).like(format!("%{name}%")),
             );
         }
 
@@ -131,8 +126,7 @@ where
             // Apply player name filter
             if let Some(name) = &filter.player_name {
                 query = query.filter(
-                    Func::cust("rm_mp_style")
-                        .arg(Expr::col(("p2", players::Column::Name)))
+                    functions::unstyled(Expr::col(("p2", players::Column::Name)))
                         .like(format!("%{name}%")),
                 );
             }
