@@ -22,7 +22,7 @@ impl MigrationTrait for Migration {
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
             .get_connection()
-            .execute_unprepared("drop function unstyled")
+            .execute_unprepared("drop function rm_mp_style")
             .await?;
         manager
             .get_connection()
