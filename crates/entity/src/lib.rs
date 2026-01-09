@@ -1,6 +1,7 @@
 mod entities;
 pub use entities::*;
 
+pub mod functions;
 pub mod types;
 
 pub mod current_bans;

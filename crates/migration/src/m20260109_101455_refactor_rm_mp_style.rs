@@ -14,7 +14,7 @@ impl MigrationTrait for Migration {
             .await?;
         manager
             .get_connection()
-            .execute_unprepared(func_management::CREATE_FUNCTION_UNSTYLED)
+            .execute_unprepared(func_management::CREATE_NEW_FUNCTION_RM_MP_STYLE)
             .await?;
         Ok(())
     }
@@ -26,7 +26,7 @@ impl MigrationTrait for Migration {
             .await?;
         manager
             .get_connection()
-            .execute_unprepared(func_management::CREATE_FUNCTION_RM_MP_STYLE)
+            .execute_unprepared(func_management::CREATE_OLD_FUNCTION_RM_MP_STYLE)
             .await?;
         Ok(())
     }

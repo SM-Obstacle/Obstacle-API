@@ -1,12 +1,10 @@
 use std::{collections::HashMap, hash::Hash};
 
 use anyhow::Context as _;
-use entity::{global_records, maps, players};
+use entity::{functions, global_records, maps, players};
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, EntityTrait as _, QueryFilter as _, QueryOrder, QuerySelect,
     QueryTrait,
-    prelude::Expr,
-    sea_query::Func,
     sqlx::types::chrono::{DateTime, Utc},
 };
 
@@ -91,10 +89,7 @@ pub async fn compute_scores<C: ConnectionTrait>(
     from: Option<DateTime<Utc>>,
 ) -> anyhow::Result<Scores> {
     let mut maps = maps::Entity::find()
-        .expr_as(
-            Func::cust("unstyled").arg(Expr::col((maps::Entity, maps::Column::Name))),
-            "unstyled_name",
-        )
+        .expr_as(functions::unstyled(maps::Column::Name), "unstyled_name")
         .into_model::<RawMap>()
         .all(conn)
         .await
@@ -104,10 +99,7 @@ pub async fn compute_scores<C: ConnectionTrait>(
         .collect::<HashMap<_, _>>();
 
     let mut players = players::Entity::find()
-        .expr_as(
-            Func::cust("unstyled").arg(Expr::col((players::Entity, players::Column::Name))),
-            "unstyled_name",
-        )
+        .expr_as(functions::unstyled(players::Column::Name), "unstyled_name")
         .into_model::<RawPlayer>()
         .all(conn)
         .await
