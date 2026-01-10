@@ -9,7 +9,8 @@ use sea_orm::{ActiveValue::Set, EntityTrait};
 use crate::{
     config::InitError,
     cursors::{ConnectionParameters, F64Cursor},
-    objects::root::{PlayersConnectionInput, get_players_connection},
+    objects::root::get_players_connection,
+    utils::connection_input::ConnectionInputBuilder,
 };
 
 fn setup() {
@@ -109,7 +110,7 @@ async fn default_page() -> anyhow::Result<()> {
         let result = get_players_connection(
             &db.sql_conn,
             &mut redis_conn,
-            <PlayersConnectionInput>::default().with_source(source),
+            ConnectionInputBuilder::default().build(source),
         )
         .await?;
 
@@ -211,7 +212,7 @@ async fn test_first_x_after_y(
         let result = get_players_connection(
             &db.sql_conn,
             &mut redis_conn,
-            <PlayersConnectionInput>::new(ConnectionParameters {
+            ConnectionInputBuilder::new(ConnectionParameters {
                 first: params.first,
                 after: Some(
                     F64Cursor {
@@ -222,7 +223,7 @@ async fn test_first_x_after_y(
                 ),
                 ..Default::default()
             })
-            .with_source(source),
+            .build(source),
         )
         .await?;
 
@@ -321,7 +322,7 @@ async fn test_last_x_before_y(
         let result = get_players_connection(
             &db.sql_conn,
             &mut redis_conn,
-            <PlayersConnectionInput>::new(ConnectionParameters {
+            ConnectionInputBuilder::new(ConnectionParameters {
                 last: params.last,
                 before: Some(
                     F64Cursor {
@@ -332,7 +333,7 @@ async fn test_last_x_before_y(
                 ),
                 ..Default::default()
             })
-            .with_source(source),
+            .build(source),
         )
         .await?;
 
