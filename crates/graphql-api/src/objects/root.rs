@@ -44,6 +44,7 @@ use crate::{
         sortable_fields::{PlayerMapRankingSortableField, UnorderedRecordSortableField},
     },
     utils::{
+        connection_input::{ConnectionInput, ConnectionInputBuilder},
         page_input::{PaginationInput, apply_cursor_input},
         pagination_result::{PaginationResult, get_paginated},
         records_filter::apply_filter,
@@ -327,14 +328,15 @@ impl QueryRoot {
             first,
             last,
             |after, before, first, last| async move {
-                let input = <PlayersConnectionInput>::new(ConnectionParameters {
+                let input = ConnectionInputBuilder::new(ConnectionParameters {
                     after,
                     before,
                     first,
                     last,
                 })
                 .with_filter(filter)
-                .with_sort(sort);
+                .with_sort(sort)
+                .build(player_ranking());
 
                 get_players_connection(&db.sql_conn, &mut redis_conn, input).await
             },
@@ -363,14 +365,15 @@ impl QueryRoot {
             first,
             last,
             |after, before, first, last| async move {
-                let input = <MapsConnectionInput>::new(ConnectionParameters {
+                let input = ConnectionInputBuilder::new(ConnectionParameters {
                     after,
                     before,
                     first,
                     last,
                 })
                 .with_filter(filter)
-                .with_sort(sort);
+                .with_sort(sort)
+                .build(map_ranking());
 
                 get_maps_connection(&db.sql_conn, &mut redis_conn, input).await
             },
@@ -419,84 +422,6 @@ impl QueryRoot {
         )
         .await
         .map_err(error::map_gql_err)
-    }
-}
-
-enum EitherRedisKey<A, B> {
-    A(A),
-    B(B),
-}
-
-impl<A, B> ToRedisArgs for EitherRedisKey<A, B>
-where
-    A: ToRedisArgs,
-    B: ToRedisArgs,
-{
-    fn write_redis_args<W>(&self, out: &mut W)
-    where
-        W: ?Sized + deadpool_redis::redis::RedisWrite,
-    {
-        match self {
-            EitherRedisKey::A(a) => ToRedisArgs::write_redis_args(a, out),
-            EitherRedisKey::B(b) => ToRedisArgs::write_redis_args(b, out),
-        }
-    }
-}
-
-fn custom_source_or<S, F, D>(source: Option<S>, default: F) -> EitherRedisKey<D, S>
-where
-    F: FnOnce() -> D,
-{
-    source
-        .map(EitherRedisKey::B)
-        .unwrap_or_else(|| EitherRedisKey::A(default()))
-}
-
-pub(crate) struct ConnectionInput<C, F, O, S> {
-    connection_parameters: ConnectionParameters<C>,
-    filter: Option<F>,
-    sort: Option<O>,
-    source: Option<S>,
-}
-
-// derive(Default) adds Default: bound to the generics
-impl<C, F, O, S> Default for ConnectionInput<C, F, O, S> {
-    fn default() -> Self {
-        Self {
-            connection_parameters: Default::default(),
-            filter: Default::default(),
-            sort: Default::default(),
-            source: Default::default(),
-        }
-    }
-}
-
-impl<C, F, O, S> ConnectionInput<C, F, O, S> {
-    pub(crate) fn new(connection_parameters: ConnectionParameters<C>) -> Self {
-        Self {
-            connection_parameters,
-            ..Default::default()
-        }
-    }
-
-    pub(crate) fn with_filter(mut self, filter: Option<F>) -> Self {
-        self.filter = filter;
-        self
-    }
-
-    pub(crate) fn with_sort(mut self, sort: Option<O>) -> Self {
-        self.sort = sort;
-        self
-    }
-
-    #[allow(unused)] // used for testing
-    pub(crate) fn with_source<U>(self, source: U) -> ConnectionInput<C, F, O, U> {
-        ConnectionInput {
-            connection_parameters: self.connection_parameters,
-            filter: self.filter,
-            sort: self.sort,
-            source: Some(source),
-        }
     }
 }
 
@@ -656,10 +581,9 @@ where
     } = get_paginated(conn, query, &pagination_input).await?;
 
     connection.edges.reserve(players.len());
-    let source = custom_source_or(input.source, player_ranking);
 
     for player in players {
-        let rank: i32 = redis_conn.zrevrank(&source, player.player.id).await?;
+        let rank: i32 = redis_conn.zrevrank(&input.source, player.player.id).await?;
         connection.edges.push(connection::Edge::new(
             ID((cursor_encoder)(&player)),
             PlayerWithScore {
@@ -787,10 +711,9 @@ where
     } = get_paginated(conn, query, &pagination_input).await?;
 
     connection.edges.reserve(maps.len());
-    let source = custom_source_or(input.source, map_ranking);
 
     for map in maps {
-        let rank: i32 = redis_conn.zrevrank(&source, map.map.id).await?;
+        let rank: i32 = redis_conn.zrevrank(&input.source, map.map.id).await?;
         connection.edges.push(connection::Edge::new(
             ID((cursor_encoder)(&map)),
             MapWithScore {
