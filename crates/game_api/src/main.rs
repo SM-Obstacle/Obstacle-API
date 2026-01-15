@@ -11,11 +11,7 @@ use actix_session::{
     config::{CookieContentSecurity, PersistentSession},
     storage::CookieSessionStore,
 };
-use actix_web::{
-    App, HttpServer,
-    cookie::{Key, time::Duration as CookieDuration},
-    middleware,
-};
+use actix_web::{App, HttpServer, cookie::time::Duration as CookieDuration, middleware};
 use anyhow::Context;
 use game_api_lib::configure::{
     self,
@@ -111,13 +107,16 @@ async fn main() -> anyhow::Result<()> {
             ))
             .wrap(TracingLogger::<configure::RootSpanBuilder>::new())
             .wrap(
-                SessionMiddleware::builder(CookieSessionStore::default(), sess_key.clone())
-                    .cookie_secure(cfg!(not(debug_assertions)))
-                    .cookie_content_security(CookieContentSecurity::Private)
-                    .session_lifecycle(PersistentSession::default().session_ttl(
-                        CookieDuration::seconds(game_api_lib::env().auth_token_ttl.get() as i64),
-                    ))
-                    .build(),
+                SessionMiddleware::builder(
+                    CookieSessionStore::default(),
+                    game_api_lib::env().dynamic.sess_key.get(),
+                )
+                .cookie_secure(cfg!(not(debug_assertions)))
+                .cookie_content_security(CookieContentSecurity::Private)
+                .session_lifecycle(PersistentSession::default().session_ttl(
+                    CookieDuration::seconds(game_api_lib::env().auth_token_ttl.get() as i64),
+                ))
+                .build(),
             )
             .configure(|cfg| configure::configure(cfg, db.clone()))
     })

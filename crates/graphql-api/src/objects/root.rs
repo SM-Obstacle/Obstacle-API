@@ -1,13 +1,16 @@
+use std::borrow::Cow;
+
 use async_graphql::{
     ID,
     connection::{self, CursorType},
 };
 use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
 use entity::{
-    event as event_entity, event_edition, functions, global_records, maps, players, records,
+    event as event_entity, event_edition, event_edition_records, functions, global_records, maps,
+    players, records,
 };
 use records_lib::{
-    Database, RedisConnection, RedisPool, must,
+    Database, RedisConnection, RedisPool, internal, must,
     opt_event::OptEvent,
     ranks,
     redis_key::{MapRanking, PlayerRanking, map_ranking, player_ranking},
@@ -15,7 +18,8 @@ use records_lib::{
 };
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DbConn, EntityTrait, FromQueryResult, Identity, QueryFilter as _,
-    QueryOrder as _, QuerySelect, Select, SelectModel, StreamTrait, TransactionTrait,
+    QueryOrder as _, QuerySelect, RelationTrait as _, Select, SelectModel, StreamTrait,
+    TransactionTrait,
     prelude::Expr,
     sea_query::{Asterisk, ExprTrait as _, Func, IntoIden, IntoValueTuple, SelectStatement},
 };
@@ -255,6 +259,55 @@ impl QueryRoot {
             .await?;
 
         Ok(r)
+    }
+
+    async fn trending_event_editions(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        last_days: Option<u8>,
+        limit: Option<u64>,
+    ) -> GqlResult<Vec<EventEdition<'_>>> {
+        let conn = ctx.data_unchecked::<DbConn>();
+
+        let limit = limit.unwrap_or(3).min(5);
+        let last_days = last_days.unwrap_or(7).min(30);
+
+        let editions = event_edition::Entity::find()
+            .reverse_join(event_edition_records::Entity)
+            .join(
+                sea_orm::JoinType::InnerJoin,
+                event_edition_records::Relation::Records.def(),
+            )
+            .filter(
+                Expr::current_timestamp().lt(Func::cust("TIMESTAMPADD")
+                    .arg(Expr::custom_keyword("DAY"))
+                    .arg(last_days)
+                    .arg(Expr::col((records::Entity, records::Column::RecordDate)))),
+            )
+            .find_also_related(event_entity::Entity)
+            .expr_as(Expr::col(Asterisk).count(), "records_count")
+            .group_by(event_edition::Column::EventId)
+            .group_by(event_edition::Column::Id)
+            .order_by_desc(Expr::col("records_count"))
+            .limit(limit)
+            .all(conn)
+            .await?
+            .into_iter()
+            .map(|(edition, event)| {
+                GqlResult::Ok(EventEdition {
+                    event: Cow::Owned(
+                        event
+                            .ok_or_else(|| {
+                                internal!("event {} should be present", edition.event_id)
+                            })?
+                            .into(),
+                    ),
+                    inner: edition,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(editions)
     }
 
     async fn record(

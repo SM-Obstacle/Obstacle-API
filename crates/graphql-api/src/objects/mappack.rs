@@ -146,12 +146,15 @@ impl Mappack {
     async fn leaderboard<'a>(
         &'a self,
         ctx: &async_graphql::Context<'_>,
+        limit: Option<isize>,
     ) -> GqlResult<Vec<MappackPlayer<'a>>> {
         let db = ctx.data_unchecked::<Database>();
         let mut redis_conn = db.redis_pool.get().await?;
 
+        let limit = limit.map(|l| l.saturating_sub(1)).unwrap_or(-1);
+
         let leaderboard: Vec<u32> = redis_conn
-            .zrange(mappack_lb_key(AnyMappackId::Id(&self.mappack_id)), 0, -1)
+            .zrange(mappack_lb_key(AnyMappackId::Id(&self.mappack_id)), 0, limit)
             .await?;
 
         let mut out = Vec::with_capacity(leaderboard.len());
