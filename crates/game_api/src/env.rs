@@ -1,13 +1,23 @@
+use std::error::Error;
+
+use actix_web::cookie::Key;
 use mkenv::{make_config, prelude::*};
 use once_cell::sync::OnceCell;
 use records_lib::{DbEnv, LibEnv};
+
+fn parse_session_key(input: &str) -> Result<Key, Box<dyn Error>> {
+    Key::try_from(input.as_bytes()).map_err(From::from)
+}
 
 #[cfg(not(debug_assertions))]
 mkenv::make_config! {
     pub struct DynamicApiEnv {
         pub sess_key: {
             var_name: "RECORDS_API_SESSION_KEY_FILE",
-            layers: [file_read()],
+            layers: [
+                file_read(),
+                parsed<Key>(parse_session_key),
+            ],
             description: "The path to the file containing the session key used by the API",
         },
 
@@ -30,9 +40,8 @@ mkenv::make_config! {
     pub struct DynamicApiEnv {
         pub sess_key: {
             var_name: "RECORDS_API_SESSION_KEY",
-            layers: [or_default()],
+            layers: [parsed<Key>(parse_session_key)],
             description: "The session key used by the API",
-            default_val_fmt: "empty",
         },
 
         pub mp_client_id: {

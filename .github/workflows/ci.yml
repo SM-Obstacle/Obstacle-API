@@ -51,6 +51,7 @@ jobs:
           DATABASE_URL: mysql://api:${{ secrets.MARIADB_PW }}@localhost:3306/master_db
           REDIS_URL: redis://localhost:6379
           GQL_API_CURSOR_SECRET_KEY: ${{ secrets.GQL_API_CURSOR_SECRET_KEY }}
+          RECORDS_API_SESSION_KEY: ${{ secrets.RECORDS_API_SESSION_KEY }}
         run: RUST_BACKTRACE=1 cargo test -F mysql
 
   lint:
