@@ -581,7 +581,7 @@ where
         "unstyled_player_name",
     );
     let query = SelectStatement::new()
-        .column(Asterisk)
+        .expr(Expr::col(("player", Asterisk)))
         .from_subquery(QuerySelect::query(&mut query).take(), "player")
         .apply_if(input.filter, |query, filter| {
             query
@@ -623,9 +623,24 @@ where
 
     apply_cursor_input(&mut query, &pagination_input);
 
-    match input.sort.and_then(|s| s.order) {
-        Some(SortOrder::Descending) => query.desc(),
-        _ => query.asc(),
+    match input.sort {
+        Some(PlayerMapRankingSort {
+            field: PlayerMapRankingSortableField::Rank,
+            order: Some(SortOrder::Descending),
+        }) => query.asc(),
+        Some(PlayerMapRankingSort {
+            field: PlayerMapRankingSortableField::Rank,
+            ..
+        })
+        | None => query.desc(),
+        Some(PlayerMapRankingSort {
+            field: PlayerMapRankingSortableField::Name,
+            order: Some(SortOrder::Descending),
+        }) => query.desc(),
+        Some(PlayerMapRankingSort {
+            field: PlayerMapRankingSortableField::Name,
+            ..
+        }) => query.asc(),
     };
 
     let PaginationResult {
@@ -689,7 +704,7 @@ where
     let mut query =
         maps::Entity::find().expr_as(functions::unstyled(maps::Column::Name), "unstyled_map_name");
     let query = SelectStatement::new()
-        .column(Asterisk)
+        .expr(Expr::col(("map", Asterisk)))
         .from_subquery(QuerySelect::query(&mut query).take(), "map")
         .apply_if(input.filter, |query, filter| {
             query
@@ -753,9 +768,24 @@ where
 
     apply_cursor_input(&mut query, &pagination_input);
 
-    match input.sort.and_then(|s| s.order) {
-        Some(SortOrder::Descending) => query.desc(),
-        _ => query.asc(),
+    match input.sort {
+        Some(PlayerMapRankingSort {
+            field: PlayerMapRankingSortableField::Rank,
+            order: Some(SortOrder::Descending),
+        }) => query.asc(),
+        Some(PlayerMapRankingSort {
+            field: PlayerMapRankingSortableField::Rank,
+            ..
+        })
+        | None => query.desc(),
+        Some(PlayerMapRankingSort {
+            field: PlayerMapRankingSortableField::Name,
+            order: Some(SortOrder::Descending),
+        }) => query.desc(),
+        Some(PlayerMapRankingSort {
+            field: PlayerMapRankingSortableField::Name,
+            ..
+        }) => query.asc(),
     };
 
     let PaginationResult {
