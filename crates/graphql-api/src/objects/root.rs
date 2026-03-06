@@ -18,7 +18,7 @@ use records_lib::{
 };
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DbConn, EntityTrait, FromQueryResult, Identity, QueryFilter as _,
-    QueryOrder as _, QuerySelect, RelationTrait as _, Select, SelectModel, StreamTrait,
+    QueryOrder as _, QuerySelect, QueryTrait, RelationTrait as _, Select, SelectModel, StreamTrait,
     TransactionTrait,
     prelude::Expr,
     sea_query::{Asterisk, ExprTrait as _, Func, IntoIden, IntoValueTuple, SelectStatement},
@@ -270,7 +270,7 @@ impl QueryRoot {
         let conn = ctx.data_unchecked::<DbConn>();
 
         let limit = limit.unwrap_or(3).min(5);
-        let last_days = last_days.unwrap_or(7).min(30);
+        let last_days = last_days.map(|d| d.min(30));
 
         let editions = event_edition::Entity::find()
             .reverse_join(event_edition_records::Entity)
@@ -278,12 +278,14 @@ impl QueryRoot {
                 sea_orm::JoinType::InnerJoin,
                 event_edition_records::Relation::Records.def(),
             )
-            .filter(
-                Expr::current_timestamp().lt(Func::cust("TIMESTAMPADD")
-                    .arg(Expr::custom_keyword("DAY"))
-                    .arg(last_days)
-                    .arg(Expr::col((records::Entity, records::Column::RecordDate)))),
-            )
+            .apply_if(last_days, |query, last_days| {
+                query.filter(
+                    Expr::current_timestamp().lt(Func::cust("TIMESTAMPADD")
+                        .arg(Expr::custom_keyword("DAY"))
+                        .arg(last_days)
+                        .arg(Expr::col((records::Entity, records::Column::RecordDate)))),
+                )
+            })
             .find_also_related(event_entity::Entity)
             .expr_as(Expr::col(Asterisk).count(), "records_count")
             .group_by(event_edition::Column::EventId)
