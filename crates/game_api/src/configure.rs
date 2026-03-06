@@ -1,3 +1,5 @@
+pub mod slow_req_mw;
+
 use std::fmt;
 
 use actix_http::StatusCode;
