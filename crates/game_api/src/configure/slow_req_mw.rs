@@ -1,6 +1,6 @@
 use actix_http::RequestHead;
 use actix_web::{
-    Error,
+    Error, HttpMessage,
     dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready},
 };
 use dsc_webhook::{FormattedRequestHead, WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
@@ -180,13 +180,14 @@ where
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
+        let request_id = req.extensions().get().copied();
         TimeoutNotifierFuture {
             handler: self.handler.clone(),
             sleep_fut: time::sleep(self.timeout),
             info: TimeoutInfo {
                 request_head: req.head().clone(),
                 timeout: self.timeout,
-                request_id: req.app_data().copied(),
+                request_id,
             },
             is_handled: false,
             inner_fut: self.service.call(req),
@@ -241,13 +242,13 @@ mod tests {
 
     #[tokio::test]
     async fn slow_req_mw_catch() {
-        static TIMEOUT_CATCHED: OnceLock<()> = OnceLock::new();
+        static TIMEOUT_CAUGHT: OnceLock<()> = OnceLock::new();
 
         #[derive(Clone)]
         struct OnTimeout;
         impl TimeoutHandler for OnTimeout {
             fn on_timeout(&self, _: &super::TimeoutInfo) {
-                TIMEOUT_CATCHED
+                TIMEOUT_CAUGHT
                     .set(())
                     .unwrap_or_else(|_| panic!("on_timeout should be called only once"));
             }
@@ -268,18 +269,18 @@ mod tests {
         let req = test::TestRequest::default().to_request();
         let resp = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
-        assert!(TIMEOUT_CATCHED.get().is_some());
+        assert!(TIMEOUT_CAUGHT.get().is_some());
     }
 
     #[tokio::test]
     async fn slow_req_mw_pass() {
-        static TIMEOUT_CATCHED: OnceLock<()> = OnceLock::new();
+        static TIMEOUT_CAUGHT: OnceLock<()> = OnceLock::new();
 
         #[derive(Clone)]
         struct OnTimeout;
         impl TimeoutHandler for OnTimeout {
             fn on_timeout(&self, _: &super::TimeoutInfo) {
-                TIMEOUT_CATCHED
+                TIMEOUT_CAUGHT
                     .set(())
                     .unwrap_or_else(|_| panic!("on_timeout should be called only once"));
             }
@@ -300,6 +301,6 @@ mod tests {
         let req = test::TestRequest::default().to_request();
         let resp = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
-        assert!(TIMEOUT_CATCHED.get().is_none());
+        assert!(TIMEOUT_CAUGHT.get().is_none());
     }
 }

@@ -60,7 +60,7 @@ impl fmt::Display for FormattedRequestHead<'_> {
         )?;
 
         for (name, value) in self.head.headers.iter() {
-            let value = if name == "Authorization" {
+            let value = if ["Authorization", "Cookie", "Set-Cookie"].contains(&name.as_str()) {
                 b"***"
             } else {
                 value.as_bytes()

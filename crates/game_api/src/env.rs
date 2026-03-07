@@ -143,7 +143,7 @@ mkenv::make_config! {
                 }),
                 or_default_val(|| Duration::from_secs(10)),
             ],
-            description: "The timeout for a request to be considered as running for too long",
+            description: "The timeout, in milliseconds, for a request to be considered as running for too long",
             default_val_fmt: "10s",
         },
 
