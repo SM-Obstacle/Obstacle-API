@@ -95,7 +95,7 @@ async fn default_page() -> anyhow::Result<()> {
         id: Set((i + 1) as _),
         game_id: Set(format!("map_{i}_uid")),
         name: Set(format!("map_{i}_name")),
-        score: Set(i as _),
+        score: Set((map_amount - i) as _),
         player_id: Set(1),
         ..Default::default()
     });
@@ -110,7 +110,7 @@ async fn default_page() -> anyhow::Result<()> {
         fill_redis_lb(
             &mut redis_conn,
             &source,
-            (1..=map_amount).zip(0..map_amount),
+            (1..=map_amount).zip((0..map_amount).rev()),
         )
         .await?;
 
@@ -132,15 +132,15 @@ async fn default_page() -> anyhow::Result<()> {
             }),
             (0..default_limit).map(|i| Map {
                 cursor: F64Cursor {
-                    score: i as _,
+                    score: (map_amount - i) as _,
                     data: (i + 1),
                 }
                 .encode_cursor(),
                 id: (i + 1) as _,
                 uid: format!("map_{i}_uid"),
                 name: format!("map_{i}_name"),
-                rank: (map_amount - i) as _,
-                score: i as _,
+                rank: (i + 1) as _,
+                score: (map_amount - i) as _,
             }),
         );
 
@@ -204,7 +204,7 @@ async fn test_first_x_after_y(
         id: Set((i + 1) as _),
         game_id: Set(format!("map_{i}_uid")),
         name: Set(format!("map_{i}_name")),
-        score: Set(i as _),
+        score: Set((params.map_amount - i) as _),
         player_id: Set(1),
         ..Default::default()
     });
@@ -219,7 +219,7 @@ async fn test_first_x_after_y(
         fill_redis_lb(
             &mut redis_conn,
             &source,
-            (1..=params.map_amount).zip(0..params.map_amount),
+            (1..=params.map_amount).zip((0..params.map_amount).rev()),
         )
         .await?;
 
@@ -230,7 +230,7 @@ async fn test_first_x_after_y(
                 first: params.first,
                 after: Some(
                     F64Cursor {
-                        score: params.after_idx as _,
+                        score: (params.map_amount - params.after_idx) as _,
                         data: params.after_idx as u32 + 1,
                     }
                     .into(),
@@ -254,15 +254,15 @@ async fn test_first_x_after_y(
                 let i = params.after_idx + 1 + i;
                 Map {
                     cursor: F64Cursor {
-                        score: i as _,
+                        score: (params.map_amount - i) as _,
                         data: (i + 1),
                     }
                     .encode_cursor(),
                     id: (i + 1) as _,
                     uid: format!("map_{i}_uid"),
                     name: format!("map_{i}_name"),
-                    rank: (params.map_amount - i) as _,
-                    score: i as _,
+                    rank: (i + 1) as _,
+                    score: (params.map_amount - i) as _,
                 }
             }),
         );
@@ -322,7 +322,7 @@ async fn test_last_x_before_y(
         id: Set((i + 1) as _),
         game_id: Set(format!("map_{i}_uid")),
         name: Set(format!("map_{i}_name")),
-        score: Set(i as _),
+        score: Set((params.map_amount - i) as _),
         player_id: Set(1),
         ..Default::default()
     });
@@ -337,7 +337,7 @@ async fn test_last_x_before_y(
         fill_redis_lb(
             &mut redis_conn,
             &source,
-            (1..=params.map_amount).zip(0..params.map_amount),
+            (1..=params.map_amount).zip((0..params.map_amount).rev()),
         )
         .await?;
 
@@ -348,7 +348,7 @@ async fn test_last_x_before_y(
                 last: params.last,
                 before: Some(
                     F64Cursor {
-                        score: params.before_idx as _,
+                        score: (params.map_amount - params.before_idx) as _,
                         data: params.before_idx as u32 + 1,
                     }
                     .into(),
@@ -372,15 +372,15 @@ async fn test_last_x_before_y(
                 let i = i + params.before_idx - expected_len;
                 Map {
                     cursor: F64Cursor {
-                        score: i as _,
+                        score: (params.map_amount - i) as _,
                         data: (i + 1),
                     }
                     .encode_cursor(),
                     id: (i + 1) as _,
                     uid: format!("map_{i}_uid"),
                     name: format!("map_{i}_name"),
-                    rank: (params.map_amount - i) as _,
-                    score: i as _,
+                    rank: (i + 1) as _,
+                    score: (params.map_amount - i) as _,
                 }
             }),
         );

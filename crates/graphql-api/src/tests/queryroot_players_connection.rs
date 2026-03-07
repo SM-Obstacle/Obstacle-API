@@ -88,7 +88,7 @@ async fn default_page() -> anyhow::Result<()> {
         login: Set(format!("player_{i}_login")),
         name: Set(format!("player_{i}_name")),
         role: Set(0),
-        score: Set(i as _),
+        score: Set((player_amount - i) as _),
         ..Default::default()
     });
 
@@ -103,7 +103,7 @@ async fn default_page() -> anyhow::Result<()> {
         fill_redis_lb(
             &mut redis_conn,
             &source,
-            (1..=player_amount).zip(0..player_amount),
+            (1..=player_amount).zip((0..player_amount).rev()),
         )
         .await?;
 
@@ -125,15 +125,15 @@ async fn default_page() -> anyhow::Result<()> {
             }),
             (0..default_limit).map(|i| Player {
                 cursor: F64Cursor {
-                    score: i as _,
+                    score: (player_amount - i) as _,
                     data: (i + 1),
                 }
                 .encode_cursor(),
                 id: (i + 1) as _,
                 login: format!("player_{i}_login"),
                 name: format!("player_{i}_name"),
-                rank: (player_amount - i) as _,
-                score: i as _,
+                rank: (i + 1) as _,
+                score: (player_amount - i) as _,
             }),
         );
 
@@ -190,7 +190,7 @@ async fn test_first_x_after_y(
         login: Set(format!("player_{i}_login")),
         name: Set(format!("player_{i}_name")),
         role: Set(0),
-        score: Set(i as _),
+        score: Set((params.player_amount - i) as _),
         ..Default::default()
     });
 
@@ -205,7 +205,7 @@ async fn test_first_x_after_y(
         fill_redis_lb(
             &mut redis_conn,
             &source,
-            (1..=params.player_amount).zip(0..params.player_amount),
+            (1..=params.player_amount).zip((0..params.player_amount).rev()),
         )
         .await?;
 
@@ -216,7 +216,7 @@ async fn test_first_x_after_y(
                 first: params.first,
                 after: Some(
                     F64Cursor {
-                        score: params.after_idx as _,
+                        score: (params.player_amount - params.after_idx) as _,
                         data: params.after_idx as u32 + 1,
                     }
                     .into(),
@@ -240,15 +240,15 @@ async fn test_first_x_after_y(
                 let i = params.after_idx + 1 + i;
                 Player {
                     cursor: F64Cursor {
-                        score: i as _,
+                        score: (params.player_amount - i) as _,
                         data: (i + 1),
                     }
                     .encode_cursor(),
                     id: (i + 1) as _,
                     login: format!("player_{i}_login"),
                     name: format!("player_{i}_name"),
-                    rank: (params.player_amount - i) as _,
-                    score: i as _,
+                    rank: (i + 1) as _,
+                    score: (params.player_amount - i) as _,
                 }
             }),
         );
@@ -301,7 +301,7 @@ async fn test_last_x_before_y(
         login: Set(format!("player_{i}_login")),
         name: Set(format!("player_{i}_name")),
         role: Set(0),
-        score: Set(i as _),
+        score: Set((params.player_amount - i) as _),
         ..Default::default()
     });
 
@@ -315,7 +315,7 @@ async fn test_last_x_before_y(
         fill_redis_lb(
             &mut redis_conn,
             &source,
-            (1..=params.player_amount).zip(0..params.player_amount),
+            (1..=params.player_amount).zip((0..params.player_amount).rev()),
         )
         .await?;
 
@@ -326,7 +326,7 @@ async fn test_last_x_before_y(
                 last: params.last,
                 before: Some(
                     F64Cursor {
-                        score: params.before_idx as _,
+                        score: (params.player_amount - params.before_idx) as _,
                         data: params.before_idx as u32 + 1,
                     }
                     .into(),
@@ -350,15 +350,15 @@ async fn test_last_x_before_y(
                 let i = i + params.before_idx - expected_len;
                 Player {
                     cursor: F64Cursor {
-                        score: i as _,
+                        score: (params.player_amount - i) as _,
                         data: (i + 1),
                     }
                     .encode_cursor(),
                     id: (i + 1) as _,
                     login: format!("player_{i}_login"),
                     name: format!("player_{i}_name"),
-                    rank: (params.player_amount - i) as _,
-                    score: i as _,
+                    rank: (i + 1) as _,
+                    score: (params.player_amount - i) as _,
                 }
             }),
         );
