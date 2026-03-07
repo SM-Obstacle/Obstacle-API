@@ -1,6 +1,6 @@
 use core::fmt;
 
-use actix_web::dev::RequestHead;
+use actix_web::{dev::RequestHead, http::header};
 
 pub struct FormattedRequestHead<'a> {
     head: &'a RequestHead,
@@ -60,11 +60,12 @@ impl fmt::Display for FormattedRequestHead<'_> {
         )?;
 
         for (name, value) in self.head.headers.iter() {
-            let value = if ["Authorization", "Cookie", "Set-Cookie"].contains(&name.as_str()) {
-                b"***"
-            } else {
-                value.as_bytes()
-            };
+            let value =
+                if [header::AUTHORIZATION, header::COOKIE, header::SET_COOKIE].contains(name) {
+                    b"***"
+                } else {
+                    value.as_bytes()
+                };
             let value = FormattedHeaderValue::new(value);
 
             writeln!(f, "{name}: {value}")?;

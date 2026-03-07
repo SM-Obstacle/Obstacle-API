@@ -22,6 +22,10 @@ pub struct WebhookTimeoutHandler(pub reqwest::Client);
 
 impl TimeoutHandler for WebhookTimeoutHandler {
     fn on_timeout(&self, info: &TimeoutInfo) {
+        let Some(wh_url) = crate::env().wh_request_timeout.get() else {
+            return;
+        };
+
         let wh_msg = WebhookBody {
             content: "Request timed out".to_owned(),
             embeds: vec![WebhookBodyEmbed {
@@ -50,12 +54,7 @@ impl TimeoutHandler for WebhookTimeoutHandler {
         let client = self.0.clone();
 
         tokio::task::spawn(async move {
-            if let Err(e) = client
-                .post(crate::env().wh_request_timeout.get())
-                .json(&wh_msg)
-                .send()
-                .await
-            {
+            if let Err(e) = client.post(wh_url).json(&wh_msg).send().await {
                 tracing::error!("couldn't send timeout error to webhook: {e}. body:\n{wh_msg:#?}");
             }
         });
