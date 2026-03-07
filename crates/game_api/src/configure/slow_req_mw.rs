@@ -3,9 +3,13 @@ use actix_web::{
     dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready},
 };
 use futures::future::LocalBoxFuture;
-use std::future::{Ready, ready};
 use std::time::Duration;
+use std::{
+    fmt,
+    future::{Ready, ready},
+};
 use tokio::time::sleep;
+use tracing_actix_web::RequestId;
 
 #[derive(Clone)]
 pub struct WebhookTimeoutHandler;
@@ -22,7 +26,13 @@ pub struct TracingTimeoutHandler;
 impl TimeoutHandler for TracingTimeoutHandler {
     fn on_timeout(&self, info: &TimeoutInfo) {
         tracing::warn!(
-            "Request to {} took more than {}ms",
+            "Request [{}] to {} took more than {}ms",
+            fmt::from_fn(|f| {
+                match info.request_id {
+                    Some(ref req_id) => fmt::Display::fmt(req_id, f),
+                    None => f.write_str("none"),
+                }
+            }),
             info.endpoint_path,
             info.timeout.as_micros()
         );
@@ -49,6 +59,7 @@ where
 pub struct TimeoutInfo {
     pub endpoint_path: String,
     pub timeout: Duration,
+    pub request_id: Option<RequestId>,
 }
 
 pub trait TimeoutHandler {
@@ -124,6 +135,7 @@ where
         let timeout_info = TimeoutInfo {
             endpoint_path: path,
             timeout: self.timeout,
+            request_id: req.app_data().copied(),
         };
 
         let timeout = self.timeout;
