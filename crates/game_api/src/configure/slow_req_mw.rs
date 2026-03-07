@@ -247,7 +247,7 @@ mod tests {
 
     use crate::configure::slow_req_mw::TimeoutHandler;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn slow_req_mw_catch() {
         static TIMEOUT_CAUGHT: OnceLock<()> = OnceLock::new();
 
@@ -268,7 +268,7 @@ mod tests {
                     OnTimeout,
                 ))
                 .default_service(web::to(|| async move {
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    tokio::time::advance(Duration::from_secs(2)).await;
                     HttpResponse::Ok().finish()
                 })),
         )
@@ -279,7 +279,7 @@ mod tests {
         assert!(TIMEOUT_CAUGHT.get().is_some());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn slow_req_mw_pass() {
         static TIMEOUT_CAUGHT: OnceLock<()> = OnceLock::new();
 
@@ -300,7 +300,7 @@ mod tests {
                     OnTimeout,
                 ))
                 .default_service(web::to(|| async move {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    tokio::time::advance(Duration::from_secs(1)).await;
                     HttpResponse::Ok().finish()
                 })),
         )

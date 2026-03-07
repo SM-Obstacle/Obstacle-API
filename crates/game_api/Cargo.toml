@@ -46,6 +46,7 @@ serde_json = { workspace = true }
 [dev-dependencies]
 test-env = { path = "../test-env" }
 records-lib = { path = "../records_lib", features = ["tracing", "mock"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
 
 [features]
 default = ["request_filter"]

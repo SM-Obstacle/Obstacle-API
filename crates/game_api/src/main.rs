@@ -3,6 +3,8 @@
 //! The program also includes a [library](game_api_lib). Overall, it uses the [`records_lib`] crate
 //! as a main dependency.
 
+use std::time::Duration;
+
 use actix_cors::Cors;
 use actix_session::{
     SessionMiddleware,
@@ -81,6 +83,11 @@ async fn main() -> anyhow::Result<()> {
 
     let sess_key = Key::from(game_api_lib::env().dynamic.sess_key.get().as_bytes());
 
+    let request_timeout_wh_handler_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .supports_credentials()
@@ -98,7 +105,9 @@ async fn main() -> anyhow::Result<()> {
             .wrap(middleware::from_fn(configure::fit_request_id))
             .wrap(configure::slow_req_mw::RequestTimeoutNotifier::new(
                 game_api_lib::env().request_timeout.get(),
-                TracingTimeoutHandler.chain_with(WebhookTimeoutHandler(reqwest::Client::default())),
+                TracingTimeoutHandler.chain_with(WebhookTimeoutHandler(
+                    request_timeout_wh_handler_client.clone(),
+                )),
             ))
             .wrap(TracingLogger::<configure::RootSpanBuilder>::new())
             .wrap(

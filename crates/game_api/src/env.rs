@@ -148,7 +148,7 @@ mkenv::make_config! {
         },
 
         pub wh_request_timeout: {
-            var_name: "WEBHOOK_REQUEST_TIMEOUT",
+            var_name: "WEBHOOK_REQUEST_TIMEOUT_URL",
             layers: [
                 parsed<Option<String>>(|s| Ok(Some(s.to_owned()))),
                 or_default(),
