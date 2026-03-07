@@ -3,6 +3,8 @@
 //! The program also includes a [library](game_api_lib). Overall, it uses the [`records_lib`] crate
 //! as a main dependency.
 
+use std::time::Duration;
+
 use actix_cors::Cors;
 use actix_session::{
     SessionMiddleware,
@@ -15,7 +17,10 @@ use actix_web::{
     middleware,
 };
 use anyhow::Context;
-use game_api_lib::configure;
+use game_api_lib::configure::{
+    self,
+    slow_req_mw::{TimeoutHandler, TracingTimeoutHandler, WebhookTimeoutHandler},
+};
 use migration::MigratorTrait;
 use mkenv::prelude::*;
 use records_lib::Database;
@@ -78,6 +83,11 @@ async fn main() -> anyhow::Result<()> {
 
     let sess_key = Key::from(game_api_lib::env().dynamic.sess_key.get().as_bytes());
 
+    let request_timeout_wh_handler_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .supports_credentials()
@@ -93,6 +103,12 @@ async fn main() -> anyhow::Result<()> {
             .wrap(cors)
             .wrap(middleware::from_fn(configure::mask_internal_errors))
             .wrap(middleware::from_fn(configure::fit_request_id))
+            .wrap(configure::slow_req_mw::RequestTimeoutNotifier::new(
+                game_api_lib::env().request_timeout.get(),
+                TracingTimeoutHandler.chain_with(WebhookTimeoutHandler(
+                    request_timeout_wh_handler_client.clone(),
+                )),
+            ))
             .wrap(TracingLogger::<configure::RootSpanBuilder>::new())
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), sess_key.clone())

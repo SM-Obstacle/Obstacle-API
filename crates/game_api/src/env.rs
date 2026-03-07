@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use mkenv::{make_config, prelude::*};
 use once_cell::sync::OnceCell;
 use records_lib::{DbEnv, LibEnv};
@@ -115,7 +117,6 @@ mkenv::make_config! {
             default_val_fmt: "empty",
         },
 
-
         pub gql_endpoint: {
             var_name: "GQL_ENDPOINT",
             layers: [
@@ -129,6 +130,30 @@ mkenv::make_config! {
             var_name: "WEBHOOK_RANK_COMPUTE_ERROR",
             layers: [or_default()],
             description: "The URL to the Discord webhook used to send rank compute errors",
+            default_val_fmt: "empty",
+        },
+
+        pub request_timeout: {
+            var_name: "REQUEST_TIMEOUT_MS",
+            layers: [
+                parsed<Duration>(|input| {
+                    input.parse::<u64>()
+                        .map(Duration::from_millis)
+                        .map_err(From::from)
+                }),
+                or_default_val(|| Duration::from_secs(10)),
+            ],
+            description: "The timeout, in milliseconds, for a request to be considered as running for too long",
+            default_val_fmt: "10s",
+        },
+
+        pub wh_request_timeout: {
+            var_name: "WEBHOOK_REQUEST_TIMEOUT_URL",
+            layers: [
+                parsed<Option<String>>(|s| Ok(Some(s.to_owned()))),
+                or_default(),
+            ],
+            description: "The URL to the Discord webhook used to send request timeout warnings",
             default_val_fmt: "empty",
         },
     }

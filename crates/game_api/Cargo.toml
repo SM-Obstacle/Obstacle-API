@@ -34,7 +34,7 @@ once_cell = { workspace = true }
 records-lib = { path = "../records_lib", features = ["tracing"] }
 mkenv = { workspace = true }
 nom = { workspace = true }
-pin-project-lite = { version = "0.2.16", optional = true }
+pin-project-lite = { workspace = true }
 request_filter = { path = "../request_filter", optional = true }
 dsc_webhook = { path = "../dsc_webhook", features = ["actix-web"] }
 sea-orm = { workspace = true }
@@ -46,10 +46,11 @@ serde_json = { workspace = true }
 [dev-dependencies]
 test-env = { path = "../test-env" }
 records-lib = { path = "../records_lib", features = ["tracing", "mock"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
 
 [features]
 default = ["request_filter"]
-request_filter = ["dep:pin-project-lite", "dep:request_filter"]
+request_filter = ["dep:request_filter"]
 auth = []
 mysql = ["records-lib/mysql", "test-env/mysql"]
 postgres = ["records-lib/postgres", "test-env/postgres"]

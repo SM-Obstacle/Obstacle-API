@@ -1,4 +1,6 @@
-use std::fmt;
+pub mod slow_req_mw;
+
+use std::{fmt, time::Duration};
 
 use actix_http::StatusCode;
 use actix_web::{
@@ -233,7 +235,10 @@ impl tracing_actix_web::RootSpanBuilder for RootSpanBuilder {
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig, db: Database) {
-    let client = reqwest::Client::default();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
 
     cfg.app_data(web::Data::new(crate::AuthState::default()))
         .app_data(client.clone())
