@@ -2,13 +2,16 @@ use actix_web::{
     Error,
     dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready},
 };
-use futures::future::LocalBoxFuture;
-use std::time::Duration;
 use std::{
     fmt,
     future::{Ready, ready},
 };
-use tokio::time::sleep;
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
+use tokio::time;
 use tracing_actix_web::RequestId;
 
 #[derive(Clone)]
@@ -126,36 +129,59 @@ where
 {
     type Response = ServiceResponse<B>;
     type Error = Error;
-    type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
+    type Future = TimeoutNotifierFuture<S::Future, H>;
 
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        let path = req.path().to_owned();
-        let timeout_info = TimeoutInfo {
-            endpoint_path: path,
-            timeout: self.timeout,
-            request_id: req.app_data().copied(),
-        };
+        TimeoutNotifierFuture {
+            handler: self.handler.clone(),
+            sleep_fut: time::sleep(self.timeout),
+            info: TimeoutInfo {
+                endpoint_path: req.path().to_owned(),
+                timeout: self.timeout,
+                request_id: req.app_data().copied(),
+            },
+            is_handled: false,
+            inner_fut: self.service.call(req),
+        }
+    }
+}
 
-        let timeout = self.timeout;
-        let handler = self.handler.clone();
+pin_project_lite::pin_project! {
+    pub struct TimeoutNotifierFuture<F, H> {
+        #[pin]
+        inner_fut: F,
+        #[pin]
+        sleep_fut: time::Sleep,
+        info: TimeoutInfo,
+        handler: H,
+        is_handled: bool,
+    }
+}
 
-        let fut = self.service.call(req);
+impl<F, H, T> Future for TimeoutNotifierFuture<F, H>
+where
+    F: Future<Output = T>,
+    H: TimeoutHandler,
+{
+    type Output = T;
 
-        Box::pin(async move {
-            tokio::pin!(fut);
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
 
-            tokio::select! {
-                _ = sleep(timeout) => {
-                    handler.on_timeout(&timeout_info);
-                    fut.await
-                }
-                res = &mut fut => {
-                    res
-                }
-            }
-        })
+        if let Poll::Ready(res) = this.inner_fut.poll(cx) {
+            return Poll::Ready(res);
+        }
+
+        if !*this.is_handled
+            && let Poll::Ready(_) = this.sleep_fut.poll(cx)
+        {
+            this.handler.on_timeout(this.info);
+            *this.is_handled = true;
+        }
+
+        Poll::Pending
     }
 }
 
@@ -175,7 +201,9 @@ mod tests {
         struct OnTimeout;
         impl TimeoutHandler for OnTimeout {
             fn on_timeout(&self, _: &super::TimeoutInfo) {
-                let _ = TIMEOUT_CATCHED.set(());
+                TIMEOUT_CATCHED
+                    .set(())
+                    .unwrap_or_else(|_| panic!("on_timeout should be called only once"));
             }
         }
 
@@ -205,7 +233,9 @@ mod tests {
         struct OnTimeout;
         impl TimeoutHandler for OnTimeout {
             fn on_timeout(&self, _: &super::TimeoutInfo) {
-                let _ = TIMEOUT_CATCHED.set(());
+                TIMEOUT_CATCHED
+                    .set(())
+                    .unwrap_or_else(|_| panic!("on_timeout should be called only once"));
             }
         }
 
