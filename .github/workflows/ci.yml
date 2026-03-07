@@ -41,7 +41,7 @@ jobs:
           sudo mariadb -e "FLUSH PRIVILEGES";
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.92.0
+        uses: dtolnay/rust-toolchain@1.94.0
 
       - name: Configure cache
         uses: Swatinem/rust-cache@v2

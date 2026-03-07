@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
             .wrap(middleware::from_fn(configure::fit_request_id))
             .wrap(configure::slow_req_mw::RequestTimeoutNotifier::new(
                 game_api_lib::env().request_timeout.get(),
-                TracingTimeoutHandler.chain_with(WebhookTimeoutHandler),
+                TracingTimeoutHandler.chain_with(WebhookTimeoutHandler(reqwest::Client::default())),
             ))
             .wrap(TracingLogger::<configure::RootSpanBuilder>::new())
             .wrap(

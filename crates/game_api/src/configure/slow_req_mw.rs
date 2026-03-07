@@ -1,7 +1,10 @@
+use actix_http::RequestHead;
 use actix_web::{
     Error,
     dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready},
 };
+use dsc_webhook::{FormattedRequestHead, WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
+use mkenv::Layer as _;
 use std::{
     fmt,
     future::{Ready, ready},
@@ -15,11 +18,58 @@ use tokio::time;
 use tracing_actix_web::RequestId;
 
 #[derive(Clone)]
-pub struct WebhookTimeoutHandler;
+pub struct WebhookTimeoutHandler(pub reqwest::Client);
 
 impl TimeoutHandler for WebhookTimeoutHandler {
-    fn on_timeout(&self, _: &TimeoutInfo) {
-        // TODO: webhook handler
+    fn on_timeout(&self, info: &TimeoutInfo) {
+        let wh_msg = WebhookBody {
+            content: "Request timed out".to_owned(),
+            embeds: vec![WebhookBodyEmbed {
+                title: "Request".to_owned(),
+                description: None,
+                color: 5814783,
+                fields: Some(vec![
+                    WebhookBodyEmbedField {
+                        name: "Head".to_owned(),
+                        value: format!(
+                            "```\n{}\n```",
+                            FormattedRequestHead::new(&info.request_head)
+                        ),
+                        inline: None,
+                    },
+                    WebhookBodyEmbedField {
+                        name: "Request ID".to_owned(),
+                        value: format!("```{}```", OptReqIdFmt(info.request_id.as_ref())),
+                        inline: None,
+                    },
+                ]),
+                url: None,
+            }],
+        };
+
+        let client = self.0.clone();
+
+        tokio::task::spawn(async move {
+            if let Err(e) = client
+                .post(crate::env().wh_request_timeout.get())
+                .json(&wh_msg)
+                .send()
+                .await
+            {
+                tracing::error!("couldn't send timeout error to webhook: {e}. body:\n{wh_msg:#?}");
+            }
+        });
+    }
+}
+
+struct OptReqIdFmt<'a>(Option<&'a RequestId>);
+
+impl fmt::Display for OptReqIdFmt<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(req_id) => fmt::Display::fmt(req_id, f),
+            None => f.write_str("none"),
+        }
     }
 }
 
@@ -29,15 +79,11 @@ pub struct TracingTimeoutHandler;
 impl TimeoutHandler for TracingTimeoutHandler {
     fn on_timeout(&self, info: &TimeoutInfo) {
         tracing::warn!(
-            "Request [{}] to {} took more than {}ms",
-            fmt::from_fn(|f| {
-                match info.request_id {
-                    Some(ref req_id) => fmt::Display::fmt(req_id, f),
-                    None => f.write_str("none"),
-                }
-            }),
-            info.endpoint_path,
-            info.timeout.as_micros()
+            "Request [{req_id}] {method} {uri} took more than {timeout}ms",
+            req_id = OptReqIdFmt(info.request_id.as_ref()),
+            method = info.request_head.method,
+            uri = info.request_head.uri,
+            timeout = info.timeout.as_millis(),
         );
     }
 }
@@ -60,7 +106,7 @@ where
 }
 
 pub struct TimeoutInfo {
-    pub endpoint_path: String,
+    pub request_head: RequestHead,
     pub timeout: Duration,
     pub request_id: Option<RequestId>,
 }
@@ -138,7 +184,7 @@ where
             handler: self.handler.clone(),
             sleep_fut: time::sleep(self.timeout),
             info: TimeoutInfo {
-                endpoint_path: req.path().to_owned(),
+                request_head: req.head().clone(),
                 timeout: self.timeout,
                 request_id: req.app_data().copied(),
             },
