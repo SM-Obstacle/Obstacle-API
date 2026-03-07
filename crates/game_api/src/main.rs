@@ -77,8 +77,6 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Using max connections: {max_connections}");
 
-    let sess_key = Key::from(game_api_lib::env().dynamic.sess_key.get().as_bytes());
-
     let request_timeout_wh_handler_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
