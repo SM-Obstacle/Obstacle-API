@@ -54,7 +54,13 @@ impl TimeoutHandler for WebhookTimeoutHandler {
         let client = self.0.clone();
 
         tokio::task::spawn(async move {
-            if let Err(e) = client.post(wh_url).json(&wh_msg).send().await {
+            if let Err(e) = client
+                .post(wh_url)
+                .json(&wh_msg)
+                .send()
+                .await
+                .and_then(|e| e.error_for_status())
+            {
                 tracing::error!("couldn't send timeout error to webhook: {e}. body:\n{wh_msg:#?}");
             }
         });
@@ -216,15 +222,17 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
-        if let Poll::Ready(res) = this.inner_fut.poll(cx) {
-            return Poll::Ready(res);
-        }
-
+        // To ensure catching the timeout (in case the async runtime is laggy),
+        // we poll the timer first.
         if !*this.is_handled
             && let Poll::Ready(_) = this.sleep_fut.poll(cx)
         {
             this.handler.on_timeout(this.info);
             *this.is_handled = true;
+        }
+
+        if let Poll::Ready(res) = this.inner_fut.poll(cx) {
+            return Poll::Ready(res);
         }
 
         Poll::Pending
