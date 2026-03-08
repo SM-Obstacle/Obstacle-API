@@ -2,14 +2,15 @@ mod auth;
 
 use actix_web::{
     HttpResponse, Responder, Scope,
-    body::BoxBody,
     web::{self, Json},
 };
+use chrono::{DateTime, Utc};
 use deadpool_redis::redis::AsyncCommands as _;
 use entity::{banishments, current_bans, maps, players, records, role, types};
 use futures::TryStreamExt;
 use mkenv::prelude::*;
 use records_lib::{Database, RedisPool, must, player, redis_key::alone_map_key, sync};
+use records_notifier::RecordsNotifier;
 use reqwest::Client;
 use sea_orm::{
     ActiveValue::{Set, Unchanged},
@@ -165,7 +166,7 @@ pub async fn update_player<C: ConnectionTrait>(
 pub async fn get_ban_during<C: ConnectionTrait>(
     conn: &C,
     player_id: u32,
-    at: chrono::NaiveDateTime,
+    at: DateTime<Utc>,
 ) -> RecordsResult<Option<banishments::Model>> {
     banishments::Entity::find()
         .filter(
@@ -205,11 +206,20 @@ async fn finished_impl<C>(
     params: ExpandedInsertRecordParams<'_>,
     player_login: &str,
     map: &maps::Model,
+    records_notifier: &RecordsNotifier,
 ) -> RecordsResult<pf::FinishedOutput>
 where
     C: ConnectionTrait + TransactionTrait + StreamTrait,
 {
-    let res = pf::finished(conn, redis_pool, params, player_login, map).await?;
+    let res = pf::finished(
+        conn,
+        redis_pool,
+        params,
+        player_login,
+        map,
+        records_notifier,
+    )
+    .await?;
 
     // If the record isn't in an event context, save the record to the events that have the map
     // and allow records saving without an event context.
@@ -272,9 +282,19 @@ pub async fn finished_at_with_pool(
     mode_version: Option<types::ModeVersion>,
     login: String,
     body: pf::HasFinishedBody,
-    at: chrono::NaiveDateTime,
-) -> RecordsResult<impl Responder> {
-    let res = finished_at(&db.sql_conn, &db.redis_pool, mode_version, login, body, at).await?;
+    at: DateTime<Utc>,
+    records_notifier: &RecordsNotifier,
+) -> RecordsResult<HttpResponse> {
+    let res = finished_at(
+        &db.sql_conn,
+        &db.redis_pool,
+        mode_version,
+        login,
+        body,
+        at,
+        records_notifier,
+    )
+    .await?;
     Ok(res)
 }
 
@@ -284,8 +304,9 @@ pub async fn finished_at<C>(
     mode_version: Option<types::ModeVersion>,
     login: String,
     body: pf::HasFinishedBody,
-    at: chrono::NaiveDateTime,
-) -> RecordsResult<impl Responder<Body = BoxBody> + use<C>>
+    at: DateTime<Utc>,
+    records_notifier: &RecordsNotifier,
+) -> RecordsResult<HttpResponse>
 where
     C: TransactionTrait + ConnectionTrait + StreamTrait,
 {
@@ -298,7 +319,8 @@ where
         mode_version,
     };
 
-    let res: pf::FinishedOutput = finished_impl(conn, redis_pool, params, &login, &map).await?;
+    let res: pf::FinishedOutput =
+        finished_impl(conn, redis_pool, params, &login, &map, records_notifier).await?;
 
     json(res.res)
 }
@@ -310,13 +332,15 @@ async fn finished(
     MPAuthGuard { login }: MPAuthGuard,
     db: Res<Database>,
     body: pf::PlayerFinishedBody,
+    Res(records_notifier): Res<RecordsNotifier>,
 ) -> RecordsResult<impl Responder> {
     finished_at_with_pool(
         db.0,
         mode_version.map(|x| x.0),
         login,
         body.0,
-        chrono::Utc::now().naive_utc(),
+        chrono::Utc::now(),
+        &records_notifier,
     )
     .await
 }

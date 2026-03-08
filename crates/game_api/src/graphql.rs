@@ -1,13 +1,14 @@
 use actix_session::Session;
-use actix_web::{HttpRequest, web};
-use actix_web::{HttpResponse, Resource, Responder};
+use actix_web::{HttpRequest, Scope, guard, web};
+use actix_web::{HttpResponse, Responder};
 use async_graphql::ErrorExtensionValues;
 use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
-use async_graphql_actix_web::GraphQLRequest;
+use async_graphql_actix_web::{GraphQLRequest, GraphQLSubscription};
 use graphql_api::error::{ApiGqlError, ApiGqlErrorKind};
 use graphql_api::schema::{Schema, create_schema};
 use mkenv::prelude::*;
 use records_lib::Database;
+use records_notifier::LatestRecordsSubscription;
 use reqwest::Client;
 use tracing_actix_web::RequestId;
 
@@ -84,9 +85,27 @@ async fn index_playground() -> impl Responder {
         )))
 }
 
-pub fn graphql_route(db: Database, client: Client) -> Resource {
-    web::resource("/graphql")
-        .app_data(create_schema(db, client))
-        .route(web::get().to(index_playground))
-        .route(web::post().to(index_graphql))
+async fn index_subscriptions(
+    schema: Res<Schema>,
+    req: HttpRequest,
+    payload: web::Payload,
+) -> Result<impl Responder, actix_web::Error> {
+    GraphQLSubscription::new(Schema::clone(&*schema)).start(&req, payload)
+}
+
+pub fn graphql_route(
+    db: Database,
+    client: Client,
+    records_sub: LatestRecordsSubscription,
+) -> Scope {
+    web::scope("/graphql")
+        .app_data(create_schema(db, client, records_sub))
+        .route("", web::get().to(index_playground))
+        .route("", web::post().to(index_graphql))
+        .route(
+            "/subscriptions",
+            web::get()
+                .guard(guard::Header("upgrade", "websocket"))
+                .to(index_subscriptions),
+        )
 }

@@ -1,8 +1,8 @@
 use async_graphql::{
-    EmptyMutation, EmptySubscription, SchemaBuilder, dataloader::DataLoader,
-    extensions::ApolloTracing,
+    EmptyMutation, SchemaBuilder, dataloader::DataLoader, extensions::ApolloTracing,
 };
 use records_lib::Database;
+use records_notifier::{LatestRecordsSubscription, RecordsNotifier};
 
 use crate::{
     loaders::{
@@ -10,30 +10,30 @@ use crate::{
         player::PlayerLoader,
     },
     objects::root::QueryRoot,
+    subscriptions::root::SubscriptionRoot,
 };
 
-pub type Schema = async_graphql::Schema<
-    QueryRoot,
-    async_graphql::EmptyMutation,
-    async_graphql::EmptySubscription,
->;
+pub type Schema = async_graphql::Schema<QueryRoot, EmptyMutation, SubscriptionRoot>;
 
-fn create_schema_impl() -> SchemaBuilder<QueryRoot, EmptyMutation, EmptySubscription> {
-    async_graphql::Schema::build(
-        QueryRoot,
-        async_graphql::EmptyMutation,
-        async_graphql::EmptySubscription,
-    )
+fn create_schema_impl(
+    records_sub: LatestRecordsSubscription,
+) -> SchemaBuilder<QueryRoot, EmptyMutation, SubscriptionRoot> {
+    async_graphql::Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot::new(records_sub))
 }
 
 pub fn create_schema_standalone() -> Schema {
-    create_schema_impl().finish()
+    let dummy = RecordsNotifier::default();
+    create_schema_impl(dummy.get_subscription()).finish()
 }
 
-pub fn create_schema(db: Database, client: reqwest::Client) -> Schema {
+pub fn create_schema(
+    db: Database,
+    client: reqwest::Client,
+    records_sub: LatestRecordsSubscription,
+) -> Schema {
     let db_clone = db.clone();
 
-    create_schema_impl()
+    create_schema_impl(records_sub)
         .extension(ApolloTracing)
         .data(DataLoader::new(
             PlayerLoader(db.clone().sql_conn),

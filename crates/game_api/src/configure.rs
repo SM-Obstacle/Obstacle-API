@@ -13,6 +13,7 @@ use actix_web::{
 use dsc_webhook::{FormattedRequestHead, WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 use mkenv::prelude::*;
 use records_lib::{Database, pool::clone_dbconn};
+use records_notifier::RecordsNotifier;
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId};
 
 use crate::{ApiErrorKind, RecordsErrorKindResponse, RecordsResult, Res, TracedError};
@@ -240,12 +241,20 @@ pub fn configure(cfg: &mut web::ServiceConfig, db: Database) {
         .build()
         .unwrap();
 
+    let records_notifier = RecordsNotifier::default();
+    let records_subscription = records_notifier.get_subscription();
+
     cfg.app_data(web::Data::new(crate::AuthState::default()))
         .app_data(client.clone())
         .app_data(clone_dbconn(&db.sql_conn))
         .app_data(db.redis_pool.clone())
         .app_data(db.clone())
-        .service(crate::graphql_route(db.clone(), client))
+        .app_data(records_notifier)
+        .service(crate::graphql_route(
+            db.clone(),
+            client,
+            records_subscription,
+        ))
         .service(crate::api_route())
         .default_service(web::to(not_found));
 }
