@@ -42,7 +42,6 @@ migration = { path = "../migration" }
 entity = { path = "../entity" }
 graphql-api = { path = "../graphql-api" }
 serde_json = { workspace = true }
-records-notifier = { path = "../records-notifier" }
 
 [dev-dependencies]
 test-env = { path = "../test-env" }

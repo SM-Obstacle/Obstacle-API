@@ -20,7 +20,6 @@ sha2 = "0.10.9"
 tokio = { workspace = true, features = ["macros"] }
 itertools.workspace = true
 serde_json.workspace = true
-records-notifier = { path = "../records-notifier" }
 
 [dev-dependencies]
 test-env = { path = "../test-env" }

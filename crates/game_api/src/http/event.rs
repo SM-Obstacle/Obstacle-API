@@ -20,10 +20,11 @@ use records_lib::{
     event::{self, EventMap},
     opt_event::OptEvent,
     player,
+    records_notifier::RecordsNotifier,
     redis_key::alone_map_key,
     sync,
 };
-use records_notifier::RecordsNotifier;
+
 use sea_orm::{
     ActiveValue::Set,
     ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,

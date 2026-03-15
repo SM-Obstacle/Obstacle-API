@@ -1,7 +1,6 @@
 use actix_web::{Responder, Scope, web};
 use chrono::{DateTime, TimeZone, Utc};
-use records_lib::Database;
-use records_notifier::RecordsNotifier;
+use records_lib::{Database, records_notifier::RecordsNotifier};
 
 use crate::{
     RecordsResult, Res,

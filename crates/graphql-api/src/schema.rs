@@ -1,8 +1,10 @@
 use async_graphql::{
     EmptyMutation, SchemaBuilder, dataloader::DataLoader, extensions::ApolloTracing,
 };
-use records_lib::Database;
-use records_notifier::{LatestRecordsSubscription, RecordsNotifier};
+use records_lib::{
+    Database,
+    records_notifier::{LatestRecordsSubscription, RecordsNotifier},
+};
 
 use crate::{
     loaders::{

@@ -4,9 +4,13 @@ use chrono::{DateTime, Utc};
 use deadpool_redis::redis;
 use entity::{checkpoint_times, event_edition_records, maps, records, types};
 use records_lib::{
-    NullableInteger, RedisPool, opt_event::OptEvent, ranks, redis_key::map_key, sync,
+    NullableInteger, RedisPool,
+    opt_event::OptEvent,
+    ranks,
+    records_notifier::{NewRecordEvent, NewRecordMap, NewRecordPlayer, RecordsNotifier},
+    redis_key::map_key,
+    sync,
 };
-use records_notifier::{NewRecordEvent, NewRecordMap, NewRecordPlayer, RecordsNotifier};
 use sea_orm::{
     ActiveValue::Set, ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter as _, QueryOrder,
     QuerySelect, QueryTrait, TransactionTrait,
@@ -270,22 +274,20 @@ where
         let (count,): (i32,) = pipe.query_async(&mut redis_conn).await.with_api_err()?;
         let new_rank = count + 1;
 
-        records_notifier
-            .notify_new_record(NewRecordEvent {
-                record_id: result.record_id,
-                map: NewRecordMap {
-                    map_uid: map.game_id.clone(),
-                    name: map.name.clone(),
-                },
-                player: NewRecordPlayer {
-                    login: player.login,
-                    name: player.name,
-                },
-                rank: new_rank,
-                record_date: params.at,
-                time: new,
-            })
-            .await;
+        records_notifier.notify_new_record(NewRecordEvent {
+            record_id: result.record_id,
+            map: NewRecordMap {
+                map_uid: map.game_id.clone(),
+                name: map.name.clone(),
+            },
+            player: NewRecordPlayer {
+                login: player.login,
+                name: player.name,
+            },
+            rank: new_rank,
+            record_date: params.at,
+            time: new,
+        });
 
         new_rank
     } else {

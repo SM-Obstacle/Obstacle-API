@@ -126,15 +126,6 @@ mkenv::make_config! {
             default_val_fmt: "empty",
         },
 
-        pub gql_endpoint: {
-            var_name: "GQL_ENDPOINT",
-            layers: [
-                or_default_val(|| "/graphql".to_owned()),
-            ],
-            description: "The route to the GraphQL endpoint (e.g. /graphql)",
-            default_val_fmt: "/graphql",
-        },
-
         pub wh_rank_compute_err: {
             var_name: "WEBHOOK_RANK_COMPUTE_ERROR",
             layers: [or_default()],

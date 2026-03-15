@@ -12,8 +12,7 @@ use actix_web::{
 };
 use dsc_webhook::{FormattedRequestHead, WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 use mkenv::prelude::*;
-use records_lib::{Database, pool::clone_dbconn};
-use records_notifier::RecordsNotifier;
+use records_lib::{Database, pool::clone_dbconn, records_notifier::RecordsNotifier};
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId};
 
 use crate::{ApiErrorKind, RecordsErrorKindResponse, RecordsResult, Res, TracedError};
@@ -235,13 +234,12 @@ impl tracing_actix_web::RootSpanBuilder for RootSpanBuilder {
     }
 }
 
-pub fn configure(cfg: &mut web::ServiceConfig, db: Database) {
+pub fn configure(cfg: &mut web::ServiceConfig, db: Database, records_notifier: RecordsNotifier) {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .unwrap();
 
-    let records_notifier = RecordsNotifier::default();
     let records_subscription = records_notifier.get_subscription();
 
     cfg.app_data(web::Data::new(crate::AuthState::default()))

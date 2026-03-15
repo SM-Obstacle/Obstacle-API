@@ -9,8 +9,10 @@ use deadpool_redis::redis::AsyncCommands as _;
 use entity::{banishments, current_bans, maps, players, records, role, types};
 use futures::TryStreamExt;
 use mkenv::prelude::*;
-use records_lib::{Database, RedisPool, must, player, redis_key::alone_map_key, sync};
-use records_notifier::RecordsNotifier;
+use records_lib::{
+    Database, RedisPool, must, player, records_notifier::RecordsNotifier, redis_key::alone_map_key,
+    sync,
+};
 use reqwest::Client;
 use sea_orm::{
     ActiveValue::{Set, Unchanged},

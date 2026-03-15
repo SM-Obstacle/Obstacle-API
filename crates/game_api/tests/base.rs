@@ -9,7 +9,7 @@ use actix_web::{
     dev::{Service, ServiceResponse},
     middleware, test,
 };
-use records_lib::Database;
+use records_lib::{Database, records_notifier::RecordsNotifier};
 use test_env::IntoResult;
 use tracing_actix_web::TracingLogger;
 
@@ -41,7 +41,7 @@ pub async fn get_app(
         App::new()
             .wrap(middleware::from_fn(configure::fit_request_id))
             .wrap(TracingLogger::<configure::RootSpanBuilder>::new())
-            .configure(|cfg| configure::configure(cfg, db.clone())),
+            .configure(|cfg| configure::configure(cfg, db.clone(), RecordsNotifier::default())),
     )
     .await
 }

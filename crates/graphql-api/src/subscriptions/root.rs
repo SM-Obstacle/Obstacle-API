@@ -1,8 +1,7 @@
 use async_graphql::Subscription;
 use entity::records;
 use futures::{Stream, StreamExt as _};
-use records_lib::internal;
-use records_notifier::LatestRecordsSubscription;
+use records_lib::{internal, records_notifier::LatestRecordsSubscription};
 use sea_orm::{DbConn, EntityTrait};
 
 use crate::{error::GqlResult, objects::ranked_record::RankedRecord};

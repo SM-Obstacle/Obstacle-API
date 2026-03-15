@@ -19,7 +19,7 @@ use game_api_lib::configure::{
 };
 use migration::MigratorTrait;
 use mkenv::prelude::*;
-use records_lib::Database;
+use records_lib::{Database, records_notifier::RecordsNotifier};
 use tracing::level_filters::LevelFilter;
 use tracing_actix_web::TracingLogger;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
@@ -82,6 +82,8 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .unwrap();
 
+    let records_notifier = RecordsNotifier::default();
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .supports_credentials()
@@ -116,7 +118,7 @@ async fn main() -> anyhow::Result<()> {
                 ))
                 .build(),
             )
-            .configure(|cfg| configure::configure(cfg, db.clone()))
+            .configure(|cfg| configure::configure(cfg, db.clone(), records_notifier.clone()))
     })
     .bind(("0.0.0.0", game_api_lib::env().port.get()))
     .context("Cannot bind address")?
