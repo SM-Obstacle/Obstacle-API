@@ -8,6 +8,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use futures::Stream;
+use pin_project_lite::pin_project;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
@@ -46,17 +47,19 @@ pub struct NewRecordEvent {
     pub record_date: DateTime<Utc>,
 }
 
-struct LatestRecordsStream {
-    inner: BroadcastStream<NewRecordEvent>,
+pin_project! {
+    struct LatestRecordsStream {
+        #[pin]
+        inner: BroadcastStream<NewRecordEvent>,
+    }
 }
 
 impl Stream for LatestRecordsStream {
     type Item = NewRecordEvent;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // SAFETY: we're retrieving a field of `Self`
-        let rx = unsafe { self.map_unchecked_mut(|f| &mut f.inner) };
-        match ready!(rx.poll_next(cx)) {
+        let this = self.project();
+        match ready!(this.inner.poll_next(cx)) {
             Some(Ok(record)) => Poll::Ready(Some(record)),
             Some(Err(BroadcastStreamRecvError::Lagged(_))) => {
                 // According to the broadcast receiver documentation, attempting to receive again will

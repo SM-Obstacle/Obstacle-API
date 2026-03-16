@@ -21,6 +21,7 @@ rand = { workspace = true }
 sea-orm = { workspace = true }
 entity = { path = "../entity" }
 tokio-stream = { version = "0.1.18", features = ["sync"] }
+pin-project-lite.workspace = true
 
 [features]
 default = []
