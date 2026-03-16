@@ -96,7 +96,7 @@ impl RecordsNotifier {
         }
     }
 
-    /// Notifies to every subscriptions that a new record happened.
+    /// Notifies all subscriptions that a new record happened.
     pub fn notify_new_record(&self, event: NewRecordEvent) {
         // We ignore if any receiver received the event or not.
         let _ = self.inner.tx.send(event);
