@@ -85,8 +85,6 @@ pub mod privilege {
     pub const ADMIN: Flags = 0b1111;
 }
 
-pub const WEB_TOKEN_SESS_KEY: &str = "__obs_web_token";
-
 /// The state string expires in 5 minutes.
 ///
 /// This is typically used to set a timeout for the POST /player/get_token request sent by
