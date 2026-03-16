@@ -8,10 +8,12 @@ use tracing::Level;
 
 use crate::{
     AccessTokenErr, ApiErrorKind, RecordsResult, RecordsResultExt as _, Res,
-    auth::{self, ApiAvailable, Message, TIMEOUT, WEB_TOKEN_SESS_KEY, WebToken},
+    auth::{self, ApiAvailable, Message, TIMEOUT, WebToken},
     internal,
     utils::json,
 };
+
+const WEB_TOKEN_SESS_KEY: &str = "__obs_web_token";
 
 #[derive(serde::Serialize)]
 struct MPAccessTokenBody<'a> {
