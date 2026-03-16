@@ -20,6 +20,8 @@ nom = { workspace = true }
 rand = { workspace = true }
 sea-orm = { workspace = true }
 entity = { path = "../entity" }
+tokio-stream = { version = "0.1.18", features = ["sync"] }
+pin-project-lite.workspace = true
 
 [features]
 default = []
@@ -31,3 +33,6 @@ mock = ["sea-orm/mock"]
 
 [build-dependencies]
 rustc_version = "0.4.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }

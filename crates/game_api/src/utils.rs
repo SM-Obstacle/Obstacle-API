@@ -3,9 +3,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use actix_web::{
-    FromRequest, HttpRequest, HttpResponse, Responder, body::MessageBody, dev::Payload,
-};
+use actix_web::{FromRequest, HttpRequest, HttpResponse, dev::Payload};
 use entity::{api_status, api_status_history, types};
 use records_lib::Database;
 use sea_orm::{
@@ -155,26 +153,5 @@ impl FromRequest for ExtractDbConn {
                 .into_inner()
                 .map(|db| Self(db.0.sql_conn)),
         )
-    }
-}
-
-pub enum Either<L, R> {
-    Left(L),
-    Right(R),
-}
-
-impl<L, R, B> Responder for Either<L, R>
-where
-    B: MessageBody + 'static,
-    L: Responder<Body = B>,
-    R: Responder<Body = B>,
-{
-    type Body = B;
-
-    fn respond_to(self, req: &actix_web::HttpRequest) -> actix_web::HttpResponse<Self::Body> {
-        match self {
-            Either::Left(l) => <L as Responder>::respond_to(l, req),
-            Either::Right(r) => <R as Responder>::respond_to(r, req),
-        }
     }
 }

@@ -1,9 +1,15 @@
 use crate::{ApiErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
+use chrono::{DateTime, Utc};
 use deadpool_redis::redis;
 use entity::{checkpoint_times, event_edition_records, maps, records, types};
 use records_lib::{
-    NullableInteger, RedisPool, opt_event::OptEvent, ranks, redis_key::map_key, sync,
+    NullableInteger, RedisPool,
+    opt_event::OptEvent,
+    ranks,
+    records_notifier::{NewRecordEvent, NewRecordMap, NewRecordPlayer, RecordsNotifier},
+    redis_key::map_key,
+    sync,
 };
 use sea_orm::{
     ActiveValue::Set, ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter as _, QueryOrder,
@@ -104,7 +110,7 @@ async fn send_query<C: ConnectionTrait>(
 #[derive(Clone, Copy)]
 pub struct ExpandedInsertRecordParams<'a> {
     pub body: &'a InsertRecordParams,
-    pub at: chrono::NaiveDateTime,
+    pub at: DateTime<Utc>,
     pub event: OptEvent<'a>,
     pub mode_version: Option<types::ModeVersion>,
 }
@@ -126,7 +132,7 @@ where
         SendQueryParam {
             body: params.body,
             event_record_id,
-            at: params.at,
+            at: params.at.naive_utc(),
             mode_version: params.mode_version,
             event: params.event,
         },
@@ -196,6 +202,7 @@ pub async fn finished<C>(
     params: ExpandedInsertRecordParams<'_>,
     player_login: &str,
     map: &maps::Model,
+    records_notifier: &RecordsNotifier,
 ) -> RecordsResult<FinishedOutput>
 where
     C: ConnectionTrait + TransactionTrait,
@@ -250,6 +257,10 @@ where
         // N.B.: we must update the time in Redis **after** the SQL transaction is committed, so
         // that any other operation acting on the same leaderboard doesn't update the ZSET with an
         // outdated version.
+        //
+        // If the Redis time were updated before the SQL transaction, a race condition could occur
+        // where other operations update the same leaderboard after the Redis update, but before
+        // the transaction finishes.
 
         let mut pipe = redis::pipe();
         pipe.atomic();
@@ -261,7 +272,24 @@ where
 
         let mut redis_conn = redis_pool.get().await.with_api_err()?;
         let (count,): (i32,) = pipe.query_async(&mut redis_conn).await.with_api_err()?;
-        count + 1
+        let new_rank = count + 1;
+
+        records_notifier.notify_new_record(NewRecordEvent {
+            record_id: result.record_id,
+            map: NewRecordMap {
+                map_uid: map.game_id.clone(),
+                name: map.name.clone(),
+            },
+            player: NewRecordPlayer {
+                login: player.login,
+                name: player.name,
+            },
+            rank: new_rank,
+            record_date: params.at,
+            time: new,
+        });
+
+        new_rank
     } else {
         ranks::get_rank(&mut redis_conn, map.id, old, params.event)
             .await

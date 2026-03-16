@@ -23,9 +23,10 @@ pub mod opt_event;
 pub mod player;
 pub mod pool;
 pub mod ranks;
+pub mod records_notifier;
 pub mod redis_key;
-pub mod time;
 pub mod sync;
+pub mod time;
 
 /// The MySQL/MariaDB pool type.
 pub type MySqlPool = sqlx::MySqlPool;

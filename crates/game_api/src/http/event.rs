@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use actix_web::{
-    Responder, Scope,
+    HttpResponse, Responder, Scope,
     web::{self, Path},
 };
+use chrono::{DateTime, Utc};
 use deadpool_redis::redis::AsyncCommands as _;
 use entity::{
     event_edition, event_edition_maps, event_edition_records, global_event_records, global_records,
@@ -19,9 +20,11 @@ use records_lib::{
     event::{self, EventMap},
     opt_event::OptEvent,
     player,
+    records_notifier::RecordsNotifier,
     redis_key::alone_map_key,
     sync,
 };
+
 use sea_orm::{
     ActiveValue::Set,
     ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
@@ -805,14 +808,16 @@ async fn edition_finished(
     path: Path<(String, u32)>,
     body: pf::PlayerFinishedBody,
     mode_version: Option<ModeVersion>,
+    Res(records_notifier): Res<RecordsNotifier>,
 ) -> RecordsResult<impl Responder> {
     edition_finished_at(
         login,
         db,
         path,
         body.0,
-        chrono::Utc::now().naive_utc(),
+        chrono::Utc::now(),
         mode_version.map(|m| m.0),
+        &records_notifier,
     )
     .await
 }
@@ -833,12 +838,21 @@ async fn edition_finished_impl<C>(
         original_map_id,
         inner_params: params,
     }: EditionFinishedParams<'_>,
+    records_notifier: &RecordsNotifier,
 ) -> RecordsResult<pf::FinishedOutput>
 where
     C: ConnectionTrait + TransactionTrait,
 {
     // We insert the record for the global records
-    let res = pf::finished(conn, redis_pool, params, player_login, map).await?;
+    let res = pf::finished(
+        conn,
+        redis_pool,
+        params,
+        player_login,
+        map,
+        records_notifier,
+    )
+    .await?;
 
     if let Some(original_map_id) = original_map_id {
         // Get the previous time of the player on the original map to check if it's a PB
@@ -889,9 +903,10 @@ pub async fn edition_finished_at(
     db: Res<Database>,
     path: Path<(String, u32)>,
     body: pf::HasFinishedBody,
-    at: chrono::NaiveDateTime,
+    at: DateTime<Utc>,
     mode_version: Option<types::ModeVersion>,
-) -> RecordsResult<impl Responder> {
+    records_notifier: &RecordsNotifier,
+) -> RecordsResult<HttpResponse> {
     let (event_handle, edition_id) = path.into_inner();
 
     // We first check that the event and its edition exist
@@ -913,14 +928,25 @@ pub async fn edition_finished_at(
 
     // The edition is transparent, so we save the record for the map directly.
     if edition.is_transparent != 0 {
-        let res =
-            super::player::finished_at(&db.sql_conn, &db.redis_pool, mode_version, login, body, at)
-                .await?;
-        return Ok(utils::Either::Left(res));
+        let res = super::player::finished_at(
+            &db.sql_conn,
+            &db.redis_pool,
+            mode_version,
+            login,
+            body,
+            at,
+            records_notifier,
+        )
+        .await?;
+        return Ok(res);
     }
 
     if edition.has_expired()
-        && !(edition.start_date <= at && edition.expire_date().filter(|date| at > *date).is_none())
+        && !(edition.start_date <= at.naive_utc()
+            && edition
+                .expire_date()
+                .filter(|date| at.naive_utc() > *date)
+                .is_none())
     {
         return Err(ApiErrorKind::EventHasExpired(event.handle, edition.id));
     }
@@ -937,9 +963,9 @@ pub async fn edition_finished_at(
         },
     };
 
-    let res = edition_finished_impl(&db.sql_conn, &db.redis_pool, params).await?;
+    let res = edition_finished_impl(&db.sql_conn, &db.redis_pool, params, records_notifier).await?;
 
-    json(res.res).map(utils::Either::Right)
+    json(res.res)
 }
 
 pub async fn insert_event_record<C: ConnectionTrait>(
