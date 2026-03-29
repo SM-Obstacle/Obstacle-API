@@ -117,10 +117,12 @@ async fn do_update<C: ConnectionTrait + TransactionTrait>(
 }
 
 pub async fn update(db: Database, from: Option<DateTime<Utc>>) -> anyhow::Result<()> {
-    match do_update(&db.sql_conn, &db.redis_pool, from).await {
+    let res = do_update(&db.sql_conn, &db.redis_pool, from).await;
+
+    match &res {
         Ok(_) => tracing::info!("Player and map ranking update completed successfully"),
         Err(e) => tracing::error!("Player and map ranking update returned an error: {e}"),
     }
 
-    Ok(())
+    res
 }
