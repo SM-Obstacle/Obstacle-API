@@ -132,6 +132,10 @@ pub(crate) async fn get_records_connection_impl<C: ConnectionTrait + Transaction
         global_records::Column::RecordId,
     ));
 
+    if matches!(conn.get_database_backend(), sea_orm::DatabaseBackend::MySql) {
+        query.literal_limit();
+    }
+
     apply_cursor_input(&mut query, &pagination_input);
 
     // Record dates are ordered by desc by default

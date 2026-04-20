@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 
 use sea_orm::{
-    Condition, ConnectionTrait, DbErr, DynIden, FromQueryResult, Identity, IntoIdentity, Order,
-    PartialModelTrait, QuerySelect, SelectModel, SelectorTrait,
+    Condition, ConnectionTrait, DatabaseBackend, DbErr, DynIden, FromQueryResult, Identity,
+    IntoIdentity, Order, PartialModelTrait, QuerySelect, SelectModel, SelectorTrait,
     prelude::{Expr, SeaRc},
     sea_query::{ExprTrait as _, SelectStatement, SimpleExpr},
 };
@@ -27,6 +27,7 @@ pub struct CursorQueryBuilder<S> {
     after: Option<ExprTuple>,
     sort_asc: bool,
     is_result_reversed: bool,
+    use_literal_limit: bool,
     phantom: PhantomData<S>,
 }
 
@@ -46,8 +47,18 @@ impl<S> CursorQueryBuilder<S> {
             before: None,
             sort_asc: true,
             is_result_reversed: false,
+            use_literal_limit: false,
             phantom: PhantomData,
         }
+    }
+
+    /// Use an inlined LIMIT literal instead of a bound parameter.
+    ///
+    /// This can be used as a workaround for MariaDB optimizer regressions on some VIEW queries
+    /// when LIMIT is parameterized in prepared statements.
+    pub fn literal_limit(&mut self) -> &mut Self {
+        self.use_literal_limit = true;
+        self
     }
 
     /// Filter paginated result with corresponding column less than the input value
@@ -163,6 +174,10 @@ impl<S> CursorQueryBuilder<S> {
     }
 
     fn apply_limit(&mut self) -> &mut Self {
+        if self.use_literal_limit {
+            return self;
+        }
+
         if let Some(num_rows) = self.first {
             self.query.limit(num_rows);
         } else if let Some(num_rows) = self.last {
@@ -218,6 +233,7 @@ impl<S> CursorQueryBuilder<S> {
             before: self.before,
             sort_asc: self.sort_asc,
             is_result_reversed: self.is_result_reversed,
+            use_literal_limit: self.use_literal_limit,
             phantom: PhantomData,
         }
     }
@@ -244,7 +260,16 @@ where
         self.apply_order_by();
         self.apply_filters();
 
-        let stmt = db.get_database_backend().build(&self.query);
+        let backend = db.get_database_backend();
+        let mut stmt = backend.build(&self.query);
+
+        if self.use_literal_limit && matches!(backend, DatabaseBackend::MySql) {
+            if let Some(limit) = self.first.or(self.last) {
+                stmt.sql.push_str(" LIMIT ");
+                stmt.sql.push_str(&limit.to_string());
+            }
+        }
+
         let rows = db.query_all(stmt).await?;
         let mut buffer = Vec::with_capacity(rows.len());
         for row in rows.into_iter() {
