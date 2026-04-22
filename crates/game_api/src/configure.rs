@@ -219,10 +219,13 @@ impl tracing_actix_web::RootSpanBuilder for RootSpanBuilder {
             }
         };
 
+        let redis_pool_status = tracing::field::debug(db.redis_pool.status());
+
         tracing_actix_web::root_span!(
             request,
             pool_size = pool_size,
             pool_num_idle = pool_num_idle,
+            redis_pool_status = redis_pool_status,
         )
     }
 
