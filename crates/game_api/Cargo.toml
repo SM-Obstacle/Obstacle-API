@@ -1,6 +1,6 @@
 [package]
 name = "game-api"
-version = "1.4.0"
+version = "1.4.0-dev-920a7d6"
 edition = "2024"
 
 [lib]
