@@ -270,7 +270,6 @@ where
             .ignore()
             .zcount(&map_key, "-inf", new - 1);
 
-        let mut redis_conn = redis_pool.get().await.with_api_err()?;
         let (count,): (i32,) = pipe.query_async(&mut redis_conn).await.with_api_err()?;
         let new_rank = count + 1;
 
