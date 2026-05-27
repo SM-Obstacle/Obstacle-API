@@ -366,8 +366,6 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
 
     let mut scores = Vec::<PlayerScore>::with_capacity(mappack.len());
 
-    let mut redis_conn = redis_pool.get().await?;
-
     for (i, map) in mappack.iter().enumerate() {
         let mut query = Query::select();
         query

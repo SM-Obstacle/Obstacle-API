@@ -5,6 +5,9 @@ use sea_orm::DbConn;
 
 use crate::RedisPool;
 
+const REDIS_POOL_MAX_SIZE: usize = 16;
+const REDIS_POOL_WAIT_TIMEOUT_MS: u64 = 2_000;
+
 /// Represents the database of the API, meaning an SQL database, and a Redis database.
 pub struct Database {
     /// The SQL database connection pool. This can also be a testing database [`DbConn::MockDatabaseConnection`].
@@ -160,10 +163,36 @@ impl Clone for Database {
 
 /// Creates and returns the Redis pool with the provided URL.
 pub fn get_redis_pool(url: String) -> Result<RedisPool, deadpool_redis::CreatePoolError> {
-    let cfg = deadpool_redis::Config {
+    let cfg = redis_pool_config(url);
+    cfg.create_pool(Some(Runtime::Tokio1))
+}
+
+fn redis_pool_config(url: String) -> deadpool_redis::Config {
+    let mut pool = deadpool_redis::PoolConfig::new(REDIS_POOL_MAX_SIZE);
+    pool.timeouts = deadpool_redis::Timeouts::wait_millis(REDIS_POOL_WAIT_TIMEOUT_MS);
+
+    deadpool_redis::Config {
         url: Some(url),
         connection: None,
-        pool: None,
-    };
-    cfg.create_pool(Some(Runtime::Tokio1))
+        pool: Some(pool),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redis_pool_uses_fixed_size_and_wait_timeout() {
+        let cfg = redis_pool_config("redis://127.0.0.1:6379".to_string());
+        let pool = cfg.pool.expect("pool config should be set");
+
+        assert_eq!(pool.max_size, REDIS_POOL_MAX_SIZE);
+        assert_eq!(
+            pool.timeouts.wait,
+            Some(std::time::Duration::from_millis(REDIS_POOL_WAIT_TIMEOUT_MS))
+        );
+        assert!(pool.timeouts.create.is_none());
+        assert!(pool.timeouts.recycle.is_none());
+    }
 }
