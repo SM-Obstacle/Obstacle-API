@@ -474,21 +474,18 @@ async fn report_error(
     ];
 
     let (content, color) = if body.on_route == "/player/finished" {
-        fields.extend(
-            vec![
-                WebhookBodyEmbedField {
-                    name: "Run time".to_owned(),
-                    value: format!("`{}`", body.time),
-                    inline: None,
-                },
-                WebhookBodyEmbedField {
-                    name: "Respawn count".to_owned(),
-                    value: format!("`{}`", body.respawn_count),
-                    inline: None,
-                },
-            ]
-            .into_iter(),
-        );
+        fields.extend(vec![
+            WebhookBodyEmbedField {
+                name: "Run time".to_owned(),
+                value: format!("`{}`", body.time),
+                inline: None,
+            },
+            WebhookBodyEmbedField {
+                name: "Respawn count".to_owned(),
+                value: format!("`{}`", body.respawn_count),
+                inline: None,
+            },
+        ]);
 
         (
             format!("🚨 Player `{login}` finished a map but got an error."),

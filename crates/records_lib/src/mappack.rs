@@ -428,9 +428,8 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
         maps[i].records = Some(records);
     }
 
-    let mut map_number = 1;
-
     for (map_idx, map) in maps.iter_mut().enumerate() {
+        let map_number = map_idx + 1;
         let records = map.records.take().unwrap();
 
         let last_rank = records.iter().map(|p| p.rank).max().unwrap_or(0);
@@ -459,8 +458,6 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
                 map.last_rank = last_rank;
             }
         }
-
-        map_number += 1;
     }
 
     for player in &mut scores {

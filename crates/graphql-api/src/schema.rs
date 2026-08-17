@@ -9,7 +9,8 @@ use records_lib::{
 use crate::{
     loaders::{
         event::EventLoader, event_category::EventCategoryLoader, map::MapLoader,
-        player::PlayerLoader,
+        map_score::MapScoreLoader, player::PlayerLoader, player_role::PlayerRoleLoader,
+        player_score::PlayerScoreLoader,
     },
     objects::root::QueryRoot,
     subscriptions::root::SubscriptionRoot,
@@ -51,6 +52,18 @@ pub fn create_schema(
         ))
         .data(DataLoader::new(
             EventCategoryLoader(db.clone().sql_conn),
+            tokio::spawn,
+        ))
+        .data(DataLoader::new(
+            PlayerScoreLoader(db.clone().sql_conn),
+            tokio::spawn,
+        ))
+        .data(DataLoader::new(
+            MapScoreLoader(db.clone().sql_conn),
+            tokio::spawn,
+        ))
+        .data(DataLoader::new(
+            PlayerRoleLoader(db.clone().sql_conn),
             tokio::spawn,
         ))
         .data(db_clone.sql_conn)

@@ -13,7 +13,7 @@ use tokio::{task::JoinHandle, time};
 use tracing::info;
 
 mod campaign_scores;
-mod player_ranking;
+mod player_map_ranking;
 
 async fn handle<F, Fut>(db: Database, period: Duration, f: F) -> anyhow::Result<()>
 where
@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         player_ranking_scores_interval,
         move |db| {
-            player_ranking::update(
+            player_map_ranking::update(
                 db,
                 Some(chrono::Utc::now() - player_ranking_scores_interval),
             )

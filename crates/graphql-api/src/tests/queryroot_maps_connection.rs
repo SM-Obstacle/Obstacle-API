@@ -1,6 +1,7 @@
 use async_graphql::connection::CursorType;
+use chrono::TimeZone;
 use deadpool_redis::redis::{self, ToRedisArgs};
-use entity::{maps, players};
+use entity::{map_periodic_ranking, maps, players, ranking_period};
 use mkenv::Layer as _;
 use rand::Rng;
 use records_lib::RedisConnection;
@@ -95,16 +96,50 @@ async fn default_page() -> anyhow::Result<()> {
         id: Set((i + 1) as _),
         game_id: Set(format!("map_{i}_uid")),
         name: Set(format!("map_{i}_name")),
-        score: Set((map_amount - i) as _),
         player_id: Set(1),
         ..Default::default()
     });
+
+    let periods = [
+        ranking_period::ActiveModel {
+            period_id: Set(1),
+            period_date: Set(chrono::Utc
+                .with_ymd_and_hms(2025, 8, 17, 00, 00, 00)
+                .unwrap()
+                .naive_utc()),
+        },
+        ranking_period::ActiveModel {
+            period_id: Set(2),
+            period_date: Set(chrono::Utc
+                .with_ymd_and_hms(2026, 8, 17, 00, 00, 00)
+                .unwrap()
+                .naive_utc()),
+        },
+    ];
+
+    let map_scores = (0..map_amount)
+        .map(|i| map_periodic_ranking::ActiveModel {
+            period_id: Set(1),
+            map_id: Set((i + 1) as _),
+            score: Set(f64::MAX),
+        })
+        .chain((0..map_amount).map(|i| map_periodic_ranking::ActiveModel {
+            period_id: Set(2),
+            map_id: Set((i + 1) as _),
+            score: Set((map_amount - i) as _),
+        }));
 
     let source = gen_map_ranking_key();
 
     test_env::wrap(async |db| {
         players::Entity::insert(author).exec(&db.sql_conn).await?;
         maps::Entity::insert_many(maps).exec(&db.sql_conn).await?;
+        ranking_period::Entity::insert_many(periods)
+            .exec(&db.sql_conn)
+            .await?;
+        map_periodic_ranking::Entity::insert_many(map_scores)
+            .exec(&db.sql_conn)
+            .await?;
 
         let mut redis_conn = db.redis_pool.get().await?;
         fill_redis_lb(
@@ -128,7 +163,7 @@ async fn default_page() -> anyhow::Result<()> {
                 id: edge.node.map.inner.id,
                 uid: edge.node.map.inner.game_id,
                 name: edge.node.map.inner.name,
-                score: edge.node.map.inner.score,
+                score: edge.node.score,
             }),
             (0..default_limit).map(|i| Map {
                 cursor: F64Cursor {
@@ -204,16 +239,52 @@ async fn test_first_x_after_y(
         id: Set((i + 1) as _),
         game_id: Set(format!("map_{i}_uid")),
         name: Set(format!("map_{i}_name")),
-        score: Set((params.map_amount - i) as _),
         player_id: Set(1),
         ..Default::default()
     });
+
+    let periods = [
+        ranking_period::ActiveModel {
+            period_id: Set(1),
+            period_date: Set(chrono::Utc
+                .with_ymd_and_hms(2025, 8, 17, 00, 00, 00)
+                .unwrap()
+                .naive_utc()),
+        },
+        ranking_period::ActiveModel {
+            period_id: Set(2),
+            period_date: Set(chrono::Utc
+                .with_ymd_and_hms(2026, 8, 17, 00, 00, 00)
+                .unwrap()
+                .naive_utc()),
+        },
+    ];
+
+    let map_scores = (0..params.map_amount)
+        .map(|i| map_periodic_ranking::ActiveModel {
+            period_id: Set(1),
+            map_id: Set((i + 1) as _),
+            score: Set(f64::MAX),
+        })
+        .chain(
+            (0..params.map_amount).map(|i| map_periodic_ranking::ActiveModel {
+                period_id: Set(2),
+                map_id: Set((i + 1) as _),
+                score: Set((params.map_amount - i) as _),
+            }),
+        );
 
     let source = gen_map_ranking_key();
 
     test_env::wrap(async |db| {
         players::Entity::insert(author).exec(&db.sql_conn).await?;
         maps::Entity::insert_many(maps).exec(&db.sql_conn).await?;
+        ranking_period::Entity::insert_many(periods)
+            .exec(&db.sql_conn)
+            .await?;
+        map_periodic_ranking::Entity::insert_many(map_scores)
+            .exec(&db.sql_conn)
+            .await?;
 
         let mut redis_conn = db.redis_pool.get().await?;
         fill_redis_lb(
@@ -248,7 +319,7 @@ async fn test_first_x_after_y(
                 id: edge.node.map.inner.id,
                 uid: edge.node.map.inner.game_id,
                 name: edge.node.map.inner.name,
-                score: edge.node.map.inner.score,
+                score: edge.node.score,
             }),
             (0..expected_len).map(|i| {
                 let i = params.after_idx + 1 + i;
@@ -322,16 +393,52 @@ async fn test_last_x_before_y(
         id: Set((i + 1) as _),
         game_id: Set(format!("map_{i}_uid")),
         name: Set(format!("map_{i}_name")),
-        score: Set((params.map_amount - i) as _),
         player_id: Set(1),
         ..Default::default()
     });
+
+    let periods = [
+        ranking_period::ActiveModel {
+            period_id: Set(1),
+            period_date: Set(chrono::Utc
+                .with_ymd_and_hms(2025, 8, 17, 00, 00, 00)
+                .unwrap()
+                .naive_utc()),
+        },
+        ranking_period::ActiveModel {
+            period_id: Set(2),
+            period_date: Set(chrono::Utc
+                .with_ymd_and_hms(2026, 8, 17, 00, 00, 00)
+                .unwrap()
+                .naive_utc()),
+        },
+    ];
+
+    let map_scores = (0..params.map_amount)
+        .map(|i| map_periodic_ranking::ActiveModel {
+            period_id: Set(1),
+            map_id: Set((i + 1) as _),
+            score: Set(f64::MAX),
+        })
+        .chain(
+            (0..params.map_amount).map(|i| map_periodic_ranking::ActiveModel {
+                period_id: Set(2),
+                map_id: Set((i + 1) as _),
+                score: Set((params.map_amount - i) as _),
+            }),
+        );
 
     let source = gen_map_ranking_key();
 
     test_env::wrap(async |db| {
         players::Entity::insert(author).exec(&db.sql_conn).await?;
         maps::Entity::insert_many(maps).exec(&db.sql_conn).await?;
+        ranking_period::Entity::insert_many(periods)
+            .exec(&db.sql_conn)
+            .await?;
+        map_periodic_ranking::Entity::insert_many(map_scores)
+            .exec(&db.sql_conn)
+            .await?;
 
         let mut redis_conn = db.redis_pool.get().await?;
         fill_redis_lb(
@@ -366,7 +473,7 @@ async fn test_last_x_before_y(
                 id: edge.node.map.inner.id,
                 uid: edge.node.map.inner.game_id,
                 name: edge.node.map.inner.name,
-                score: edge.node.map.inner.score,
+                score: edge.node.score,
             }),
             (0..expected_len).map(|i| {
                 let i = i + params.before_idx - expected_len;

@@ -32,8 +32,6 @@ pub struct Model {
     pub gold_time: Option<i32>,
     /// The author time of the map.
     pub author_time: Option<i32>,
-    /// The score of the player, calculated periodically.
-    pub score: f64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -90,3 +88,15 @@ impl Related<super::players::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+impl Related<super::map_periodic_ranking::Entity> for Entity {
+    fn to() -> RelationDef {
+        super::map_periodic_ranking::Relation::Maps.def().rev()
+    }
+}
+
+impl Related<super::ranking_period::Entity> for Entity {
+    fn to() -> RelationDef {
+        super::map_periodic_ranking::Relation::RankingPeriod.def()
+    }
+}

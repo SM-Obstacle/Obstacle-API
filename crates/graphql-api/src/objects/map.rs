@@ -28,7 +28,7 @@ use crate::{
         query_trait::CursorPaginable,
     },
     error::{self, ApiGqlError, CursorDecodeError, CursorDecodeErrorKind, GqlResult},
-    loaders::{map::MapLoader, player::PlayerLoader},
+    loaders::{map::MapLoader, map_score::MapScoreLoader, player::PlayerLoader},
     objects::{
         event_edition::EventEdition, player::Player, player_rating::PlayerRating,
         ranked_record::RankedRecord, records_filter::RecordsFilter,
@@ -429,8 +429,14 @@ impl Map {
         &self.inner.name
     }
 
-    async fn score(&self) -> f64 {
-        self.inner.score
+    async fn score(&self, ctx: &async_graphql::Context<'_>) -> f64 {
+        let loader = ctx.data_unchecked::<DataLoader<MapScoreLoader>>();
+        loader
+            .load_one(self.inner.id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default()
     }
 
     async fn related_event_editions(

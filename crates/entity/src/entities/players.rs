@@ -20,8 +20,6 @@ pub struct Model {
     pub admins_note: Option<String>,
     /// The player role.
     pub role: u8,
-    /// The score of the player, calculated periodically.
-    pub score: f64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -103,3 +101,17 @@ impl Related<super::maps::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+impl Related<super::player_periodic_ranking::Entity> for Entity {
+    fn to() -> RelationDef {
+        super::player_periodic_ranking::Relation::Players
+            .def()
+            .rev()
+    }
+}
+
+impl Related<super::ranking_period::Entity> for Entity {
+    fn to() -> RelationDef {
+        super::player_periodic_ranking::Relation::RankingPeriod.def()
+    }
+}

@@ -10,6 +10,7 @@ mod m20251002_100827_add_rm_mp_style_func;
 mod m20251004_214656_add_maps_medal_times;
 mod m20260103_142202_players_maps_score;
 mod m20260109_101455_refactor_rm_mp_style;
+mod m20260817_085814_explicit_table_players_maps_score;
 
 use sea_orm_migration::prelude::*;
 
@@ -33,6 +34,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20251004_214656_add_maps_medal_times::Migration),
             Box::new(m20260103_142202_players_maps_score::Migration),
             Box::new(m20260109_101455_refactor_rm_mp_style::Migration),
+            Box::new(m20260817_085814_explicit_table_players_maps_score::Migration),
         ]
     }
 }

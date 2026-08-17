@@ -1,13 +1,16 @@
+use async_graphql::dataloader::DataLoader;
 use async_graphql::{Enum, ID, connection};
 use entity::{global_records, players, records, role};
 use records_lib::{Database, ranks};
-use records_lib::{RedisPool, error::RecordsError, internal, opt_event::OptEvent, sync};
+use records_lib::{RedisPool, error::RecordsError, opt_event::OptEvent, sync};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
+    ColumnTrait as _, ConnectionTrait, EntityTrait as _, FromQueryResult, QueryFilter as _,
     QueryOrder as _, QuerySelect as _, StreamTrait, TransactionTrait,
 };
 
 use crate::cursors::RecordDateCursor;
+use crate::loaders::player_role::PlayerRoleLoader;
+use crate::loaders::player_score::PlayerScoreLoader;
 use crate::objects::records_filter::RecordsFilter;
 use crate::objects::root::get_records_connection_impl;
 use crate::objects::sort::UnorderedRecordSort;
@@ -20,9 +23,10 @@ use crate::{
 
 use crate::error;
 
-#[derive(Copy, Clone, Eq, PartialEq, Enum)]
+#[derive(Copy, Clone, Default, Eq, PartialEq, Enum)]
 #[repr(u8)]
 enum PlayerRole {
+    #[default]
     Player = 0,
     Moderator = 1,
     Admin = 2,
@@ -71,20 +75,25 @@ impl Player {
         self.inner.zone_path.as_deref()
     }
 
-    async fn score(&self) -> f64 {
-        self.inner.score
+    async fn score(&self, ctx: &async_graphql::Context<'_>) -> f64 {
+        let loader = ctx.data_unchecked::<DataLoader<PlayerScoreLoader>>();
+        loader
+            .load_one(self.inner.id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default()
     }
 
     async fn role(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<PlayerRole> {
-        let conn = ctx.data_unchecked::<DbConn>();
-
-        let r = role::Entity::find_by_id(self.inner.role)
-            .one(conn)
+        let role_loader = ctx.data_unchecked::<DataLoader<PlayerRoleLoader>>();
+        let role = role_loader
+            .load_one(self.inner.role)
             .await?
-            .ok_or_else(|| internal!("Role with ID {} must exist in database", self.inner.role))?
-            .try_into()?;
-
-        Ok(r)
+            .map(TryFrom::try_from)
+            .transpose()?
+            .unwrap_or_default();
+        Ok(role)
     }
 
     async fn records(
