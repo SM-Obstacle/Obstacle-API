@@ -1,7 +1,7 @@
 use entity::checkpoint_times;
 use sea_orm::FromQueryResult;
 
-#[derive(FromQueryResult)]
+#[derive(Clone, FromQueryResult)]
 pub struct CheckpointTime {
     #[sea_orm(nested)]
     pub inner: checkpoint_times::Model,

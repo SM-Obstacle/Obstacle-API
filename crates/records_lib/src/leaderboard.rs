@@ -185,14 +185,19 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
 
     let mut redis_conn = redis_pool.get().await?;
 
-    for r in result {
-        rows.push(Row {
-            rank: ranks::get_rank(&mut redis_conn, map_id, r.time, event).await?,
-            login: r.login,
-            nickname: r.nickname,
-            time: r.time,
-        });
-    }
+    let ranks = ranks::get_ranks(
+        &mut redis_conn,
+        result.iter().map(|r| (map_id, r.time)),
+        event,
+    )
+    .await?;
+
+    rows.extend(result.into_iter().zip(ranks).map(|(r, rank)| Row {
+        rank,
+        login: r.login,
+        nickname: r.nickname,
+        time: r.time,
+    }));
 
     Ok(())
 }

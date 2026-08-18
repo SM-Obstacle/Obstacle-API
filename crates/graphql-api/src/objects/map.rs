@@ -5,8 +5,7 @@ use async_graphql::{
 };
 use deadpool_redis::redis::AsyncCommands as _;
 use entity::{
-    event_edition, event_edition_maps, global_event_records, global_records, maps, player_rating,
-    records,
+    event_edition, event_edition_maps, global_event_records, global_records, maps, records,
 };
 use records_lib::{
     Database, RedisPool, internal,
@@ -19,7 +18,7 @@ use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
     QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
-    sea_query::{Asterisk, ExprTrait as _, Func, IntoValueTuple, Query},
+    sea_query::{Asterisk, IntoValueTuple, Query},
 };
 
 use crate::{
@@ -28,10 +27,14 @@ use crate::{
         query_trait::CursorPaginable,
     },
     error::{self, ApiGqlError, CursorDecodeError, CursorDecodeErrorKind, GqlResult},
-    loaders::{map::MapLoader, map_score::MapScoreLoader, player::PlayerLoader},
+    loaders::{
+        map::MapLoader, map_average_cps_times::MapAverageCpsTimesLoader,
+        map_average_rating::MapAverageRatingLoader, map_score::MapScoreLoader,
+        player::PlayerLoader,
+    },
     objects::{
-        event_edition::EventEdition, player::Player, player_rating::PlayerRating,
-        ranked_record::RankedRecord, records_filter::RecordsFilter,
+        checkpoint_time::CheckpointTime, event_edition::EventEdition, player::Player,
+        player_rating::PlayerRating, ranked_record::RankedRecord, records_filter::RecordsFilter,
         related_edition::RelatedEdition, sort::MapRecordSort, sort_order::SortOrder,
         sort_state::SortState, sortable_fields::MapRecordSortableField,
     },
@@ -139,14 +142,20 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
         .map(|result| records::Model::from_query_result(&result, ""))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut ranked_records = Vec::with_capacity(records.len());
-
     let mut redis_conn = redis_pool.get().await?;
 
-    for record in records {
-        let rank = ranks::get_rank(&mut redis_conn, map_id, record.time, event).await?;
-        ranked_records.push(records::RankedRecord { rank, record }.into());
-    }
+    let ranks = ranks::get_ranks(
+        &mut redis_conn,
+        records.iter().map(|record| (map_id, record.time)),
+        event,
+    )
+    .await?;
+
+    let ranked_records = records
+        .into_iter()
+        .zip(ranks)
+        .map(|(record, rank)| records::RankedRecord { rank, record }.into())
+        .collect();
 
     Ok(ranked_records)
 }
@@ -310,20 +319,27 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
         iter: records,
     } = get_paginated(conn, query, &pagination_input).await?;
 
-    connection.edges.reserve(records.len());
-
     ranks::update_leaderboard(conn, redis_pool, map_id, event).await?;
+
+    let records = records.collect::<Vec<_>>();
 
     let mut redis_conn = redis_pool.get().await?;
 
-    for record in records {
-        let rank = ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?;
+    let ranks = ranks::get_ranks(
+        &mut redis_conn,
+        records.iter().map(|record| (record.map_id, record.time)),
+        event,
+    )
+    .await?;
 
-        connection.edges.push(connection::Edge::new(
-            ID((cursor_encoder)(&record)),
-            records::RankedRecord { rank, record }.into(),
-        ));
-    }
+    connection
+        .edges
+        .extend(records.into_iter().zip(ranks).map(|(record, rank)| {
+            connection::Edge::new(
+                ID((cursor_encoder)(&record)),
+                records::RankedRecord { rank, record }.into(),
+            )
+        }));
 
     Ok(connection)
 }
@@ -485,26 +501,30 @@ impl Map {
         Ok(out)
     }
 
+    async fn average_cps_times(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> GqlResult<Vec<CheckpointTime>> {
+        let times = ctx
+            .data_unchecked::<DataLoader<MapAverageCpsTimesLoader>>()
+            .load_one(self.inner.id)
+            .await?;
+
+        // A map without any checkpoint is legitimate.
+        Ok(times.unwrap_or_default())
+    }
+
     async fn average_rating(
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> GqlResult<Vec<PlayerRating>> {
-        let conn = ctx.data_unchecked::<DbConn>();
-        let all = player_rating::Entity::find()
-            .filter(player_rating::Column::MapId.eq(self.inner.id))
-            .group_by(player_rating::Column::Kind)
-            .order_by_asc(player_rating::Column::Kind)
-            .select_only()
-            .expr_as(1.cast_as("UNSIGNED"), "player_id")
-            .columns([player_rating::Column::MapId, player_rating::Column::Kind])
-            .expr_as(
-                Func::avg(Expr::col(player_rating::Column::Rating)),
-                "rating",
-            )
-            .into_model()
-            .all(conn)
+        let ratings = ctx
+            .data_unchecked::<DataLoader<MapAverageRatingLoader>>()
+            .load_one(self.inner.id)
             .await?;
-        Ok(all)
+
+        // A map nobody rated yet has no average.
+        Ok(ratings.unwrap_or_default())
     }
 
     async fn records(

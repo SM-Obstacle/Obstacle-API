@@ -1,14 +1,13 @@
 use async_graphql::{Context, dataloader::DataLoader};
-use entity::{checkpoint_times, records};
+use entity::records;
 use records_lib::internal;
-use sea_orm::{
-    ColumnTrait as _, DbConn, EntityTrait as _, QueryFilter as _, QueryOrder as _,
-    QuerySelect as _, prelude::Expr, sea_query::Func,
-};
 
 use crate::{
     error::GqlResult,
-    loaders::{map::MapLoader, player::PlayerLoader},
+    loaders::{
+        checkpoint_times::CheckpointTimesLoader, map::MapLoader, player::PlayerLoader,
+        try_count::TryCountLoader,
+    },
     objects::{checkpoint_time::CheckpointTime, map::Map, player::Player},
 };
 
@@ -67,48 +66,15 @@ impl RankedRecord {
         Ok(player)
     }
 
-    async fn average_cps_times(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> GqlResult<Vec<CheckpointTime>> {
-        let conn = ctx.data_unchecked::<DbConn>();
-
-        let times = checkpoint_times::Entity::find()
-            .filter(checkpoint_times::Column::MapId.eq(self.inner.record.map_id))
-            .group_by(checkpoint_times::Column::CpNum)
-            .order_by_asc(checkpoint_times::Column::CpNum)
-            .select_only()
-            .columns([
-                checkpoint_times::Column::CpNum,
-                checkpoint_times::Column::MapId,
-                checkpoint_times::Column::RecordId,
-            ])
-            .expr_as(
-                Func::cust("FLOOR").arg(Func::avg(Expr::col(checkpoint_times::Column::Time))),
-                "time",
-            )
-            .into_model()
-            .all(conn)
+    async fn cps_times(&self, ctx: &Context<'_>) -> GqlResult<Vec<CheckpointTime>> {
+        let times = ctx
+            .data_unchecked::<DataLoader<CheckpointTimesLoader>>()
+            .load_one((self.inner.record.record_id, self.inner.record.map_id))
             .await?;
 
-        Ok(times)
-    }
-
-    async fn cps_times(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Vec<CheckpointTime>> {
-        let conn = ctx.data_unchecked::<DbConn>();
-
-        let times = checkpoint_times::Entity::find()
-            .filter(
-                checkpoint_times::Column::RecordId
-                    .eq(self.inner.record.record_id)
-                    .and(checkpoint_times::Column::MapId.eq(self.inner.record.map_id)),
-            )
-            .order_by_asc(checkpoint_times::Column::CpNum)
-            .into_model()
-            .all(conn)
-            .await?;
-
-        Ok(times)
+        // A record without any checkpoint time is legitimate,
+        // usually because it's an old record
+        Ok(times.unwrap_or_default())
     }
 
     async fn time(&self) -> i32 {
@@ -119,18 +85,10 @@ impl RankedRecord {
         self.inner.record.respawn_count
     }
 
-    async fn try_count(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<i32> {
-        let conn = ctx.data_unchecked::<DbConn>();
-        let sum: Option<_> = records::Entity::find()
-            .filter(
-                records::Column::RecordPlayerId
-                    .eq(self.inner.record.record_player_id)
-                    .and(records::Column::MapId.eq(self.inner.record.map_id)),
-            )
-            .select_only()
-            .expr(Func::cast_as(records::Column::TryCount.sum(), "INT"))
-            .into_tuple()
-            .one(conn)
+    async fn try_count(&self, ctx: &Context<'_>) -> GqlResult<i32> {
+        let sum = ctx
+            .data_unchecked::<DataLoader<TryCountLoader>>()
+            .load_one((self.inner.record.record_player_id, self.inner.record.map_id))
             .await?
             .ok_or_else(|| {
                 internal!(
@@ -140,7 +98,7 @@ impl RankedRecord {
                 )
             })?;
 
-        Ok(sum.unwrap_or(1))
+        Ok(sum)
     }
 
     async fn record_date(&self) -> chrono::DateTime<chrono::Utc> {

@@ -8,9 +8,12 @@ use records_lib::{
 
 use crate::{
     loaders::{
-        event::EventLoader, event_category::EventCategoryLoader, map::MapLoader,
-        map_score::MapScoreLoader, player::PlayerLoader, player_role::PlayerRoleLoader,
-        player_score::PlayerScoreLoader,
+        checkpoint_times::CheckpointTimesLoader, event::EventLoader,
+        event_category::EventCategoryLoader, event_edition_map::EventEditionMapLoader,
+        map::MapLoader, map_average_cps_times::MapAverageCpsTimesLoader,
+        map_average_rating::MapAverageRatingLoader, map_score::MapScoreLoader,
+        player::PlayerLoader, player_role::PlayerRoleLoader, player_score::PlayerScoreLoader,
+        rating_kind::RatingKindLoader, try_count::TryCountLoader,
     },
     objects::root::QueryRoot,
     subscriptions::root::SubscriptionRoot,
@@ -64,6 +67,30 @@ pub fn create_schema(
         ))
         .data(DataLoader::new(
             PlayerRoleLoader(db.clone().sql_conn),
+            tokio::spawn,
+        ))
+        .data(DataLoader::new(
+            CheckpointTimesLoader(db.clone().sql_conn),
+            tokio::spawn,
+        ))
+        .data(DataLoader::new(
+            TryCountLoader(db.clone().sql_conn),
+            tokio::spawn,
+        ))
+        .data(DataLoader::new(
+            MapAverageCpsTimesLoader(db.clone().sql_conn),
+            tokio::spawn,
+        ))
+        .data(DataLoader::new(
+            MapAverageRatingLoader(db.clone().sql_conn),
+            tokio::spawn,
+        ))
+        .data(DataLoader::new(
+            RatingKindLoader(db.clone().sql_conn),
+            tokio::spawn,
+        ))
+        .data(DataLoader::new(
+            EventEditionMapLoader(db.clone().sql_conn),
             tokio::spawn,
         ))
         .data(db_clone.sql_conn)

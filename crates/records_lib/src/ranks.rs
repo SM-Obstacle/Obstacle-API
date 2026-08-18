@@ -142,3 +142,53 @@ pub async fn get_rank(
     let count: i32 = redis_conn.zcount(key, "-inf", time - 1).await?;
     Ok(count + 1)
 }
+
+/// Gets the ranks of many times at once, in the order they were provided.
+///
+/// This is the batched counterpart of [`get_rank`]: every lookup is sent in a single
+/// pipelined round trip, instead of one round trip per record. Prefer it whenever the
+/// ranks of a whole set of records are needed, like when filling a leaderboard or a page
+/// of records, as the sequential version makes the latency grow with the page size.
+///
+/// Each item is a `(map_id, time)` pair. They may refer to different maps, but they all
+/// belong to the same optional `event`.
+///
+/// ## Example
+///
+/// ```ignore
+/// let ranks = ranks::get_ranks(
+///     &mut redis_conn,
+///     records.iter().map(|record| (record.map_id, record.time)),
+///     Default::default(),
+/// )
+/// .await?;
+///
+/// for (record, rank) in records.into_iter().zip(ranks) {
+///     // ...
+/// }
+/// ```
+pub async fn get_ranks<I>(
+    redis_conn: &mut RedisConnection,
+    times: I,
+    event: OptEvent<'_>,
+) -> RecordsResult<Vec<i32>>
+where
+    I: IntoIterator<Item = (u32, i32)>,
+{
+    let mut pipe = redis::pipe();
+    let mut is_empty = true;
+
+    for (map_id, time) in times {
+        pipe.zcount(map_key(map_id, event), "-inf", time - 1);
+        is_empty = false;
+    }
+
+    // Querying an empty pipeline still costs a round trip, and Redis has nothing to answer.
+    if is_empty {
+        return Ok(Vec::new());
+    }
+
+    let counts: Vec<i32> = pipe.query_async(redis_conn).await?;
+
+    Ok(counts.into_iter().map(|count| count + 1).collect())
+}

@@ -15,9 +15,10 @@ pub enum RatingKind {
     Difficulty,
 }
 
-impl FromQueryResult for RatingKind {
-    fn from_query_result(res: &sea_orm::QueryResult, pre: &str) -> Result<Self, DbErr> {
-        let rating_kind = <rating_kind::Model as FromQueryResult>::from_query_result(res, pre)?;
+impl TryFrom<&rating_kind::Model> for RatingKind {
+    type Error = DbErr;
+
+    fn try_from(rating_kind: &rating_kind::Model) -> Result<Self, Self::Error> {
         match (rating_kind.id, rating_kind.kind.as_str()) {
             (0, "route") => Ok(RatingKind::Route),
             (1, "deco") => Ok(RatingKind::Deco),
@@ -27,6 +28,13 @@ impl FromQueryResult for RatingKind {
                 "Unknown rating_kind : ({id}, `{kind}`"
             ))),
         }
+    }
+}
+
+impl FromQueryResult for RatingKind {
+    fn from_query_result(res: &sea_orm::QueryResult, pre: &str) -> Result<Self, DbErr> {
+        let rating_kind = <rating_kind::Model as FromQueryResult>::from_query_result(res, pre)?;
+        Self::try_from(&rating_kind)
     }
 }
 

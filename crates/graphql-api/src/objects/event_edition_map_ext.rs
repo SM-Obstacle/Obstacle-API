@@ -1,11 +1,12 @@
+use async_graphql::dataloader::DataLoader;
 use deadpool_redis::redis::AsyncCommands as _;
 use records_lib::{
     RedisPool, event as event_utils, mappack::AnyMappackId, redis_key::mappack_map_last_rank,
 };
-use sea_orm::DbConn;
 
 use crate::{
     error::GqlResult,
+    loaders::event_edition_map::EventEditionMapLoader,
     objects::{event_edition_player::EventEditionPlayer, map::Map, medal_times::MedalTimes},
 };
 
@@ -38,15 +39,26 @@ impl EventEditionMapExt<'_> {
     }
 
     async fn medal_times(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<MedalTimes>> {
-        let conn = ctx.data_unchecked::<DbConn>();
-
-        let medal_times = event_utils::get_medal_times_of(
-            conn,
+        let key = (
             self.edition_player.edition.inner.event_id,
             self.edition_player.edition.inner.id,
             self.inner.inner.id,
-        )
-        .await?;
+        );
+
+        let Some(row) = ctx
+            .data_unchecked::<DataLoader<EventEditionMapLoader>>()
+            .load_one(key)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let medal_times = event_utils::MedalTimes::from_columns(
+            row.bronze_time,
+            row.silver_time,
+            row.gold_time,
+            row.author_time,
+        );
 
         Ok(medal_times.map(From::from))
     }

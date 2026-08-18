@@ -182,21 +182,26 @@ async fn get_player_records<C: ConnectionTrait + StreamTrait>(
         .all(conn)
         .await?;
 
-    let mut ranked_records = Vec::with_capacity(records.len());
-
     let mut redis_conn = redis_pool.get().await?;
 
-    for record in records {
-        let rank = ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?;
+    let ranks = ranks::get_ranks(
+        &mut redis_conn,
+        records.iter().map(|record| (record.map_id, record.time)),
+        event,
+    )
+    .await?;
 
-        ranked_records.push(
+    let ranked_records = records
+        .into_iter()
+        .zip(ranks)
+        .map(|(record, rank)| {
             records::RankedRecord {
                 rank,
                 record: record.into(),
             }
-            .into(),
-        );
-    }
+            .into()
+        })
+        .collect();
 
     Ok(ranked_records)
 }

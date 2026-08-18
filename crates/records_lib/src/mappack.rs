@@ -404,9 +404,16 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
             .map(|result| RecordRow::from_query_result(&result, ""))
             .collect::<Result<Vec<_>, _>>()?;
 
+        let ranks = ranks::get_ranks(
+            &mut redis_conn,
+            res.iter().map(|record| (map.id, record.record.time)),
+            event,
+        )
+        .await?;
+
         let mut records = Vec::with_capacity(res.len());
 
-        for record in res {
+        for (record, rank) in res.into_iter().zip(ranks) {
             if !scores.iter().any(|p| p.player_id == record.player_id2) {
                 scores.push(PlayerScore {
                     player_id: record.player_id2,
@@ -418,11 +425,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
                 });
             }
 
-            let record = RankedRecordRow {
-                rank: ranks::get_rank(&mut redis_conn, map.id, record.record.time, event).await?,
-                record,
-            };
-            records.push(record);
+            records.push(RankedRecordRow { rank, record });
         }
 
         maps[i].records = Some(records);
