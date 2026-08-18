@@ -1,4 +1,4 @@
-use entity::{functions, global_event_records, global_records, maps, players, records};
+use entity::{global_event_records, global_records, maps, players, records};
 use sea_orm::{
     ColumnTrait, EntityTrait, JoinType, QueryFilter as _, QuerySelect as _, RelationDef,
     RelationTrait as _, Select, prelude::Expr,
@@ -96,10 +96,8 @@ where
 
         // Apply player name filter
         if let Some(name) = &filter.player_name {
-            query = query.filter(
-                functions::unstyled(Expr::col(("p", players::Column::Name)))
-                    .like(format!("%{name}%")),
-            );
+            query = query
+                .filter(Expr::col(("p", players::Column::UnstyledName)).like(format!("%{name}%")));
         }
     }
 
@@ -111,9 +109,8 @@ where
 
         // Apply map name filter
         if let Some(name) = &filter.map_name {
-            query = query.filter(
-                functions::unstyled(Expr::col(("m", maps::Column::Name))).like(format!("%{name}%")),
-            );
+            query = query
+                .filter(Expr::col(("m", maps::Column::UnstyledName)).like(format!("%{name}%")));
         }
 
         if let Some(filter) = &filter.author {
@@ -126,8 +123,7 @@ where
             // Apply player name filter
             if let Some(name) = &filter.player_name {
                 query = query.filter(
-                    functions::unstyled(Expr::col(("p2", players::Column::Name)))
-                        .like(format!("%{name}%")),
+                    Expr::col(("p2", players::Column::UnstyledName)).like(format!("%{name}%")),
                 );
             }
         }

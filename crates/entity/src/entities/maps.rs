@@ -14,6 +14,12 @@ pub struct Model {
     pub player_id: u32,
     /// The name of the map.
     pub name: String,
+    /// The map name stripped of its ManiaPlanet style codes.
+    ///
+    /// Maintained by a trigger from [`Model::name`], so it never has to be set when inserting or
+    /// updating a map. Filter and sort on this rather than on `name`, which contains the raw
+    /// markup.
+    pub unstyled_name: String,
     /// The amount of checkpoints on the map.
     ///
     /// This is optional because old maps may not have saved this info yet. If missing, it is

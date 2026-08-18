@@ -12,6 +12,12 @@ pub struct Model {
     pub login: String,
     /// The player name.
     pub name: String,
+    /// The player name stripped of its ManiaPlanet style codes.
+    ///
+    /// Maintained by a trigger from [`Model::name`], so it never has to be set when inserting or
+    /// updating a player. Filter and sort on this rather than on `name`, which contains the raw
+    /// markup.
+    pub unstyled_name: String,
     /// When the player played ShootMania Obstacle for the first time.
     pub join_date: Option<DateTime>,
     /// The player zone path.

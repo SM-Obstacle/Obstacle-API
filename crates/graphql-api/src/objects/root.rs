@@ -6,7 +6,7 @@ use async_graphql::{
 };
 use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
 use entity::{
-    event as event_entity, event_edition, event_edition_records, functions, global_records,
+    event as event_entity, event_edition, event_edition_records, global_records,
     map_periodic_ranking, maps, player_periodic_ranking, players, ranking_period, records,
 };
 use records_lib::{
@@ -557,10 +557,9 @@ pub(crate) type PlayersConnectionInput<S = PlayerRanking> =
     ConnectionInput<PlayerMapRankingCursor, PlayersFilter, PlayerMapRankingSort, S>;
 
 #[derive(FromQueryResult)]
-struct PlayerWithUnstyledNameAndScore {
+struct PlayerWithScoreRow {
     #[sea_orm(nested)]
     player: players::Model,
-    unstyled_player_name: String,
     score: f64,
 }
 
@@ -575,14 +574,14 @@ where
 {
     let pagination_input = PaginationInput::try_from_input(input.connection_parameters)?;
     let cursor_encoder = match input.sort.map(|s| s.field) {
-        Some(PlayerMapRankingSortableField::Name) => |player: &PlayerWithUnstyledNameAndScore| {
+        Some(PlayerMapRankingSortableField::Name) => |player: &PlayerWithScoreRow| {
             TextCursor {
-                text: player.unstyled_player_name.clone(),
+                text: player.player.unstyled_name.clone(),
                 data: player.player.id,
             }
             .encode_cursor()
         },
-        _ => |player: &PlayerWithUnstyledNameAndScore| {
+        _ => |player: &PlayerWithScoreRow| {
             F64Cursor {
                 score: player.score,
                 data: player.player.id,
@@ -592,10 +591,6 @@ where
     };
 
     let mut query = players::Entity::find()
-        .expr_as(
-            functions::unstyled(players::Column::Name),
-            "unstyled_player_name",
-        )
         .column_as(player_periodic_ranking::Column::Score, "score")
         .inner_join(player_periodic_ranking::Entity);
     QuerySelect::query(&mut query)
@@ -630,7 +625,8 @@ where
                 })
                 .apply_if(filter.player_name, |query, name| {
                     query.and_where(
-                        Expr::col(("player", "unstyled_player_name")).like(format!("%{name}%")),
+                        Expr::col(("player", players::Column::UnstyledName))
+                            .like(format!("%{name}%")),
                     );
                 });
         })
@@ -646,7 +642,7 @@ where
                 query,
                 "player".into_iden(),
                 Identity::Binary(
-                    "unstyled_player_name".into_iden(),
+                    players::Column::UnstyledName.into_iden(),
                     players::Column::Id.into_iden(),
                 ),
             )
@@ -657,7 +653,7 @@ where
             Identity::Binary("score".into_iden(), players::Column::Id.into_iden()),
         ),
     }
-    .into_model::<PlayerWithUnstyledNameAndScore>();
+    .into_model::<PlayerWithScoreRow>();
 
     apply_cursor_input(&mut query, &pagination_input);
 
@@ -707,10 +703,9 @@ pub(crate) type MapsConnectionInput<S = MapRanking> =
     ConnectionInput<PlayerMapRankingCursor, MapsFilter, PlayerMapRankingSort, S>;
 
 #[derive(FromQueryResult)]
-struct MapWithUnstyledNameAndScore {
+struct MapWithScoreRow {
     #[sea_orm(nested)]
     map: maps::Model,
-    unstyled_map_name: String,
     score: f64,
 }
 
@@ -725,14 +720,14 @@ where
 {
     let pagination_input = PaginationInput::try_from_input(input.connection_parameters)?;
     let cursor_encoder = match input.sort.map(|s| s.field) {
-        Some(PlayerMapRankingSortableField::Name) => |map: &MapWithUnstyledNameAndScore| {
+        Some(PlayerMapRankingSortableField::Name) => |map: &MapWithScoreRow| {
             TextCursor {
-                text: map.unstyled_map_name.clone(),
+                text: map.map.unstyled_name.clone(),
                 data: map.map.id,
             }
             .encode_cursor()
         },
-        _ => |map: &MapWithUnstyledNameAndScore| {
+        _ => |map: &MapWithScoreRow| {
             F64Cursor {
                 score: map.score,
                 data: map.map.id,
@@ -742,7 +737,6 @@ where
     };
 
     let mut query = maps::Entity::find()
-        .expr_as(functions::unstyled(maps::Column::Name), "unstyled_map_name")
         .column_as(map_periodic_ranking::Column::Score, "score")
         .inner_join(map_periodic_ranking::Entity);
     QuerySelect::query(&mut query)
@@ -787,7 +781,7 @@ where
                         })
                         .apply_if(filter.player_name, |query, name| {
                             query.and_where(
-                                functions::unstyled(Expr::col(("author", players::Column::Name)))
+                                Expr::col(("author", players::Column::UnstyledName))
                                     .like(format!("%{name}%")),
                             );
                         });
@@ -799,7 +793,7 @@ where
                 })
                 .apply_if(filter.map_name, |query, name| {
                     query.and_where(
-                        Expr::col(("map", "unstyled_map_name")).like(format!("%{name}%")),
+                        Expr::col(("map", maps::Column::UnstyledName)).like(format!("%{name}%")),
                     );
                 });
         })
@@ -815,7 +809,7 @@ where
                 query,
                 "map".into_iden(),
                 Identity::Binary(
-                    "unstyled_map_name".into_iden(),
+                    maps::Column::UnstyledName.into_iden(),
                     maps::Column::Id.into_iden(),
                 ),
             )
@@ -826,7 +820,7 @@ where
             Identity::Binary("score".into_iden(), maps::Column::Id.into_iden()),
         ),
     }
-    .into_model::<MapWithUnstyledNameAndScore>();
+    .into_model::<MapWithScoreRow>();
 
     apply_cursor_input(&mut query, &pagination_input);
 
