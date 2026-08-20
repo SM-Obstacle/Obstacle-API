@@ -83,7 +83,11 @@ where
 
         // Join again with players table if filtering on map author
         if m.author.is_some() {
-            query = query.join_as(JoinType::InnerJoin, maps::Relation::Players.def(), "p2");
+            query = query.join_as(
+                JoinType::InnerJoin,
+                maps::Relation::Players.def().from_alias("m"),
+                "p2",
+            );
         }
     }
 
