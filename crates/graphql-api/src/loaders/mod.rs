@@ -6,6 +6,7 @@ pub mod event_edition_map;
 pub mod map;
 pub mod map_average_cps_times;
 pub mod map_average_rating;
+pub mod map_mx_id;
 pub mod map_score;
 
 pub mod player;

@@ -15,6 +15,7 @@ use records_lib::{
     sync,
 };
 use sea_orm::{
+    ActiveValue::Set,
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
     QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
@@ -29,8 +30,8 @@ use crate::{
     error::{self, ApiGqlError, CursorDecodeError, CursorDecodeErrorKind, GqlResult},
     loaders::{
         map::MapLoader, map_average_cps_times::MapAverageCpsTimesLoader,
-        map_average_rating::MapAverageRatingLoader, map_score::MapScoreLoader,
-        player::PlayerLoader,
+        map_average_rating::MapAverageRatingLoader, map_mx_id::MapMxIdLoader,
+        map_score::MapScoreLoader, player::PlayerLoader,
     },
     objects::{
         checkpoint_time::CheckpointTime, event_edition::EventEdition, player::Player,
@@ -412,8 +413,31 @@ impl Map {
 
 #[async_graphql::Object]
 impl Map {
-    pub async fn id(&self) -> ID {
+    async fn id(&self) -> ID {
         ID(format!("v0:Map:{}", self.inner.id))
+    }
+
+    async fn mx_id(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<i32>> {
+        if let Some(mx_id) = self.inner.mx_id {
+            return Ok(Some(mx_id));
+        }
+
+        // Try to fetch from the MX ID
+        let loader = ctx.data_unchecked::<DataLoader<MapMxIdLoader>>();
+        let mx_id = loader.load_one(self.inner.game_id.clone()).await?;
+
+        if let Some(mx_id) = mx_id {
+            // Update our base btw
+            let db = ctx.data_unchecked::<DbConn>();
+            let map = maps::ActiveModel {
+                id: Set(self.inner.id),
+                mx_id: Set(Some(mx_id)),
+                ..Default::default()
+            };
+            maps::Entity::update(map).exec(db).await?;
+        }
+
+        Ok(mx_id)
     }
 
     async fn game_id(&self) -> &str {

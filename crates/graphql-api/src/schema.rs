@@ -11,9 +11,9 @@ use crate::{
         checkpoint_times::CheckpointTimesLoader, event::EventLoader,
         event_category::EventCategoryLoader, event_edition_map::EventEditionMapLoader,
         map::MapLoader, map_average_cps_times::MapAverageCpsTimesLoader,
-        map_average_rating::MapAverageRatingLoader, map_score::MapScoreLoader,
-        player::PlayerLoader, player_role::PlayerRoleLoader, player_score::PlayerScoreLoader,
-        rating_kind::RatingKindLoader, try_count::TryCountLoader,
+        map_average_rating::MapAverageRatingLoader, map_mx_id::MapMxIdLoader,
+        map_score::MapScoreLoader, player::PlayerLoader, player_role::PlayerRoleLoader,
+        player_score::PlayerScoreLoader, rating_kind::RatingKindLoader, try_count::TryCountLoader,
     },
     objects::root::QueryRoot,
     subscriptions::root::SubscriptionRoot,
@@ -93,6 +93,7 @@ pub fn create_schema(
             EventEditionMapLoader(db.clone().sql_conn),
             tokio::spawn,
         ))
+        .data(DataLoader::new(MapMxIdLoader(client.clone()), tokio::spawn))
         .data(db_clone.sql_conn)
         .data(db_clone.redis_pool)
         .data(db)

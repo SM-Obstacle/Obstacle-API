@@ -38,6 +38,9 @@ pub struct Model {
     pub gold_time: Option<i32>,
     /// The author time of the map.
     pub author_time: Option<i32>,
+
+    /// The ID in ManiaExchange.
+    pub mx_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
