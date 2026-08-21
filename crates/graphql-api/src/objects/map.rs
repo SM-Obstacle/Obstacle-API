@@ -75,7 +75,8 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
 ) -> GqlResult<Vec<RankedRecord>> {
     let key = map_key(map_id, event);
 
-    update_leaderboard(conn, redis_pool, map_id, event).await?;
+    let mut redis_conn = redis_pool.get().await?;
+    update_leaderboard(conn, &mut redis_conn, map_id, event).await?;
 
     let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
     let record_ids: Vec<i32> = {
@@ -143,9 +144,8 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
         .map(|result| records::Model::from_query_result(&result, ""))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut redis_conn = redis_pool.get().await?;
-
     let ranks = ranks::get_ranks(
+        conn,
         &mut redis_conn,
         records.iter().map(|record| (map_id, record.time)),
         event,
@@ -320,13 +320,12 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
         iter: records,
     } = get_paginated(conn, query, &pagination_input).await?;
 
-    ranks::update_leaderboard(conn, redis_pool, map_id, event).await?;
-
     let records = records.collect::<Vec<_>>();
 
     let mut redis_conn = redis_pool.get().await?;
 
     let ranks = ranks::get_ranks(
+        conn,
         &mut redis_conn,
         records.iter().map(|record| (record.map_id, record.time)),
         event,

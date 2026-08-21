@@ -405,6 +405,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
             .collect::<Result<Vec<_>, _>>()?;
 
         let ranks = ranks::get_ranks(
+            conn,
             &mut redis_conn,
             res.iter().map(|record| (map.id, record.record.time)),
             event,

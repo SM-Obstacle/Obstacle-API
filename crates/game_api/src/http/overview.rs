@@ -170,7 +170,7 @@ async fn get_rank<C: ConnectionTrait + StreamTrait>(
     match min_time {
         Some(time) => {
             let mut redis_conn = redis_pool.get().await.with_api_err()?;
-            let rank = ranks::get_rank(&mut redis_conn, map.id, time, event)
+            let rank = ranks::get_rank(conn, &mut redis_conn, map.id, time, event)
                 .await
                 .with_api_err()?;
             Ok(Some(rank))
@@ -190,7 +190,8 @@ pub async fn overview(
         .with_api_err()?;
 
     // Update redis if needed
-    let count = update_leaderboard(&db.sql_conn, &db.redis_pool, map.id, event).await? as _;
+    let mut redis_conn = db.redis_pool.get().await.with_api_err()?;
+    let count = update_leaderboard(&db.sql_conn, &mut redis_conn, map.id, event).await? as _;
 
     let player_rank = match player {
         Some(ref p) => get_rank(&db.sql_conn, &db.redis_pool, map, event, p).await?,

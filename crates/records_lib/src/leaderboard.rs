@@ -186,6 +186,7 @@ pub async fn leaderboard_into<C: ConnectionTrait + StreamTrait>(
     let mut redis_conn = redis_pool.get().await?;
 
     let ranks = ranks::get_ranks(
+        conn,
         &mut redis_conn,
         result.iter().map(|r| (map_id, r.time)),
         event,

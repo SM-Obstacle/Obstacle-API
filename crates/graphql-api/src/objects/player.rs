@@ -185,6 +185,7 @@ async fn get_player_records<C: ConnectionTrait + StreamTrait>(
     let mut redis_conn = redis_pool.get().await?;
 
     let ranks = ranks::get_ranks(
+        conn,
         &mut redis_conn,
         records.iter().map(|record| (record.map_id, record.time)),
         event,

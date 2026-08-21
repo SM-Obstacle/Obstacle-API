@@ -72,7 +72,7 @@ async fn get_record<C: ConnectionTrait + StreamTrait>(
     let mut redis_conn = redis_pool.get().await?;
 
     let out = records::RankedRecord {
-        rank: ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?,
+        rank: ranks::get_rank(conn, &mut redis_conn, record.map_id, record.time, event).await?,
         record,
     }
     .into();
@@ -101,6 +101,7 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
     let mut redis_conn = redis_pool.get().await?;
 
     let ranks = ranks::get_ranks(
+        conn,
         &mut redis_conn,
         records.iter().map(|record| (record.map_id, record.time)),
         event,
@@ -165,6 +166,7 @@ pub(crate) async fn get_records_connection_impl<C: ConnectionTrait + Transaction
     let mut redis_conn = redis_pool.get().await?;
 
     let ranks = ranks::get_ranks(
+        conn,
         &mut redis_conn,
         records.iter().map(|record| (record.map_id, record.time)),
         event,

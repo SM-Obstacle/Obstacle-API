@@ -246,7 +246,7 @@ where
             old,
             params.body.time,
             params.body.time < old,
-            Some(ranks::get_rank(&mut redis_conn, map.id, old, params.event).await?),
+            Some(ranks::get_rank(conn, &mut redis_conn, map.id, old, params.event).await?),
         ),
         None => (params.body.time, params.body.time, true, None),
     };
@@ -261,6 +261,10 @@ where
         // If the Redis time were updated before the SQL transaction, a race condition could occur
         // where other operations update the same leaderboard after the Redis update, but before
         // the transaction finishes.
+
+        ranks::update_leaderboard(conn, &mut redis_conn, map.id, params.event)
+            .await
+            .with_api_err()?;
 
         let mut pipe = redis::pipe();
         pipe.atomic();
@@ -290,7 +294,7 @@ where
 
         new_rank
     } else {
-        ranks::get_rank(&mut redis_conn, map.id, old, params.event)
+        ranks::get_rank(conn, &mut redis_conn, map.id, old, params.event)
             .await
             .with_api_err()?
     };
