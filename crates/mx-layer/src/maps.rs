@@ -5,7 +5,7 @@ use futures::{StreamExt as _, TryStreamExt as _, stream};
 use records_lib::{assert_future_send, error::RecordsResult};
 use reqwest::header;
 use tokio::{
-    sync::{Mutex, Notify},
+    sync::{Mutex, Notify, mpsc, oneshot},
     time::Instant,
 };
 
@@ -14,6 +14,8 @@ mod tests;
 
 const CACHE_TIMEOUT: Duration = Duration::from_mins(5);
 const CACHE_PURGE_INTERVAL: Duration = Duration::from_hours(2);
+
+const DEBOUNCE_FETCH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Represents an item returned by a request to the MX API related to maps.
 #[derive(serde::Deserialize)]
@@ -81,12 +83,25 @@ pub trait MxSource: Sealed {
     async fn fetch_mx_ids(&self, map_uids: &[&str]) -> RecordsResult<HashMap<String, i32>>;
 }
 
-pub struct DefaultMxSource(reqwest::Client);
+pub struct DefaultMxSource {
+    broker_client: BrokerClient,
+}
+
+impl DefaultMxSource {
+    fn from_client(client: reqwest::Client) -> Self {
+        let (tx, rx) = mpsc::channel(100);
+        tokio::task::spawn(broker_fetch(client, rx));
+        Self {
+            broker_client: BrokerClient { tx },
+        }
+    }
+}
+
 impl Sealed for DefaultMxSource {}
 impl MxSource for DefaultMxSource {
     #[inline]
     async fn fetch_mx_ids(&self, map_uids: &[&str]) -> RecordsResult<HashMap<String, i32>> {
-        fetch_mx_map_ids(&self.0, map_uids).await
+        self.broker_client.get_map_ids(map_uids).await
     }
 }
 
@@ -186,6 +201,81 @@ async fn purge_old_cache(cached: CachedMapUids, notify: Arc<Notify>) {
     }
 }
 
+struct BrokerRequest {
+    map_uids: Vec<String>,
+    reply_tx: oneshot::Sender<RecordsResult<HashMap<String, i32>>>,
+}
+
+async fn broker_fetch(client: reqwest::Client, mut jobs: mpsc::Receiver<BrokerRequest>) {
+    let Some(BrokerRequest { map_uids, reply_tx }) = jobs.recv().await else {
+        return;
+    };
+
+    let result = fetch_mx_map_ids(
+        &client,
+        map_uids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice(),
+    )
+    .await;
+
+    let _ = reply_tx.send(result);
+
+    let mut collected_map_uids = Vec::new();
+    let mut last_fetch_at = Instant::now();
+
+    loop {
+        let Some(BrokerRequest { map_uids, reply_tx }) = jobs.recv().await else {
+            return;
+        };
+        collected_map_uids.extend_from_slice(&map_uids);
+
+        if last_fetch_at.elapsed() < DEBOUNCE_FETCH_INTERVAL {
+            let _ = reply_tx.send(Ok(Default::default()));
+            continue;
+        }
+
+        let result = fetch_mx_map_ids(
+            &client,
+            collected_map_uids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )
+        .await;
+        let _ = reply_tx.send(result);
+
+        collected_map_uids.clear();
+        last_fetch_at = Instant::now();
+    }
+}
+
+struct BrokerClient {
+    tx: mpsc::Sender<BrokerRequest>,
+}
+
+impl BrokerClient {
+    async fn get_map_ids(&self, map_uids: &[&str]) -> RecordsResult<HashMap<String, i32>> {
+        let (tx, rx) = oneshot::channel();
+        let request = BrokerRequest {
+            map_uids: map_uids.iter().copied().map(str::to_owned).collect(),
+            reply_tx: tx,
+        };
+
+        if self.tx.send(request).await.is_err() {
+            return Ok(Default::default());
+        }
+
+        match rx.await {
+            Ok(res) => res,
+            Err(_) => Ok(Default::default()),
+        }
+    }
+}
+
 struct SharedCachedMxMapIds<S: MxSource> {
     source: S,
     cached: CachedMapUids,
@@ -202,7 +292,7 @@ impl Clone for CachedMxMapIds {
 
 impl CachedMxMapIds {
     pub fn from_client(client: reqwest::Client) -> Self {
-        Self::from_source(DefaultMxSource(client))
+        Self::from_source(DefaultMxSource::from_client(client))
     }
 }
 

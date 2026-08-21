@@ -48,7 +48,7 @@ pub fn create_schema(
             tokio::spawn,
         ))
         .data(DataLoader::new(
-            MapLoader(db.clone().sql_conn),
+            MapLoader(db.clone().sql_conn, cached_mx_ids.clone()),
             tokio::spawn,
         ))
         .data(DataLoader::new(
