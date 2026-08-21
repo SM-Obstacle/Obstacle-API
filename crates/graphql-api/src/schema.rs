@@ -1,6 +1,7 @@
 use async_graphql::{
     EmptyMutation, SchemaBuilder, dataloader::DataLoader, extensions::ApolloTracing,
 };
+use mx_layer::maps::CachedMxMapIds;
 use records_lib::{
     Database,
     records_notifier::{LatestRecordsSubscription, RecordsNotifier},
@@ -34,6 +35,7 @@ pub fn create_schema_standalone() -> Schema {
 
 pub fn create_schema(
     db: Database,
+    cached_mx_ids: CachedMxMapIds,
     client: reqwest::Client,
     records_sub: LatestRecordsSubscription,
 ) -> Schema {
@@ -93,7 +95,7 @@ pub fn create_schema(
             EventEditionMapLoader(db.clone().sql_conn),
             tokio::spawn,
         ))
-        .data(DataLoader::new(MapMxIdLoader(client.clone()), tokio::spawn))
+        .data(DataLoader::new(MapMxIdLoader(cached_mx_ids), tokio::spawn))
         .data(db_clone.sql_conn)
         .data(db_clone.redis_pool)
         .data(db)

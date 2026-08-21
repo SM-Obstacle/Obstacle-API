@@ -10,7 +10,8 @@ use actix_web::{
 };
 use entity::{maps, player_rating, players, rating, rating_kind};
 use futures::{StreamExt, future::try_join_all};
-use records_lib::{Database, map::fetch_mx_map_ids};
+use mx_layer::maps::CachedMxMapIds;
+use records_lib::Database;
 use sea_orm::{
     ActiveModelTrait as _, ActiveValue::Set, ColumnTrait as _, EntityTrait as _, FromQueryResult,
     PaginatorTrait, QueryFilter, QuerySelect, prelude::Expr, sea_query::Func,
@@ -71,7 +72,7 @@ fn update_active_model_medal_times(
 async fn insert(
     _: ApiAvailable,
     ExtractDbConn(conn): ExtractDbConn,
-    Res(client): Res<reqwest::Client>,
+    Res(cached_mx_ids): Res<CachedMxMapIds>,
     Json(body): Json<UpdateMapBody>,
 ) -> RecordsResult<impl Responder> {
     let map = records_lib::map::get_map_from_uid(&conn, &body.map_uid).await?;
@@ -100,7 +101,8 @@ async fn insert(
         }
 
         if is_mx_id_empty
-            && let Some(mx_id) = fetch_mx_map_ids(&client, &[&map.game_id])
+            && let Some(mx_id) = cached_mx_ids
+                .get_map_ids(&[&map.game_id])
                 .await
                 .with_api_err()?
                 .get(&map.game_id)

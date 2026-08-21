@@ -496,7 +496,7 @@ async fn populate_from_csv<C: ConnectionTrait>(
             source: Set(row.source),
             thumbnail_source: Set(row.thumbnail_source),
             is_available: match row.is_available {
-                Some(v) => Set(v),
+                Some(v) => Set(Some(v)),
                 None => NotSet,
             },
             is_disabled: match row.is_disabled {

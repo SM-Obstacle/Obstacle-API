@@ -42,6 +42,7 @@ migration = { path = "../migration" }
 entity = { path = "../entity" }
 graphql-api = { path = "../graphql-api" }
 serde_json = { workspace = true }
+mx-layer = { path = "../mx-layer" }
 
 [dev-dependencies]
 test-env = { path = "../test-env" }

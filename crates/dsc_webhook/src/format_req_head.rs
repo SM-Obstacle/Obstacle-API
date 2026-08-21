@@ -26,25 +26,20 @@ impl<'a> FormattedHeaderValue<'a> {
 
 impl fmt::Display for FormattedHeaderValue<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        struct List<'a> {
-            inner: &'a [u8],
-        }
-
-        impl fmt::Display for List<'_> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                let mut list = f.debug_list();
-                list.entries(&self.inner[..self.inner.len().min(100)]);
-                if self.inner.len() > 100 {
-                    list.finish_non_exhaustive()
-                } else {
-                    list.finish()
-                }
-            }
-        }
-
         match &self.inner {
             Ok(s) => f.write_str(s),
-            Err(b) => write!(f, "Invalid UTF-8: {}", List { inner: b }),
+            Err(b) => {
+                let fmt_list = fmt::from_fn(|f| {
+                    let mut list = f.debug_list();
+                    list.entries(&b[..b.len().min(100)]);
+                    if b.len() > 100 {
+                        list.finish_non_exhaustive()
+                    } else {
+                        list.finish()
+                    }
+                });
+                write!(f, "Invalid UTF-8: {}", fmt_list)
+            }
         }
     }
 }

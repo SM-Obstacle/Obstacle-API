@@ -12,6 +12,7 @@ use actix_web::{
 };
 use dsc_webhook::{FormattedRequestHead, WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 use mkenv::prelude::*;
+use mx_layer::maps::CachedMxMapIds;
 use records_lib::{Database, pool::clone_dbconn, records_notifier::RecordsNotifier};
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId};
 
@@ -240,6 +241,8 @@ pub fn configure(cfg: &mut web::ServiceConfig, db: Database, records_notifier: R
         .build()
         .unwrap();
 
+    let cached_mx_ids = CachedMxMapIds::from_client(client.clone());
+
     let records_subscription = records_notifier.get_subscription();
 
     cfg.app_data(web::Data::new(crate::AuthState::default()))
@@ -248,8 +251,10 @@ pub fn configure(cfg: &mut web::ServiceConfig, db: Database, records_notifier: R
         .app_data(db.redis_pool.clone())
         .app_data(db.clone())
         .app_data(records_notifier)
+        .app_data(cached_mx_ids.clone())
         .service(crate::graphql_route(
             db.clone(),
+            cached_mx_ids,
             client,
             records_subscription,
         ))

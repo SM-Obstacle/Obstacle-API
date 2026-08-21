@@ -9,6 +9,7 @@ members = [
   "crates/graphql-api",
   "crates/graphql-schema-generator",
   "crates/migration",
+  "crates/mx-layer",
   "crates/player-map-ranking",
   "crates/records_lib",
   "crates/request_filter",
