@@ -1,0 +1,100 @@
+sequenceDiagram
+    participant Client
+    participant A as MX ID Provider
+    participant Cache as moka Cache
+    participant mpscChannel@{"type": "queue"} as MPSC Channel
+    participant batchWorker as Batch Worker
+    participant Fetcher
+    participant Sink as MX ID Sink
+    participant DB@{"type": "database"}
+
+    par Client
+        Client->>A: get_mx_ids(map_uids)
+        create participant HashMap
+        A->>HashMap: new()
+        create participant map_uids_to_fetch@{"type": "collections"} as Map UIDs to fetch
+        A->>map_uids_to_fetch: new()
+
+        loop for each map_uid of map_uids
+            A->>Cache: get(map_uid)
+            Cache-->>A: cache entry
+            alt Some(Some(mx_id))
+                A->>HashMap: insert(map_uid, mx_id)
+            else Some(None)
+                Note right of A: MX said it doesn't have it, less than 24h ago:<br/>nothing to return, and nothing to ask
+            else None
+                A->>map_uids_to_fetch: push(map_uid)
+            end
+        end
+
+        destroy map_uids_to_fetch
+        map_uids_to_fetch-->>A: map_uids_to_fetch
+
+        opt map_uids_to_fetch is not empty
+            A->>mpscChannel: send(map_uids_to_fetch)
+            Note right of A: fire and forget: no reply channel,<br/>nothing is awaited but the send itself
+        end
+
+        destroy HashMap
+        HashMap-->>A: ret
+        A-->>Client: ret
+
+    and Batch Worker
+        create participant Interval
+        batchWorker->>Interval: new(5s), first tick consumed
+        loop Every batch
+            create participant batch@{"type": "collections"} as Batch (set)
+            batchWorker->>batch: new()
+
+            loop Batching
+                Note over batchWorker: tokio::select!
+                par
+                    batchWorker->>mpscChannel: recv()
+                    mpscChannel-->>batchWorker: s1 = pending { map_uids }
+                and
+                    batchWorker->>Interval: tick()
+                    Interval-->>batchWorker: s2 = pending
+                end
+
+                alt s1 finished first
+                    batchWorker->>batch: extend(map_uids)
+                    opt no batch sent for 5s (or none ever)
+                        batchWorker->>batchWorker: break
+                    end
+                else s2 finished first
+                    batchWorker->>batchWorker: break
+                end
+            end
+
+            destroy batch
+            batch-->>batchWorker: map_uids_batch
+            opt map_uids_batch is not empty
+                batchWorker->>batchWorker: last fetch = now
+                batchWorker->>Interval: reset()
+                create participant fetchTask as Fetch task
+                batchWorker->>fetchTask: spawn(map_uids_batch)
+                Note over batchWorker,fetchTask: spawned, not awaited: the worker keeps taking map UIDs while MX is thinking
+            end
+        end
+        destroy Interval
+        Interval-->batchWorker: drop
+    and Fetch task
+        fetchTask->>Fetcher: fetch_mx_ids(map_uids_batch)
+        activate Fetcher
+        Note over Fetcher: chunks of 50 UIDs, 10 requests in flight
+        Fetcher-->>fetchTask: results = map UIDs with an MX ID
+        deactivate Fetcher
+
+        alt results is error
+            fetchTask->>fetchTask: log error
+            Note right of fetchTask: nothing is written down, so these map UIDs<br/>are asked again by the next call
+        else
+            loop for each map_uid of map_uids_batch
+                fetchTask->>Cache: insert(map_uid, results.get(map_uid))
+                Note right of Cache: Some(mx_id) expires in 2h<br/>None expires in 24h
+            end
+            destroy fetchTask
+            fetchTask->>Sink: store(results)
+            Sink->>DB: UPDATE maps SET mx_id WHERE game_id in results AND mx_id IS NULL
+        end
+    end

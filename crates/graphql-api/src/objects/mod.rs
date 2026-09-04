@@ -29,6 +29,7 @@ pub mod mappack_map;
 pub mod mappack_player;
 
 pub mod map;
+pub mod mx_id_status;
 pub mod related_edition;
 
 pub mod player_rating;

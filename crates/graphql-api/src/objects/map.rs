@@ -7,6 +7,7 @@ use deadpool_redis::redis::AsyncCommands as _;
 use entity::{
     event_edition, event_edition_maps, global_event_records, global_records, maps, records,
 };
+use mx_layer::maps::MxIdProvider;
 use records_lib::{
     Database, RedisPool, internal,
     opt_event::OptEvent,
@@ -15,7 +16,6 @@ use records_lib::{
     sync,
 };
 use sea_orm::{
-    ActiveValue::Set,
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
     QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
@@ -34,10 +34,10 @@ use crate::{
         map_score::MapScoreLoader, player::PlayerLoader,
     },
     objects::{
-        checkpoint_time::CheckpointTime, event_edition::EventEdition, player::Player,
-        player_rating::PlayerRating, ranked_record::RankedRecord, records_filter::RecordsFilter,
-        related_edition::RelatedEdition, sort::MapRecordSort, sort_order::SortOrder,
-        sort_state::SortState, sortable_fields::MapRecordSortableField,
+        checkpoint_time::CheckpointTime, event_edition::EventEdition, mx_id_status::MxIdStatus,
+        player::Player, player_rating::PlayerRating, ranked_record::RankedRecord,
+        records_filter::RecordsFilter, related_edition::RelatedEdition, sort::MapRecordSort,
+        sort_order::SortOrder, sort_state::SortState, sortable_fields::MapRecordSortableField,
     },
     utils::{
         page_input::{PaginationInput, apply_cursor_input},
@@ -421,22 +421,23 @@ impl Map {
             return Ok(Some(mx_id));
         }
 
-        // Try to fetch from the MX ID
+        // Ask MX for it. Saving it in our database is the provider's job; if it isn't there yet,
+        // this returns null and the next query has it.
         let loader = ctx.data_unchecked::<DataLoader<MapMxIdLoader>>();
-        let mx_id = loader.load_one(self.inner.game_id.clone()).await?;
+        loader.load_one(self.inner.game_id.clone()).await
+    }
 
-        if let Some(mx_id) = mx_id {
-            // Update our base btw
-            let db = ctx.data_unchecked::<DbConn>();
-            let map = maps::ActiveModel {
-                id: Set(self.inner.id),
-                mx_id: Set(Some(mx_id)),
-                ..Default::default()
-            };
-            maps::Entity::update(map).exec(db).await?;
+    /// What we know about the MX ID of this map, to tell apart a map ManiaExchange doesn't have
+    /// from one we haven't got an answer for yet.
+    async fn mx_id_status(&self, ctx: &async_graphql::Context<'_>) -> MxIdStatus {
+        if self.inner.mx_id.is_some() {
+            return MxIdStatus::Known;
         }
 
-        Ok(mx_id)
+        ctx.data_unchecked::<MxIdProvider>()
+            .status_of(&self.inner.game_id)
+            .await
+            .into()
     }
 
     async fn game_id(&self) -> &str {

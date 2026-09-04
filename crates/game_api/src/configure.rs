@@ -12,7 +12,7 @@ use actix_web::{
 };
 use dsc_webhook::{FormattedRequestHead, WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 use mkenv::prelude::*;
-use mx_layer::maps::CachedMxMapIds;
+use mx_layer::maps::MxIdProvider;
 use records_lib::{Database, pool::clone_dbconn, records_notifier::RecordsNotifier};
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId};
 
@@ -237,11 +237,15 @@ impl tracing_actix_web::RootSpanBuilder for RootSpanBuilder {
 
 pub fn configure(cfg: &mut web::ServiceConfig, db: Database, records_notifier: RecordsNotifier) {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(5))
+        .read_timeout(Duration::from_secs(10))
         .build()
         .unwrap();
 
-    let cached_mx_ids = CachedMxMapIds::from_client(client.clone());
+    let mx_ids = MxIdProvider::from_client(
+        client.clone(),
+        crate::DbMxIdSink::new(clone_dbconn(&db.sql_conn)),
+    );
 
     let records_subscription = records_notifier.get_subscription();
 
@@ -251,10 +255,10 @@ pub fn configure(cfg: &mut web::ServiceConfig, db: Database, records_notifier: R
         .app_data(db.redis_pool.clone())
         .app_data(db.clone())
         .app_data(records_notifier)
-        .app_data(cached_mx_ids.clone())
+        .app_data(mx_ids.clone())
         .service(crate::graphql_route(
             db.clone(),
-            cached_mx_ids,
+            mx_ids,
             client,
             records_subscription,
         ))

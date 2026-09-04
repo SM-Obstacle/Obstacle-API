@@ -5,10 +5,13 @@ edition = "2024"
 
 [dependencies]
 futures.workspace = true
+moka.workspace = true
 records-lib = { path = "../records_lib" }
 reqwest.workspace = true
 serde.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+simple-mermaid.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 
 [build-dependencies]
 serde_json.workspace = true
@@ -16,4 +19,3 @@ serde_json.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "test-util"] }
 anyhow = { workspace = true }
-rand.workspace = true

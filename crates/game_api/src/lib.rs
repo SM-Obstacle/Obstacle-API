@@ -12,6 +12,7 @@ mod error;
 mod graphql;
 mod http;
 mod modeversion;
+mod mx_id_sink;
 mod utils;
 
 pub use auth::AuthState;
@@ -20,6 +21,7 @@ pub use error::*;
 pub use graphql::graphql_route;
 pub use http::api_route;
 pub use modeversion::*;
+pub use mx_id_sink::DbMxIdSink;
 pub use utils::Res;
 
 #[doc(hidden)]

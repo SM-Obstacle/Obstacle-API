@@ -10,7 +10,7 @@ use actix_web::{
 };
 use entity::{maps, player_rating, players, rating, rating_kind};
 use futures::{StreamExt, future::try_join_all};
-use mx_layer::maps::CachedMxMapIds;
+use mx_layer::maps::MxIdProvider;
 use records_lib::Database;
 use sea_orm::{
     ActiveModelTrait as _, ActiveValue::Set, ColumnTrait as _, EntityTrait as _, FromQueryResult,
@@ -72,7 +72,7 @@ fn update_active_model_medal_times(
 async fn insert(
     _: ApiAvailable,
     ExtractDbConn(conn): ExtractDbConn,
-    Res(cached_mx_ids): Res<CachedMxMapIds>,
+    Res(mx_ids): Res<MxIdProvider>,
     Json(body): Json<UpdateMapBody>,
 ) -> RecordsResult<impl Responder> {
     let map = records_lib::map::get_map_from_uid(&conn, &body.map_uid).await?;
@@ -100,14 +100,11 @@ async fn insert(
             update_active_model_medal_times(&mut updated_map, body.medal_times);
         }
 
-        if is_mx_id_empty
-            && let Some(mx_id) = cached_mx_ids
-                .get_map_ids(&[&map.game_id])
-                .await
-                .with_api_err()?
-                .get(&map.game_id)
-        {
-            updated_map.mx_id = Set(Some(*mx_id));
+        // This waits for at most one request to MX, and never for its batching window. Saving the
+        // MX ID is the provider's job, so we only have to ask for it: if it isn't fetched right
+        // away, it's saved once its batch comes back.
+        if is_mx_id_empty {
+            mx_ids.get_mx_ids_of_map_uids(&[&map.game_id]).await;
         }
 
         if updated_map.is_changed() {

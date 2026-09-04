@@ -1,183 +1,175 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::{array, assert_matches};
 
-use rand::distr::Uniform;
-use rand::{Rng, rng};
-use records_lib::error::RecordsResult;
+use tokio::time::Instant;
 
-use crate::maps::{CACHE_PURGE_INTERVAL, CachedMxMapId, CachedMxMapIds, MxSource, Sealed};
+use moka::Expiry as _;
 
-struct EmptySource;
-impl Sealed for EmptySource {}
-impl MxSource for EmptySource {
-    async fn fetch_mx_ids(&self, _: &[&str]) -> RecordsResult<HashMap<String, i32>> {
-        Ok(Default::default())
+use super::batch::FLUSH_INTERVAL;
+use super::fake_mx::{FakeMx, FakeSink, ids, settle};
+use super::{KNOWN_TIMEOUT, MxIdExpiry, MxIdProvider, MxIdStatus, UNKNOWN_TIMEOUT};
+
+impl MxIdProvider {
+    /// What the cache holds for this map UID: nothing, an MX ID, or "MX doesn't know it".
+    async fn cached(&self, map_uid: &str) -> Option<Option<i32>> {
+        self.cache.get(map_uid).await
     }
 }
 
-struct MappingSource<const N: usize>([i32; N]);
-impl<const N: usize> MappingSource<N> {
-    fn from_iter<I: IntoIterator<Item = i32>>(iter: I) -> Self {
-        let mut iter = iter.into_iter();
-        Self(array::from_fn(|_| iter.next().unwrap_or_default()))
-    }
-}
-impl<const N: usize> Sealed for MappingSource<N> {}
-impl<const N: usize> MxSource for MappingSource<N> {
-    async fn fetch_mx_ids(&self, map_uids: &[&str]) -> RecordsResult<HashMap<String, i32>> {
-        Ok(map_uids
-            .iter()
-            .zip(self.0.iter())
-            .map(|(map_uid, mx_id)| (map_uid.to_string(), *mx_id))
-            .collect())
-    }
-}
+/// The expiration of the entries is left to moka, which uses its own clock: the tests can't move
+/// it, so this is what covers how long an answer of MX lives.
+#[test]
+fn an_mx_id_we_know_is_kept_much_longer_than_one_we_dont() {
+    let map_uid = "foo".to_owned();
+    let now = std::time::Instant::now();
 
-struct PersistantSource<S> {
-    source: S,
-    history: Arc<Mutex<Vec<Vec<String>>>>,
-}
-impl<S> Sealed for PersistantSource<S> {}
-impl<S: MxSource> MxSource for PersistantSource<S> {
-    async fn fetch_mx_ids(&self, map_uids: &[&str]) -> RecordsResult<HashMap<String, i32>> {
-        self.history
-            .lock()
-            .unwrap()
-            .push(map_uids.iter().copied().map(str::to_owned).collect());
-        self.source.fetch_mx_ids(map_uids).await
-    }
+    assert_eq!(
+        MxIdExpiry.expire_after_create(&map_uid, &Some(42), now),
+        Some(KNOWN_TIMEOUT)
+    );
+    assert_eq!(
+        MxIdExpiry.expire_after_create(&map_uid, &None, now),
+        Some(UNKNOWN_TIMEOUT)
+    );
+
+    // A map UID MX didn't know which finally got an MX ID mustn't inherit what was left of its
+    // previous, much shorter expiration.
+    assert_eq!(
+        MxIdExpiry.expire_after_update(&map_uid, &Some(42), now, Some(Duration::from_secs(1))),
+        Some(KNOWN_TIMEOUT)
+    );
 }
 
 #[tokio::test(start_paused = true)]
-async fn fetch_once() -> anyhow::Result<()> {
-    let history = Arc::new(Mutex::new(Vec::new()));
-    let cache = CachedMxMapIds::from_source(PersistantSource {
-        source: EmptySource,
-        history: Arc::clone(&history),
-    });
-    cache.get_map_ids(&["foo", "bar"]).await?;
-    assert_eq!(*history.lock().unwrap(), [["foo", "bar"]]);
-    cache.get_map_ids(&["foo", "bar", "baz"]).await?;
-    assert_eq!(
-        *history.lock().unwrap(),
-        [&["foo", "bar"] as &[&str], &["baz"]]
-    );
-    cache.get_map_ids(&["bar", "baz"]).await?;
-    assert_eq!(
-        *history.lock().unwrap(),
-        [&["foo", "bar"] as &[&str], &["baz"], &[]]
-    );
+async fn get_mx_ids_never_waits_for_mx() {
+    let mx = FakeMx::with_latency([("foo", 42)], Duration::from_secs(60));
+    let provider = MxIdProvider::spawn(mx.clone(), ());
 
-    Ok(())
-}
+    // The caller is on a hot path: it gets nothing for now, and the map UID is on its way.
+    let at = Instant::now();
+    assert!(provider.get_mx_ids_of_map_uids(&["foo"]).await.is_empty());
+    assert_eq!(at.elapsed(), Duration::ZERO);
 
-#[tokio::test]
-async fn cached_with_none() -> anyhow::Result<()> {
-    let cache = CachedMxMapIds::from_source(EmptySource);
-
-    let returned_ids = cache.get_map_ids(&["foo", "bar"]).await?;
-    assert!(returned_ids.is_empty());
-
-    let lock = cache.0.cached.inner.lock().await;
-    assert_matches!(
-        lock.get("foo"),
-        Some(CachedMxMapId {
-            map_mx_id: None,
-            ..
-        })
-    );
-    assert_matches!(
-        lock.get("bar"),
-        Some(CachedMxMapId {
-            map_mx_id: None,
-            ..
-        })
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn cached_with_some() -> anyhow::Result<()> {
-    let src @ MappingSource(ids) =
-        <MappingSource<2>>::from_iter(rng().sample_iter(Uniform::new(0, u16::MAX as i32).unwrap()));
-    let cache = CachedMxMapIds::from_source(src);
-
-    let returned_ids = cache.get_map_ids(&["foo", "bar"]).await?;
-    assert_matches!(returned_ids.get("foo"), Some(x) if *x == ids[0]);
-    assert_matches!(returned_ids.get("bar"), Some(x) if *x == ids[1]);
-
-    let lock = cache.0.cached.inner.lock().await;
-    assert_matches!(
-        lock.get("foo"),
-        Some(CachedMxMapId {
-            map_mx_id: Some(mx_id),
-            ..
-        }) if *mx_id == returned_ids["foo"]
-    );
-    assert_matches!(
-        lock.get("bar"),
-        Some(CachedMxMapId {
-            map_mx_id: Some(mx_id),
-            ..
-        }) if *mx_id == returned_ids["bar"]
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn cached_with_some_and_none() -> anyhow::Result<()> {
-    let src @ MappingSource(ids) =
-        <MappingSource<2>>::from_iter(rng().sample_iter(Uniform::new(0, u16::MAX as i32).unwrap()));
-    let cache = CachedMxMapIds::from_source(src);
-
-    let returned_ids = cache.get_map_ids(&["foo", "bar", "baz"]).await?;
-    assert_matches!(returned_ids.get("foo"), Some(x) if *x == ids[0]);
-    assert_matches!(returned_ids.get("bar"), Some(x) if *x == ids[1]);
-    assert_matches!(returned_ids.get("baz"), None);
-
-    let lock = cache.0.cached.inner.lock().await;
-    assert_matches!(
-        lock.get("foo"),
-        Some(CachedMxMapId {
-            map_mx_id: Some(mx_id),
-            ..
-        }) if *mx_id == returned_ids["foo"]
-    );
-    assert_matches!(
-        lock.get("bar"),
-        Some(CachedMxMapId {
-            map_mx_id: Some(mx_id),
-            ..
-        }) if *mx_id == returned_ids["bar"]
-    );
-    assert_matches!(
-        lock.get("baz"),
-        Some(CachedMxMapId {
-            map_mx_id: None,
-            ..
-        })
-    );
-    Ok(())
+    settle().await;
+    assert_eq!(mx.calls(), [["foo"]]);
 }
 
 #[tokio::test(start_paused = true)]
-async fn purge_cache() -> anyhow::Result<()> {
-    let (cache, notify) = CachedMxMapIds::from_source_with_notify(EmptySource);
-    cache.get_map_ids(&["foo", "bar"]).await?;
-    {
-        let lock = cache.0.cached.inner.lock().await;
-        assert!(!lock.is_empty());
-    }
-    let advance = CACHE_PURGE_INTERVAL + Duration::from_secs(5);
-    tokio::time::advance(advance).await;
-    tokio::time::timeout(advance + Duration::from_secs(1), notify.notified())
-        .await
-        .unwrap();
-    let lock = cache.0.cached.inner.lock().await;
-    assert!(lock.is_empty());
+async fn map_ids_are_there_once_their_batch_came_back() {
+    let mx = FakeMx::new([("foo", 42), ("bar", 1337)]);
+    let provider = MxIdProvider::spawn(mx.clone(), ());
 
-    Ok(())
+    assert!(
+        provider
+            .get_mx_ids_of_map_uids(&["foo", "bar", "baz"])
+            .await
+            .is_empty()
+    );
+    settle().await;
+
+    assert_eq!(
+        provider
+            .get_mx_ids_of_map_uids(&["foo", "bar", "baz"])
+            .await,
+        ids([("foo", 42), ("bar", 1337)])
+    );
+    // `baz` isn't on MX, and we don't ask again for it.
+    assert_eq!(provider.cached("baz").await, Some(None));
+    assert_eq!(mx.calls(), [["bar", "baz", "foo"]]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn known_map_ids_are_never_asked_again() {
+    let mx = FakeMx::new([("foo", 42)]);
+    let provider = MxIdProvider::spawn(mx.clone(), ());
+
+    provider.get_mx_ids_of_map_uids(&["foo"]).await;
+    settle().await;
+
+    // An MX ID doesn't change, so it stays good.
+    tokio::time::advance(FLUSH_INTERVAL * 10).await;
+    assert_eq!(
+        provider.get_mx_ids_of_map_uids(&["foo"]).await,
+        ids([("foo", 42)])
+    );
+    settle().await;
+    assert_eq!(mx.call_count(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn unknown_map_uids_arent_asked_again_right_away() {
+    let mx = FakeMx::default();
+    let provider = MxIdProvider::spawn(mx.clone(), ());
+
+    assert!(provider.get_mx_ids_of_map_uids(&["foo"]).await.is_empty());
+    settle().await;
+    assert_eq!(provider.cached("foo").await, Some(None));
+
+    // MX just told us it doesn't know this map: asking again would be pointless, until that
+    // answer expires (see `an_mx_id_we_know_is_kept_much_longer_than_one_we_dont`).
+    tokio::time::advance(FLUSH_INTERVAL * 2).await;
+    assert!(provider.get_mx_ids_of_map_uids(&["foo"]).await.is_empty());
+    settle().await;
+    assert_eq!(mx.call_count(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn map_uids_of_several_callers_leave_as_one_batch() {
+    let mx = FakeMx::new([("foo", 42), ("bar", 1337)]);
+    let provider = MxIdProvider::spawn(mx.clone(), ());
+    let other = provider.clone();
+
+    // Somebody else opens the window.
+    other.get_mx_ids_of_map_uids(&["baz"]).await;
+    settle().await;
+
+    other.get_mx_ids_of_map_uids(&["bar"]).await;
+    provider.get_mx_ids_of_map_uids(&["foo"]).await;
+    settle().await;
+    assert_eq!(mx.call_count(), 1);
+
+    tokio::time::advance(FLUSH_INTERVAL).await;
+    settle().await;
+
+    assert_eq!(mx.calls(), [vec!["baz"], vec!["bar", "foo"]]);
+    assert_eq!(
+        provider.get_mx_ids_of_map_uids(&["foo"]).await,
+        ids([("foo", 42)])
+    );
+    assert_eq!(
+        other.get_mx_ids_of_map_uids(&["bar"]).await,
+        ids([("bar", 1337)])
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn fetched_map_ids_are_stored_through_the_sink() {
+    let mx = FakeMx::new([("foo", 42)]);
+    let sink = FakeSink::default();
+    let provider = MxIdProvider::spawn(mx.clone(), sink.clone());
+
+    provider.get_mx_ids_of_map_uids(&["foo", "bar"]).await;
+    settle().await;
+
+    // Only what MX actually knows is saved; `bar` has no MX ID to write down.
+    assert_eq!(sink.stored(), [ids([("foo", 42)])]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn status_tells_a_map_absent_from_mx_from_one_we_havent_asked_about() {
+    let mx = FakeMx::new([("foo", 42)]);
+    let provider = MxIdProvider::spawn(mx.clone(), ());
+
+    // We have no answer for either of them yet: `mxId` being null means nothing more than that.
+    assert_eq!(provider.status_of("foo").await, MxIdStatus::Unknown);
+    assert_eq!(provider.status_of("bar").await, MxIdStatus::Unknown);
+
+    provider.get_mx_ids_of_map_uids(&["foo", "bar"]).await;
+    settle().await;
+
+    // Now the two are told apart.
+    assert_eq!(provider.status_of("foo").await, MxIdStatus::Known(42));
+    assert_eq!(provider.status_of("bar").await, MxIdStatus::NotOnMx);
+
+    // And asking doesn't schedule anything: it only reports.
+    assert_eq!(mx.call_count(), 1);
 }

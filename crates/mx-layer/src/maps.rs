@@ -1,21 +1,101 @@
-use core::fmt;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+//! Everything about the MX ID of the maps: the ID [ManiaExchange] gives to a map, which the
+//! website shows as a link and which we keep in the `mx_id` column of our maps.
+//!
+//! [ManiaExchange]: https://sm.mania.exchange
+//!
+//! Getting the MX ID of a map means asking ManiaExchange, which is somebody else's API: it can be
+//! slow, it can be down, and it shouldn't be flooded. Everything in this module follows from three
+//! rules that come out of that.
+//!
+//! **Nobody waits for MX.** [`MxIdProvider::get_mx_ids_of_map_uids`] answers with what we already
+//! know and hands the rest to a background worker, so a map UID missing from its answer means
+//! "we have no MX ID for this map *right now*", not "this map isn't on MX". Its callers are on
+//! paths which must stay fast: the game asking about the map a player just joined, and the website
+//! rendering a list of maps server-side.
+//!
+//! **MX is asked at most once every 5 seconds**, whatever our own traffic is. The worker groups the
+//! map UIDs handed to it during that window into a single deduplicated batch. Without it, every page
+//! of the website showing maps we haven't resolved yet would be a request to MX.
+//!
+//! **An answer of MX is remembered**, so we don't ask twice. An MX ID we got is written to our own
+//! database — see [`MxIdSink`] — and read from there afterwards. A map MX doesn't have is remembered
+//! in memory only, and asked again a day later: a map is uploaded to MX once, at a moment which has
+//! nothing to do with our traffic.
+//!
+//! Everything talking to the outside is behind a trait — [`MxFetcher`] for the MX API, [`MxIdSink`]
+//! for our database — so the tests of this module need neither.
+//!
+//! # The flow
+#![doc = simple_mermaid::mermaid!("../docs/flow.mmd")]
+//! Two details of that flow are worth spelling out, because they're what keeps everybody free:
+//!
+//! * the worker **spawns** the batch instead of awaiting it, so it keeps taking map UIDs while MX is
+//!   thinking, instead of making the next callers queue behind a request that isn't theirs;
+//! * the fetch task writes the cache **before** the database, so the answer is visible to the other
+//!   callers as soon as possible; nobody waits for the `UPDATE`.
+//!
+//! When a batch fails, nothing is written down at all. The map UIDs are simply asked again by the next
+//! call, and are never mistaken for maps MX doesn't have.
+//!
+//! # The two lifetimes
+//!
+//! The cached answers don't age the same way, which the cache turns into a per-entry expiration:
+//!
+//! | what we cached | expires after | why |
+//! |---|---|---|
+//! | an MX ID | 2 hours | it never changes, but it's in our database too, and that's where it's read from |
+//! | "MX doesn't have this map" | 24 hours | it may be uploaded one day, but that has nothing to do with our traffic |
+//!
+//! The second one being much longer than the first looks backwards, and isn't: a map whose `mx_id`
+//! column is filled never comes back here, so keeping its entry longer buys nothing. The entries that
+//! carry the load are the negative ones — maps which are *not* on MX keep a null column forever, so
+//! they come back on every page that shows them.
+//!
+//! # Telling "not on MX" from "not asked yet"
+//!
+//! Both leave a map UID out of [`MxIdProvider::get_mx_ids_of_map_uids`]'s answer, and the website
+//! has to tell them apart: one deserves nothing on the page, the other deserves a button to look
+//! again. [`MxIdProvider::status_of`] reports what we have, without asking MX and without scheduling
+//! anything:
+#![doc = simple_mermaid::mermaid!("../docs/status.mmd")]
+//! Note that a map UID handed to the worker is still `Unknown` for the rest of that call: its batch
+//! hasn't come back yet. A map nobody ever asked about therefore always reads `Unknown` the first
+//! time, even when MX has it.
 
-use futures::{StreamExt as _, TryStreamExt as _, stream};
-use records_lib::{assert_future_send, error::RecordsResult};
-use reqwest::header;
-use tokio::{
-    sync::{Mutex, Notify, mpsc, oneshot},
-    time::Instant,
+use core::fmt;
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
 };
 
+use moka::{Expiry, future::Cache};
+use records_lib::error::RecordsResult;
+
+mod batch;
+
+#[cfg(test)]
+mod fake_mx;
 #[cfg(test)]
 mod tests;
 
-const CACHE_TIMEOUT: Duration = Duration::from_mins(5);
-const CACHE_PURGE_INTERVAL: Duration = Duration::from_hours(2);
+pub use batch::{MxFetcher, MxIdSink, ReqwestMxFetcher};
 
-const DEBOUNCE_FETCH_INTERVAL: Duration = Duration::from_secs(30);
+use batch::Batcher;
+
+/// The delay after which we ask MX again about a map it said it doesn't know.
+///
+/// This answers "has this map been uploaded to MX since?", which happens once, at a moment that
+/// has nothing to do with our traffic: checking often would only flood MX. Whoever knows better
+/// than us that a map just landed on MX can ask for it explicitly instead of waiting for this.
+const UNKNOWN_TIMEOUT: Duration = Duration::from_hours(24);
+/// The delay after which we drop an MX ID we know.
+///
+/// It's much shorter than [`UNKNOWN_TIMEOUT`], which looks backwards but isn't: an MX ID we know
+/// is saved in our database, and that's where it's read from afterwards. These entries only cover
+/// the moment between the answer of MX and the write, so keeping them longer buys nothing.
+const KNOWN_TIMEOUT: Duration = Duration::from_hours(2);
+/// The amount of map UIDs kept in memory. The least recently used ones are dropped past that.
+const MAX_CACHED_MAP_UIDS: u64 = 50_000;
 
 /// Represents an item returned by a request to the MX API related to maps.
 #[derive(serde::Deserialize)]
@@ -61,336 +141,129 @@ pub async fn fetch_mx_mappack_maps(
         .map_err(From::from)
 }
 
-#[derive(serde::Deserialize)]
-#[allow(non_snake_case)]
-struct MxMapIdResult {
-    MapId: i32,
-    MapUid: String,
+/// What we know about the MX ID of a map, without asking MX.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MxIdStatus {
+    /// MX gave us this ID.
+    Known(i32),
+    /// MX told us it doesn't know this map, recently enough for us to still believe it.
+    NotOnMx,
+    /// We have no answer for this map: either we never asked, or the last one expired. A batch may
+    /// be on its way.
+    Unknown,
 }
 
-#[derive(serde::Deserialize)]
-#[allow(non_snake_case)]
-struct MxMapsResult {
-    Results: Vec<MxMapIdResult>,
-}
+/// What MX told us about the map UIDs: their MX ID, or [`None`] for the ones MX doesn't know.
+///
+/// The batching worker is its only writer; the [`MxIdProvider`]s only read it.
+type MxIdCache = Cache<String, Option<i32>>;
 
-trait Sealed {}
+/// How long an answer of MX is worth keeping.
+struct MxIdExpiry;
 
-// This trait is used just for us to test the caching mechanism
-#[allow(private_bounds)]
-pub trait MxSource: Sealed {
-    #[allow(async_fn_in_trait)]
-    async fn fetch_mx_ids(&self, map_uids: &[&str]) -> RecordsResult<HashMap<String, i32>>;
-}
+impl Expiry<String, Option<i32>> for MxIdExpiry {
+    fn expire_after_create(&self, _: &String, mx_id: &Option<i32>, _: Instant) -> Option<Duration> {
+        Some(match mx_id {
+            Some(_) => KNOWN_TIMEOUT,
+            None => UNKNOWN_TIMEOUT,
+        })
+    }
 
-pub struct DefaultMxSource {
-    broker_client: BrokerClient,
-}
-
-impl DefaultMxSource {
-    fn from_client(client: reqwest::Client) -> Self {
-        let (tx, rx) = mpsc::channel(100);
-        tokio::task::spawn(broker_fetch(client, rx));
-        Self {
-            broker_client: BrokerClient { tx },
-        }
+    fn expire_after_update(
+        &self,
+        map_uid: &String,
+        mx_id: &Option<i32>,
+        updated_at: Instant,
+        _: Option<Duration>,
+    ) -> Option<Duration> {
+        // A map UID we had no MX ID for just got one: it's now worth keeping much longer. The
+        // default implementation would keep what's left of its previous, shorter expiration.
+        self.expire_after_create(map_uid, mx_id, updated_at)
     }
 }
 
-impl Sealed for DefaultMxSource {}
-impl MxSource for DefaultMxSource {
+fn new_cache() -> MxIdCache {
+    Cache::builder()
+        .max_capacity(MAX_CACHED_MAP_UIDS)
+        .expire_after(MxIdExpiry)
+        .build()
+}
+
+/// Gives the MX ID of the maps, identified by their UID.
+///
+/// It answers with what we already know, and hands the map UIDs it knows nothing about to a
+/// background worker, which groups them to send at most one request to the MX API every five
+/// seconds. It never waits for that request: those map UIDs are missing from the answer, and the
+/// next calls have them.
+///
+/// Cloning it is cheap, and gives a handle to the same cache and the same worker.
+#[derive(Clone)]
+pub struct MxIdProvider {
+    cache: MxIdCache,
+    batcher: Batcher,
+}
+
+impl MxIdProvider {
+    /// Creates the provider, and spawns the worker batching the requests to the MX API.
+    ///
+    /// This must be called from within a Tokio runtime.
     #[inline]
-    async fn fetch_mx_ids(&self, map_uids: &[&str]) -> RecordsResult<HashMap<String, i32>> {
-        self.broker_client.get_map_ids(map_uids).await
-    }
-}
-
-async fn fetch_mx_map_ids(
-    client: &reqwest::Client,
-    maps_uids: &[&str],
-) -> RecordsResult<HashMap<String, i32>> {
-    const CHUNK_SIZE: usize = 50;
-
-    if maps_uids.is_empty() {
-        return Ok(Default::default());
+    pub fn from_client<S: MxIdSink>(client: reqwest::Client, sink: S) -> Self {
+        Self::spawn(ReqwestMxFetcher::new(client), sink)
     }
 
-    let mut chunks = assert_future_send(stream::iter(maps_uids.chunks(CHUNK_SIZE).enumerate())
-        .map(|(chunk_idx, maps_uids)| async move {
-            let map_uids = fmt::from_fn(|f| {
-                let mut iter = maps_uids.iter();
-                if let Some(first) = iter.next() {
-                    fmt::Display::fmt(first, f)?;
-                }
-                for item in iter {
-                    f.write_str(",")?;
-                    fmt::Display::fmt(item, f)?;
-                }
-                Ok(())
-            });
+    /// Creates the provider on top of the provided fetcher and sink.
+    ///
+    /// This must be called from within a Tokio runtime.
+    pub fn spawn<F: MxFetcher, S: MxIdSink>(fetcher: F, sink: S) -> Self {
+        let cache = new_cache();
+        let batcher = Batcher::spawn(fetcher, sink, cache.clone());
+        Self { cache, batcher }
+    }
 
-            match client
-                .get(format!(
-                    "https://sm.mania.exchange/api/maps?fields=MapId,MapUid&count={CHUNK_SIZE}&uid={map_uids}"
-                ))
-                .header(header::USER_AGENT, crate::MX_USER_AGENT)
-                .send()
-                .await
-            {
-                Ok(res) => match res.json::<MxMapsResult>().await {
-                    Ok(res) => Ok((chunk_idx, res)),
-                    Err(e) => Err(e),
-                },
-                Err(e) => Err(e),
+    /// Returns the MX ID of the provided maps, identified by their UID.
+    ///
+    /// This never waits for the MX API. The map UIDs we know nothing about are handed to the
+    /// batching worker, which fetches them in the background and saves them, so they're missing
+    /// from the returned map even though MX may know them. Calling this again a few seconds later
+    /// gives them.
+    ///
+    /// A map UID missing from the returned map is therefore to be read as "we have no MX ID for
+    /// this map *right now*".
+    pub async fn get_mx_ids_of_map_uids(&self, map_uids: &[&str]) -> HashMap<String, i32> {
+        let mut ret = HashMap::new();
+        let mut map_uids_to_fetch = Vec::new();
+
+        for &map_uid in map_uids {
+            match self.cache.get(map_uid).await {
+                // We already have its MX ID.
+                Some(Some(mx_id)) => {
+                    ret.insert(map_uid.to_owned(), mx_id);
+                }
+                // MX recently told us it doesn't know this map: asking again would be pointless.
+                Some(None) => {}
+                // Either we never saw it, or that answer expired and is worth asking again.
+                None => map_uids_to_fetch.push(map_uid),
             }
-        }).buffer_unordered(10).try_collect::<Vec<_>>()).await?;
-
-    chunks.sort_by_key(|(chunk_idx, _)| *chunk_idx);
-
-    let map_id_results = chunks
-        .into_iter()
-        .flat_map(|(_, results)| results.Results)
-        .map(|result| (result.MapUid, result.MapId))
-        .collect();
-
-    Ok(map_id_results)
-}
-
-#[derive(Debug)]
-struct CachedMxMapId {
-    map_mx_id: Option<i32>,
-    at: Instant,
-}
-
-impl CachedMxMapId {
-    fn is_expired(&self) -> bool {
-        self.at.elapsed() > CACHE_TIMEOUT
-    }
-
-    fn must_be_purged(&self) -> bool {
-        self.at.elapsed() > CACHE_PURGE_INTERVAL
-    }
-}
-
-#[derive(Clone, Default)]
-struct CachedMapUids {
-    inner: Arc<Mutex<HashMap<String, CachedMxMapId>>>,
-}
-
-async fn purge_old_cache(cached: CachedMapUids, notify: Arc<Notify>) {
-    let mut timer = tokio::time::interval(CACHE_PURGE_INTERVAL);
-    // The first tick completes immediately
-    timer.tick().await;
-    loop {
-        timer.tick().await;
-        let mut lock = cached.inner.lock().await;
-        let keys_to_remove = lock
-            .iter()
-            .filter_map(|(map_uid, cached)| {
-                if cached.must_be_purged() {
-                    Some(map_uid.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        for key in keys_to_remove {
-            lock.remove(&key);
-        }
-        notify.notify_waiters();
-    }
-}
-
-struct BrokerRequest {
-    map_uids: Vec<String>,
-    reply_tx: oneshot::Sender<RecordsResult<HashMap<String, i32>>>,
-}
-
-async fn broker_fetch(client: reqwest::Client, mut jobs: mpsc::Receiver<BrokerRequest>) {
-    let Some(BrokerRequest { map_uids, reply_tx }) = jobs.recv().await else {
-        return;
-    };
-
-    let result = fetch_mx_map_ids(
-        &client,
-        map_uids
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .as_slice(),
-    )
-    .await;
-
-    let _ = reply_tx.send(result);
-
-    let mut collected_map_uids = Vec::new();
-    let mut last_fetch_at = Instant::now();
-
-    loop {
-        let Some(BrokerRequest { map_uids, reply_tx }) = jobs.recv().await else {
-            return;
-        };
-        collected_map_uids.extend_from_slice(&map_uids);
-
-        if last_fetch_at.elapsed() < DEBOUNCE_FETCH_INTERVAL {
-            let _ = reply_tx.send(Ok(Default::default()));
-            continue;
         }
 
-        let result = fetch_mx_map_ids(
-            &client,
-            collected_map_uids
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .await;
-        let _ = reply_tx.send(result);
-
-        collected_map_uids.clear();
-        last_fetch_at = Instant::now();
-    }
-}
-
-struct BrokerClient {
-    tx: mpsc::Sender<BrokerRequest>,
-}
-
-impl BrokerClient {
-    async fn get_map_ids(&self, map_uids: &[&str]) -> RecordsResult<HashMap<String, i32>> {
-        let (tx, rx) = oneshot::channel();
-        let request = BrokerRequest {
-            map_uids: map_uids.iter().copied().map(str::to_owned).collect(),
-            reply_tx: tx,
-        };
-
-        if self.tx.send(request).await.is_err() {
-            return Ok(Default::default());
+        if !map_uids_to_fetch.is_empty() {
+            self.batcher.schedule(&map_uids_to_fetch).await;
         }
 
-        match rx.await {
-            Ok(res) => res,
-            Err(_) => Ok(Default::default()),
+        ret
+    }
+
+    /// Tells what we know about the MX ID of a map, identified by its UID.
+    ///
+    /// This asks MX nothing, and schedules nothing: it only reports what we have. It's meant for
+    /// telling apart "MX doesn't have this map" from "we haven't got an answer yet", which look
+    /// the same in [`get_mx_ids`](Self::get_mx_ids_of_map_uids).
+    pub async fn status_of(&self, map_uid: &str) -> MxIdStatus {
+        match self.cache.get(map_uid).await {
+            Some(Some(mx_id)) => MxIdStatus::Known(mx_id),
+            Some(None) => MxIdStatus::NotOnMx,
+            None => MxIdStatus::Unknown,
         }
-    }
-}
-
-struct SharedCachedMxMapIds<S: MxSource> {
-    source: S,
-    cached: CachedMapUids,
-}
-
-pub struct CachedMxMapIds<S: MxSource = DefaultMxSource>(Arc<SharedCachedMxMapIds<S>>);
-
-impl Clone for CachedMxMapIds {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl CachedMxMapIds {
-    pub fn from_client(client: reqwest::Client) -> Self {
-        Self::from_source(DefaultMxSource::from_client(client))
-    }
-}
-
-impl<S: MxSource> CachedMxMapIds<S> {
-    fn from_source(source: S) -> Self {
-        let (this, _) = Self::from_source_with_notify(source);
-        this
-    }
-
-    // Used for testing
-    fn from_source_with_notify(source: S) -> (Self, Arc<Notify>) {
-        let cached = CachedMapUids::default();
-        let notify = Arc::new(Notify::new());
-        tokio::task::spawn(purge_old_cache(Clone::clone(&cached), Arc::clone(&notify)));
-        (
-            Self(Arc::new(SharedCachedMxMapIds { source, cached })),
-            notify,
-        )
-    }
-
-    /// Fetches the MX ID of the provided maps, identified by their UID, from the MX API.
-    pub async fn get_map_ids(&self, map_uids: &[&str]) -> RecordsResult<HashMap<String, i32>> {
-        let mut locked_map = self.0.cached.inner.lock().await;
-
-        // The purpose of caching the fetch of the MX IDs is mainly because if MX didn't return
-        // any ID for a given map UID, it probably won't return one for the next minutes.
-        //
-        // Therefore, we also don't re-fetch the MX IDs of the maps UIDs when we previously got
-        // their MX IDs, because the MX ID will probably not change for a given map UID.
-        //
-        // Furthermore, with the cache purge, there should mainly be map UIDs with no MX ID in
-        // the internal hash map, since this method should be called after having checked that we
-        // didn't save the MX ID in the API DB.
-
-        // 1. We filter the map UIDs we want to fetch, meaning those that we haven't cached yet,
-        //    or whose cache is too old and without MX ID. If every map UID is already cached, then
-        //    this is empty.
-        let map_uids_to_fetch = map_uids
-            .iter()
-            .copied()
-            .filter(|map_uid| !locked_map.contains_key(*map_uid))
-            .chain(locked_map.iter().filter_map(|(map_uid, cached)| {
-                if map_uids.contains(&map_uid.as_str())
-                    && cached.is_expired()
-                    && cached.map_mx_id.is_none()
-                {
-                    Some(map_uid.as_str())
-                } else {
-                    None
-                }
-            }))
-            .collect::<Vec<_>>();
-
-        // 2. We fetch the MX IDs of the requested map UIDs, and update the cached based on the fetch
-        //    result. This step is noop if every map UID is already cached.
-        let fetch_result = self.0.source.fetch_mx_ids(&map_uids_to_fetch).await?;
-        let now = Instant::now();
-        let updated_cache = fetch_result
-            .iter()
-            .map(|(map_uid, mx_id)| {
-                (
-                    map_uid.clone(),
-                    CachedMxMapId {
-                        at: now,
-                        map_mx_id: Some(*mx_id),
-                    },
-                )
-            })
-            .chain(
-                map_uids_to_fetch
-                    .into_iter()
-                    .map(str::to_owned)
-                    // Need to collect first to not keep the borrow on lock
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .filter(|map_uid| !fetch_result.contains_key(map_uid))
-                    .map(|map_uid| {
-                        (
-                            map_uid,
-                            CachedMxMapId {
-                                at: now,
-                                map_mx_id: None,
-                            },
-                        )
-                    }),
-            );
-        for (map_uid, cached) in updated_cache {
-            locked_map.insert(map_uid, cached);
-        }
-
-        // 3. Map our internal hash map to the returned one. If every map UID was cached, this is
-        //    really what's going to be returned.
-        let result = locked_map
-            .iter()
-            .filter(|(map_uid, _)| map_uids.contains(&map_uid.as_str()))
-            .filter_map(|(map_uid, cached)| cached.map_mx_id.map(|mx_id| (map_uid.clone(), mx_id)))
-            .collect();
-
-        Ok(result)
     }
 }

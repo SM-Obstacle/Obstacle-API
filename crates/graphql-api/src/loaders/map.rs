@@ -2,19 +2,15 @@ use std::collections::HashMap;
 
 use async_graphql::dataloader::Loader;
 use entity::maps;
-use mx_layer::maps::CachedMxMapIds;
-use records_lib::sync;
-use sea_orm::{
-    ActiveValue::Set, ColumnTrait as _, ConnectionTrait, DbConn, DbErr, EntityTrait as _,
-    QueryFilter as _, QuerySelect,
-};
+use mx_layer::maps::MxIdProvider;
+use sea_orm::{ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, QueryFilter as _};
 
 use crate::{
     error::{ApiGqlError, GqlResult},
     objects::map::Map,
 };
 
-pub struct MapLoader(pub DbConn, pub CachedMxMapIds);
+pub struct MapLoader(pub DbConn, pub MxIdProvider);
 
 async fn load_maps<C: ConnectionTrait>(conn: &C, keys: &[u32]) -> GqlResult<HashMap<u32, Map>> {
     let hashmap = maps::Entity::find()
@@ -33,54 +29,35 @@ impl Loader<u32> for MapLoader {
     type Error = ApiGqlError;
 
     async fn load(&self, keys: &[u32]) -> Result<HashMap<u32, Self::Value>, Self::Error> {
-        let maps_without_mx_id = maps::Entity::find()
-            .filter(
-                maps::Column::MxId
-                    .is_null()
-                    .and(maps::Column::Id.is_in(keys.iter().copied())),
-            )
-            .select_only()
-            .columns([maps::Column::Id, maps::Column::GameId])
-            .into_tuple::<(u32, String)>()
-            .all(&self.0)
-            .await?;
+        let mut maps = load_maps(&self.0, keys).await?;
 
-        let map_uids_without_mx_id = maps_without_mx_id
-            .iter()
-            .map(|(_, map_uid)| map_uid.as_str())
+        // Loading a list of maps is a good opportunity to ask for the MX ID of those we don't have
+        // yet: the website usually shows a list of maps, then the details of one of them, which
+        // includes its MX ID. Asking for them here means they're already fetched by the time
+        // somebody actually asks for one.
+        //
+        // This waits for at most one request to MX, and never for its batching window. Saving what
+        // it brings back in our database is the provider's job, not ours.
+        let map_uids_without_mx_id = maps
+            .values()
+            .filter(|map| map.inner.mx_id.is_none())
+            .map(|map| map.inner.game_id.as_str())
             .collect::<Vec<_>>();
 
         if map_uids_without_mx_id.is_empty() {
-            return load_maps(&self.0, keys).await;
+            return Ok(maps);
         }
 
-        let mx_id_map = self.1.get_map_ids(&map_uids_without_mx_id).await?;
-        let mut maps_with_mx_id = maps_without_mx_id
-            .into_iter()
-            .filter_map(|(map_id, map_uid)| {
-                mx_id_map.get(&map_uid).map(|mx_id| maps::ActiveModel {
-                    id: Set(map_id),
-                    mx_id: Set(Some(*mx_id)),
-                    ..Default::default()
-                })
-            })
-            .peekable();
+        let mx_ids = self.1.get_mx_ids_of_map_uids(&map_uids_without_mx_id).await;
 
-        // We don't really bother ourselves here in order to do an SQL batch update...
-        // we just do a transaction for each chunk
-        while maps_with_mx_id.peek().is_some() {
-            sync::transaction(&self.0, async |txn| {
-                for _ in 0..100 {
-                    let Some(update) = maps_with_mx_id.next() else {
-                        break;
-                    };
-                    maps::Entity::update(update).exec(txn).await?;
-                }
-                Ok::<_, DbErr>(())
-            })
-            .await?;
+        // The maps we return must hold them too, otherwise the `mxId` field would ask for them
+        // again for nothing.
+        for map in maps.values_mut() {
+            if let Some(&mx_id) = mx_ids.get(&map.inner.game_id) {
+                map.inner.mx_id = Some(mx_id);
+            }
         }
 
-        load_maps(&self.0, keys).await
+        Ok(maps)
     }
 }

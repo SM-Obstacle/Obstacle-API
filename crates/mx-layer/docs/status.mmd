@@ -1,0 +1,16 @@
+sequenceDiagram
+    participant Client
+    participant A as MX ID Provider
+    participant Cache as moka Cache
+
+    Client->>A: status_of(map_uid)
+    A->>Cache: get(map_uid)
+    Cache-->>A: cache entry
+    alt Some(Some(mx_id))
+        A-->>Client: Known(mx_id)
+    else Some(None)
+        A-->>Client: NotOnMx
+    else None
+        A-->>Client: Unknown
+    end
+    Note over A: reports only: asks MX nothing<br/>and schedules nothing
