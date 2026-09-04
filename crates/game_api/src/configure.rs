@@ -235,7 +235,22 @@ impl tracing_actix_web::RootSpanBuilder for RootSpanBuilder {
     }
 }
 
-pub fn configure(cfg: &mut web::ServiceConfig, db: Database, records_notifier: RecordsNotifier) {
+/// The parts of the application which every worker must share.
+///
+/// [`configure`] runs once per worker thread, so anything it builds is one per worker. For the MX
+/// ID provider that would be wrong twice over: each worker would answer from a cache the others
+/// never see, and each would enforce the "one request every few seconds" rate limit on its own,
+/// so the MX API would take as many requests as there are workers.
+///
+/// Cloning this is cheap: both fields are handles to the same thing.
+#[derive(Clone)]
+pub struct SharedState {
+    client: reqwest::Client,
+    mx_ids: MxIdProvider,
+}
+
+/// Builds what every worker shares. This must be called once, before the workers are started.
+pub fn shared_state(db: &Database) -> SharedState {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .read_timeout(Duration::from_secs(10))
@@ -247,6 +262,15 @@ pub fn configure(cfg: &mut web::ServiceConfig, db: Database, records_notifier: R
         crate::DbMxIdSink::new(clone_dbconn(&db.sql_conn)),
     );
 
+    SharedState { client, mx_ids }
+}
+
+pub fn configure(
+    cfg: &mut web::ServiceConfig,
+    db: Database,
+    records_notifier: RecordsNotifier,
+    SharedState { client, mx_ids }: SharedState,
+) {
     let records_subscription = records_notifier.get_subscription();
 
     cfg.app_data(web::Data::new(crate::AuthState::default()))

@@ -622,13 +622,12 @@ where
             query
                 .apply_if(filter.player_login, |query, login| {
                     query.and_where(
-                        Expr::col(("player", players::Column::Login)).like(format!("%{login}%")),
+                        login.to_condition(Expr::col(("player", players::Column::Login))),
                     );
                 })
                 .apply_if(filter.player_name, |query, name| {
                     query.and_where(
-                        Expr::col(("player", players::Column::UnstyledName))
-                            .like(format!("%{name}%")),
+                        name.to_condition(Expr::col(("player", players::Column::UnstyledName))),
                     );
                 });
         })
@@ -777,25 +776,22 @@ where
                         )
                         .apply_if(filter.player_login, |query, login| {
                             query.and_where(
-                                Expr::col(("author", players::Column::Login))
-                                    .like(format!("%{login}%")),
+                                login.to_condition(Expr::col(("author", players::Column::Login))),
                             );
                         })
                         .apply_if(filter.player_name, |query, name| {
-                            query.and_where(
-                                Expr::col(("author", players::Column::UnstyledName))
-                                    .like(format!("%{name}%")),
-                            );
+                            query.and_where(name.to_condition(Expr::col((
+                                "author",
+                                players::Column::UnstyledName,
+                            ))));
                         });
                 })
                 .apply_if(filter.map_uid, |query, uid| {
-                    query.and_where(
-                        Expr::col(("map", maps::Column::GameId)).like(format!("%{uid}%")),
-                    );
+                    query.and_where(uid.to_condition(Expr::col(("map", maps::Column::GameId))));
                 })
                 .apply_if(filter.map_name, |query, name| {
                     query.and_where(
-                        Expr::col(("map", maps::Column::UnstyledName)).like(format!("%{name}%")),
+                        name.to_condition(Expr::col(("map", maps::Column::UnstyledName))),
                     );
                 });
         })

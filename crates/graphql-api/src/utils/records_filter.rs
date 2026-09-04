@@ -94,41 +94,37 @@ where
     if let Some(filter) = &filter.player {
         // Apply player login filter
         if let Some(login) = &filter.player_login {
-            query =
-                query.filter(Expr::col(("p", players::Column::Login)).like(format!("%{login}%")));
+            query = query.filter(login.to_condition(Expr::col(("p", players::Column::Login))));
         }
 
         // Apply player name filter
         if let Some(name) = &filter.player_name {
-            query = query
-                .filter(Expr::col(("p", players::Column::UnstyledName)).like(format!("%{name}%")));
+            query =
+                query.filter(name.to_condition(Expr::col(("p", players::Column::UnstyledName))));
         }
     }
 
     if let Some(filter) = &filter.map {
         // Apply map UID filter
         if let Some(uid) = &filter.map_uid {
-            query = query.filter(Expr::col(("m", maps::Column::GameId)).like(format!("%{uid}%")));
+            query = query.filter(uid.to_condition(Expr::col(("m", maps::Column::GameId))));
         }
 
         // Apply map name filter
         if let Some(name) = &filter.map_name {
-            query = query
-                .filter(Expr::col(("m", maps::Column::UnstyledName)).like(format!("%{name}%")));
+            query = query.filter(name.to_condition(Expr::col(("m", maps::Column::UnstyledName))));
         }
 
         if let Some(filter) = &filter.author {
             // Apply player login filter
             if let Some(login) = &filter.player_login {
-                query = query
-                    .filter(Expr::col(("p2", players::Column::Login)).like(format!("%{login}%")));
+                query = query.filter(login.to_condition(Expr::col(("p2", players::Column::Login))));
             }
 
             // Apply player name filter
             if let Some(name) = &filter.player_name {
-                query = query.filter(
-                    Expr::col(("p2", players::Column::UnstyledName)).like(format!("%{name}%")),
-                );
+                query = query
+                    .filter(name.to_condition(Expr::col(("p2", players::Column::UnstyledName))));
             }
         }
     }

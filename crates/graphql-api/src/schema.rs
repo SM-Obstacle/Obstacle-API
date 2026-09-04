@@ -14,7 +14,8 @@ use crate::{
         map_score::MapScoreLoader, player::PlayerLoader, player_role::PlayerRoleLoader,
         player_score::PlayerScoreLoader, rating_kind::RatingKindLoader, try_count::TryCountLoader,
     },
-    objects::{mutation_root::MutationRoot, root::QueryRoot},
+    mutations::root::MutationRoot,
+    objects::root::QueryRoot,
     subscriptions::root::SubscriptionRoot,
     utils::force_fetch::ForceFetchBudgetExtension,
 };

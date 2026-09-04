@@ -261,3 +261,16 @@ async fn force_fetch_doesnt_spend_the_batching_window() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// A forced fetch which finds nothing must be remembered like any other answer, otherwise the
+/// website keeps offering to look for a map ManiaExchange has just said it doesn't have.
+#[tokio::test(start_paused = true)]
+async fn a_forced_fetch_that_finds_nothing_is_remembered() -> anyhow::Result<()> {
+    let mx = FakeMx::default();
+    let provider = MxIdProvider::spawn(mx.clone(), ());
+
+    assert_eq!(provider.force_fetch("foo").await?, None);
+    assert_eq!(provider.status_of("foo").await, MxIdStatus::NotOnMx);
+
+    Ok(())
+}

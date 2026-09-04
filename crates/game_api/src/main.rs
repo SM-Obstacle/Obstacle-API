@@ -84,6 +84,9 @@ async fn main() -> anyhow::Result<()> {
 
     let records_notifier = RecordsNotifier::default();
 
+    // Built here, and not in the application factory below, which runs once per worker thread.
+    let shared_state = configure::shared_state(&db);
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .supports_credentials()
@@ -118,7 +121,14 @@ async fn main() -> anyhow::Result<()> {
                 ))
                 .build(),
             )
-            .configure(|cfg| configure::configure(cfg, db.clone(), records_notifier.clone()))
+            .configure(|cfg| {
+                configure::configure(
+                    cfg,
+                    db.clone(),
+                    records_notifier.clone(),
+                    shared_state.clone(),
+                )
+            })
     })
     .bind(("0.0.0.0", game_api_lib::env().port.get()))
     .context("Cannot bind address")?
