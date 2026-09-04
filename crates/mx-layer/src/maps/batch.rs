@@ -10,6 +10,10 @@
 //! down by a task of its own — the cache first, then the [`MxIdSink`]. Callers get it from the
 //! cache on their next call.
 //!
+//! The exception is [`Batcher::force`], for the rare case where somebody explicitly asks us to go
+//! and look now. It goes straight to MX without waiting for the window, and without spending it
+//! either: it's meant to be triggered by a person, not by our own traffic.
+//!
 //! The worker is the only owner of that rhythm, and the only thing which talks to MX. It never
 //! waits for MX either: a batch is sent by a task of its own, so the worker keeps taking the map
 //! UIDs which come in while MX is thinking.
@@ -20,10 +24,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{StreamExt as _, TryStreamExt as _, stream};
-use records_lib::{assert_future_send, error::RecordsResult};
+use records_lib::{
+    assert_future_send,
+    error::{RecordsError, RecordsResult},
+};
 use reqwest::header;
 use tokio::{
-    sync::mpsc,
+    sync::{mpsc, oneshot},
     time::{Instant, MissedTickBehavior},
 };
 
@@ -165,6 +172,17 @@ async fn fetch_mx_map_ids<'a>(
         .collect())
 }
 
+/// What the worker is asked to do.
+enum Job {
+    /// Fetch these map UIDs whenever the next batch leaves.
+    Schedule(Vec<String>),
+    /// Fetch this one right now, and send the answer back: somebody is waiting for it.
+    Force {
+        map_uid: String,
+        reply_tx: oneshot::Sender<RecordsResult<Option<i32>>>,
+    },
+}
+
 /// Everything a batch needs once it left the worker.
 struct Sending<F, S> {
     fetcher: F,
@@ -206,12 +224,43 @@ async fn send_batch<F: MxFetcher, S: MxIdSink>(
     }
 }
 
+/// Asks MX about a single map UID right now, for somebody who's waiting for it.
+///
+/// Like [`send_batch`], this runs in a task of its own, so that the worker keeps taking map UIDs
+/// while MX is thinking.
+async fn force_fetch<F: MxFetcher, S: MxIdSink>(
+    sending: Arc<Sending<F, S>>,
+    map_uid: String,
+    reply_tx: oneshot::Sender<RecordsResult<Option<i32>>>,
+) {
+    let results = match sending.fetcher.fetch_mx_ids(&[&map_uid]).await {
+        Ok(results) => results,
+        Err(e) => {
+            let _ = reply_tx.send(Err(e));
+            return;
+        }
+    };
+
+    let mx_id = results.get(&map_uid).copied();
+
+    // Same order as a batch: the cache, then whoever is waiting, then our database.
+    sending.cache.insert(map_uid, mx_id).await;
+
+    let _ = reply_tx.send(Ok(mx_id));
+
+    if !results.is_empty()
+        && let Err(e) = sending.sink.store(&results).await
+    {
+        tracing::error!("couldn't save the MX ID of a map: {e}");
+    }
+}
+
 /// The worker grouping the requests to the MX API. See the [module documentation](self).
 async fn run_worker<F: MxFetcher, S: MxIdSink>(
     fetcher: F,
     sink: S,
     cache: MxIdCache,
-    mut jobs: mpsc::Receiver<Vec<String>>,
+    mut jobs: mpsc::Receiver<Job>,
 ) {
     let sending = Arc::new(Sending {
         fetcher,
@@ -235,17 +284,30 @@ async fn run_worker<F: MxFetcher, S: MxIdSink>(
         loop {
             tokio::select! {
                 biased;
-                map_uids = jobs.recv() => {
-                    let Some(map_uids) = map_uids else {
+                job = jobs.recv() => {
+                    let Some(job) = job else {
                         closed = true;
                         break;
                     };
 
-                    batch.extend(map_uids);
+                    match job {
+                        Job::Schedule(map_uids) => {
+                            batch.extend(map_uids);
 
-                    // Nothing was sent to MX for a while: no reason to hold this batch.
-                    if last_fetch_at.is_none_or(|at| at.elapsed() >= FLUSH_INTERVAL) {
-                        break;
+                            // Nothing was sent to MX for a while: no reason to hold this batch.
+                            if last_fetch_at.is_none_or(|at| at.elapsed() >= FLUSH_INTERVAL) {
+                                break;
+                            }
+                        }
+                        // Somebody is waiting for this one, so it doesn't wait for our window.
+                        // It doesn't spend it either: it isn't our traffic, it's a person asking.
+                        Job::Force { map_uid, reply_tx } => {
+                            tokio::task::spawn(force_fetch(
+                                Arc::clone(&sending),
+                                map_uid,
+                                reply_tx,
+                            ));
+                        }
                     }
                 }
                 // The window is over: what we collected leaves.
@@ -270,7 +332,7 @@ async fn run_worker<F: MxFetcher, S: MxIdSink>(
 /// A handle to the batching worker.
 #[derive(Clone)]
 pub(super) struct Batcher {
-    tx: mpsc::Sender<Vec<String>>,
+    tx: mpsc::Sender<Job>,
 }
 
 impl Batcher {
@@ -292,8 +354,32 @@ impl Batcher {
     pub(super) async fn schedule(&self, map_uids: &[&str]) {
         let map_uids = map_uids.iter().copied().map(str::to_owned).collect();
 
-        if self.tx.send(map_uids).await.is_err() {
+        if self.tx.send(Job::Schedule(map_uids)).await.is_err() {
             tracing::error!("the MX batching worker is gone");
         }
+    }
+
+    /// Asks MX about a single map UID right now, and waits for its answer.
+    ///
+    /// This skips the batching window entirely, so it costs a request to MX every time. It's meant
+    /// for someone explicitly asking us to look, never for our own traffic.
+    pub(super) async fn force(&self, map_uid: &str) -> RecordsResult<Option<i32>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let job = Job::Force {
+            map_uid: map_uid.to_owned(),
+            reply_tx,
+        };
+
+        if self.tx.send(job).await.is_err() {
+            return Err(RecordsError::Internal(
+                "the MX batching worker is gone".to_owned(),
+            ));
+        }
+
+        reply_rx.await.unwrap_or_else(|_| {
+            Err(RecordsError::Internal(
+                "the MX batching worker dropped a request".to_owned(),
+            ))
+        })
     }
 }

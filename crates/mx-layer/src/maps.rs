@@ -254,6 +254,23 @@ impl MxIdProvider {
         ret
     }
 
+    /// Asks MX about a map right now, and saves what it answers.
+    ///
+    /// Unlike [`get_mx_ids_of_map_uids`](Self::get_mx_ids_of_map_uids), this waits for MX, skips the batching window, and
+    /// ignores a cached "MX doesn't have this map": it's meant for someone who explicitly asks us
+    /// to look again, and who knows better than our cache does. It therefore costs a request to
+    /// the MX API every time, and mustn't be driven by our own traffic.
+    ///
+    /// Returns [`None`] when MX doesn't have this map.
+    pub async fn force_fetch(&self, map_uid: &str) -> RecordsResult<Option<i32>> {
+        // There's nothing to force if we already have its MX ID.
+        if let Some(Some(mx_id)) = self.cache.get(map_uid).await {
+            return Ok(Some(mx_id));
+        }
+
+        self.batcher.force(map_uid).await
+    }
+
     /// Tells what we know about the MX ID of a map, identified by its UID.
     ///
     /// This asks MX nothing, and schedules nothing: it only reports what we have. It's meant for

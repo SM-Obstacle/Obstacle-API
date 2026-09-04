@@ -173,3 +173,91 @@ async fn status_tells_a_map_absent_from_mx_from_one_we_havent_asked_about() {
     // And asking doesn't schedule anything: it only reports.
     assert_eq!(mx.call_count(), 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn force_fetch_goes_to_mx_right_away() -> anyhow::Result<()> {
+    let mx = FakeMx::new([("foo", 42), ("bar", 1337)]);
+    let sink = FakeSink::default();
+    let provider = MxIdProvider::spawn(mx.clone(), sink.clone());
+
+    // This opens the batching window.
+    provider.get_mx_ids_of_map_uids(&["foo"]).await;
+    settle().await;
+
+    // Which the forced fetch doesn't wait for.
+    let at = Instant::now();
+    assert_eq!(provider.force_fetch("bar").await?, Some(1337));
+    assert_eq!(at.elapsed(), Duration::ZERO);
+
+    assert_eq!(mx.calls(), [["foo"], ["bar"]]);
+    // And it's written down like any other answer.
+    assert_eq!(provider.cached("bar").await, Some(Some(1337)));
+    assert_eq!(sink.stored(), [ids([("foo", 42)]), ids([("bar", 1337)])]);
+
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn force_fetch_ignores_a_cached_absence() -> anyhow::Result<()> {
+    let mx = FakeMx::default();
+    let provider = MxIdProvider::spawn(mx.clone(), ());
+
+    provider.get_mx_ids_of_map_uids(&["foo"]).await;
+    settle().await;
+    assert_eq!(provider.cached("foo").await, Some(None));
+
+    // The map lands on MX. We have no way of knowing, and our cached answer says otherwise for
+    // the next 24 hours.
+    mx.add("foo", 42);
+    assert!(provider.get_mx_ids_of_map_uids(&["foo"]).await.is_empty());
+    settle().await;
+    assert_eq!(mx.call_count(), 1);
+
+    // That's exactly what a forced fetch is for.
+    assert_eq!(provider.force_fetch("foo").await?, Some(42));
+    assert_eq!(mx.calls(), [["foo"], ["foo"]]);
+    assert_eq!(
+        provider.get_mx_ids_of_map_uids(&["foo"]).await,
+        ids([("foo", 42)])
+    );
+
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn force_fetch_doesnt_ask_for_what_we_already_know() -> anyhow::Result<()> {
+    let mx = FakeMx::new([("foo", 42)]);
+    let provider = MxIdProvider::spawn(mx.clone(), ());
+
+    provider.get_mx_ids_of_map_uids(&["foo"]).await;
+    settle().await;
+
+    assert_eq!(provider.force_fetch("foo").await?, Some(42));
+    assert_eq!(mx.call_count(), 1);
+
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn force_fetch_doesnt_spend_the_batching_window() -> anyhow::Result<()> {
+    let mx = FakeMx::new([("foo", 42), ("bar", 1337), ("baz", 7)]);
+    let provider = MxIdProvider::spawn(mx.clone(), ());
+
+    // The window opens here, so it closes 5 seconds from now.
+    provider.get_mx_ids_of_map_uids(&["foo"]).await;
+    settle().await;
+
+    tokio::time::advance(FLUSH_INTERVAL / 2).await;
+    provider.force_fetch("bar").await?;
+    provider.get_mx_ids_of_map_uids(&["baz"]).await;
+    settle().await;
+    assert_eq!(mx.call_count(), 2);
+
+    // `baz` must leave one window after `foo`, not after the forced fetch: a person asking us to
+    // look isn't our own traffic, so it doesn't push the window.
+    tokio::time::advance(FLUSH_INTERVAL / 2).await;
+    settle().await;
+    assert_eq!(mx.calls(), [["foo"], ["bar"], ["baz"]]);
+
+    Ok(())
+}

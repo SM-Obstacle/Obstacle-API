@@ -24,8 +24,9 @@ pub(super) async fn settle() {
 
 #[derive(Default)]
 struct FakeMxInner {
-    /// The map UIDs this fake MX knows about.
-    known: HashMap<String, i32>,
+    /// The map UIDs this fake MX knows about. Behind a lock, because a map may be uploaded to MX
+    /// while a test is running.
+    known: Mutex<HashMap<String, i32>>,
     /// The batches received so far, each one with its map UIDs sorted.
     calls: Mutex<Vec<Vec<String>>>,
     /// How long a batch takes to be answered.
@@ -47,7 +48,7 @@ impl FakeMx {
     /// A fake MX taking `latency` to answer, to observe what happens while a batch is in flight.
     pub(super) fn with_latency<const N: usize>(known: [(&str, i32); N], latency: Duration) -> Self {
         Self(Arc::new(FakeMxInner {
-            known: ids(known),
+            known: Mutex::new(ids(known)),
             latency,
             ..Default::default()
         }))
@@ -59,6 +60,15 @@ impl FakeMx {
             failing: true,
             ..Default::default()
         }))
+    }
+
+    /// Uploads a map to this fake MX, which didn't have it until now.
+    pub(super) fn add(&self, map_uid: &str, mx_id: i32) {
+        self.0
+            .known
+            .lock()
+            .unwrap()
+            .insert(map_uid.to_owned(), mx_id);
     }
 
     /// The batches received so far, in order, each one with its map UIDs sorted.
@@ -95,9 +105,11 @@ impl MxFetcher for FakeMx {
                 return Err(RecordsError::Internal("MX is down".to_owned()));
             }
 
+            let known = self.0.known.lock().unwrap();
+
             Ok(map_uids
                 .iter()
-                .filter_map(|map_uid| Some(((*map_uid).to_owned(), *self.0.known.get(*map_uid)?)))
+                .filter_map(|map_uid| Some(((*map_uid).to_owned(), *known.get(*map_uid)?)))
                 .collect())
         }
     }

@@ -1,5 +1,6 @@
 pub mod checkpoint_time;
 pub mod medal_times;
+pub mod mutation_root;
 pub mod ranked_record;
 pub mod root;
 

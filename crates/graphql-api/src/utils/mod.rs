@@ -2,6 +2,7 @@ use entity::ranking_period;
 use sea_orm::{ConnectionTrait, EntityTrait as _, QueryOrder as _, QuerySelect as _};
 
 pub mod connection_input;
+pub mod force_fetch;
 pub mod page_input;
 pub mod pagination_result;
 pub mod records_filter;

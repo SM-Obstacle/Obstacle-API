@@ -69,10 +69,10 @@ async fn the_window_is_measured_from_the_last_batch_not_from_the_worker_start() 
     let mx = FakeMx::new([("a", 1), ("b", 2)]);
     let (batcher, _cache, _sink) = spawn_worker(&mx);
 
-    // Let the worker start, so that its interval is due to fire at 5s, 10s...
+    // Let the worker start, so that its interval is due to fire one window from now...
     settle().await;
-    // ...then let two seconds pass without anything happening.
-    tokio::time::advance(Duration::from_secs(2)).await;
+    // ...then let half a window pass without anything happening.
+    tokio::time::advance(FLUSH_INTERVAL / 2).await;
     settle().await;
 
     // ...and this batch leaves right away, off that grid.
@@ -81,14 +81,14 @@ async fn the_window_is_measured_from_the_last_batch_not_from_the_worker_start() 
     batcher.schedule(&["b"]).await;
     settle().await;
 
-    // The grid would fire here, only 3 seconds after the batch above. It mustn't: the window is
-    // measured from the last batch, otherwise two requests leave MX a few milliseconds apart.
-    tokio::time::advance(Duration::from_secs(3)).await;
+    // The grid would fire here, only half a window after the batch above. It mustn't: the window
+    // is measured from the last batch, otherwise two requests leave MX moments apart.
+    tokio::time::advance(FLUSH_INTERVAL / 2).await;
     settle().await;
     assert_eq!(mx.call_count(), 1);
 
-    // 5 seconds after the batch, though, `b` does leave.
-    tokio::time::advance(Duration::from_secs(2)).await;
+    // A whole window after that batch, though, `b` does leave.
+    tokio::time::advance(FLUSH_INTERVAL / 2).await;
     settle().await;
     assert_eq!(mx.calls(), [["a"], ["b"]]);
 }

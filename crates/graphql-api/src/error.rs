@@ -85,6 +85,7 @@ pub enum ApiGqlErrorKind {
     RecordNotFound { record_id: u32 },
     MapNotFound { map_uid: String },
     PlayerNotFound { login: String },
+    MxIdForceFetchLimit,
 }
 
 impl fmt::Display for ApiGqlErrorKind {
@@ -106,6 +107,10 @@ impl fmt::Display for ApiGqlErrorKind {
             ApiGqlErrorKind::PlayerNotFound { login } => {
                 write!(f, "player with login `{login}` not found")
             }
+            ApiGqlErrorKind::MxIdForceFetchLimit => f.write_str(
+                "the `forceFetchMxId` mutation costs a request to the ManiaExchange API, \
+                so it can only be used once per request.",
+            ),
         }
     }
 }
@@ -119,6 +124,7 @@ impl std::error::Error for ApiGqlErrorKind {
             ApiGqlErrorKind::RecordNotFound { .. } => None,
             ApiGqlErrorKind::MapNotFound { .. } => None,
             ApiGqlErrorKind::PlayerNotFound { .. } => None,
+            ApiGqlErrorKind::MxIdForceFetchLimit => None,
         }
     }
 }
@@ -162,6 +168,12 @@ impl ApiGqlError {
     pub(crate) fn from_player_not_found_error(login: String) -> Self {
         Self {
             inner: Arc::new(ApiGqlErrorKind::PlayerNotFound { login }),
+        }
+    }
+
+    pub(crate) fn from_mx_id_force_fetch_limit() -> Self {
+        Self {
+            inner: Arc::new(ApiGqlErrorKind::MxIdForceFetchLimit),
         }
     }
 }

@@ -1,6 +1,4 @@
-use async_graphql::{
-    EmptyMutation, SchemaBuilder, dataloader::DataLoader, extensions::ApolloTracing,
-};
+use async_graphql::{SchemaBuilder, dataloader::DataLoader, extensions::ApolloTracing};
 use mx_layer::maps::MxIdProvider;
 use records_lib::{
     Database,
@@ -16,16 +14,19 @@ use crate::{
         map_score::MapScoreLoader, player::PlayerLoader, player_role::PlayerRoleLoader,
         player_score::PlayerScoreLoader, rating_kind::RatingKindLoader, try_count::TryCountLoader,
     },
-    objects::root::QueryRoot,
+    objects::{mutation_root::MutationRoot, root::QueryRoot},
     subscriptions::root::SubscriptionRoot,
+    utils::force_fetch::ForceFetchBudgetExtension,
 };
 
-pub type Schema = async_graphql::Schema<QueryRoot, EmptyMutation, SubscriptionRoot>;
+pub type Schema = async_graphql::Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
 
 fn create_schema_impl(
     records_sub: LatestRecordsSubscription,
-) -> SchemaBuilder<QueryRoot, EmptyMutation, SubscriptionRoot> {
-    async_graphql::Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot::new(records_sub))
+) -> SchemaBuilder<QueryRoot, MutationRoot, SubscriptionRoot> {
+    // Every schema needs it, otherwise the `forceFetchMxId` field has no budget to spend.
+    async_graphql::Schema::build(QueryRoot, MutationRoot, SubscriptionRoot::new(records_sub))
+        .extension(ForceFetchBudgetExtension)
 }
 
 pub fn create_schema_standalone() -> Schema {
