@@ -13,6 +13,8 @@ pub mod polite;
 #[cfg(test)]
 mod fakes;
 
+use std::sync::Arc;
+
 use mappacks::MappackProvider;
 use maps::{MxIdProvider, MxIdSink, MxMapProvider};
 
@@ -36,10 +38,11 @@ impl MxLayer {
     ///
     /// This must be called from within a Tokio runtime.
     pub fn new<S: MxIdSink>(client: reqwest::Client, mx_id_sink: S) -> Self {
+        let sink = Arc::new(mx_id_sink);
         Self {
-            map_mx_ids: MxIdProvider::from_client(client.clone(), mx_id_sink),
+            map_mx_ids: MxIdProvider::from_client(client.clone(), Arc::clone(&sink)),
             mx_maps: MxMapProvider::from_client(client.clone()),
-            mappacks: MappackProvider::from_client(client),
+            mappacks: MappackProvider::from_client(client, sink),
         }
     }
 }

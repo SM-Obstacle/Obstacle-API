@@ -20,8 +20,8 @@ use records_lib::error::RecordsResult;
 
 use crate::{
     api::{self, MxApi},
-    maps::MxMap,
-    polite::{Fetcher, MxQuery, Policy, Provider},
+    maps::{MxIdSink, MxMap},
+    polite::{Fetcher, MxQuery, Policy, Provider, Sink},
 };
 
 /// How long the answers about a mappack are kept in memory.
@@ -172,10 +172,28 @@ impl MappackProvider {
     /// the requests to the MX API.
     ///
     /// This must be called from within a Tokio runtime.
-    pub fn from_client(client: reqwest::Client) -> Self {
+    pub fn from_client<S: MxIdSink>(client: reqwest::Client, sink: S) -> Self {
+        struct WrapperSink<S>(S);
+        impl<S: MxIdSink> Sink<MappackTracks> for WrapperSink<S> {
+            #[allow(clippy::manual_async_fn)]
+            fn store<'a>(
+                &'a self,
+                values: &'a HashMap<MappackRef, Vec<MxMap>>,
+            ) -> impl Future<Output = RecordsResult> + Send + 'a {
+                async move {
+                    let values = values
+                        .values()
+                        .flatten()
+                        .map(|map| (map.map_uid.to_owned(), map.mx_id as _))
+                        .collect();
+                    self.0.store(&values).await
+                }
+            }
+        }
+
         let api = MxApi::new(client);
         Self {
-            tracks: Provider::spawn(api.clone(), ()),
+            tracks: Provider::spawn(api.clone(), WrapperSink(sink)),
             infos: Provider::spawn(api, ()),
         }
     }

@@ -42,6 +42,7 @@ use std::{
     collections::HashMap,
     future,
     marker::PhantomData,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -122,6 +123,20 @@ impl<Q: MxQuery> Sink<Q> for () {
         _: &'a HashMap<Q::Key, Q::Value>,
     ) -> impl Future<Output = RecordsResult> + Send + 'a {
         std::future::ready(Ok(()))
+    }
+}
+
+impl<S, Q> Sink<Q> for Arc<S>
+where
+    S: Sink<Q>,
+    Q: MxQuery,
+{
+    #[inline]
+    fn store<'a>(
+        &'a self,
+        values: &'a HashMap<<Q as MxQuery>::Key, <Q as MxQuery>::Value>,
+    ) -> impl Future<Output = RecordsResult> + Send + 'a {
+        (**self).store(values)
     }
 }
 
