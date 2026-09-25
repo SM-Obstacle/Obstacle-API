@@ -2,10 +2,11 @@ use mkenv::prelude::*;
 use std::time::SystemTime;
 
 use deadpool_redis::redis::{self, AsyncCommands as _};
+use mx_layer::mappacks::MappackProvider;
 use records_lib::{
     Database, RedisPool,
     error::{RecordsError, RecordsResult},
-    internal, map,
+    internal,
     mappack::{AnyMappackId, update_mappack},
     must, player,
     redis_key::{
@@ -17,58 +18,43 @@ use sea_orm::{ConnectionTrait, DbConn};
 
 use crate::{error::GqlResult, objects::mappack_player::MappackPlayer};
 
-#[derive(serde::Deserialize)]
-#[allow(non_snake_case)]
-struct MXMappackInfoResponse {
-    Username: String,
-    Name: String,
-    Created: String,
-}
-
+/// Fills the Redis keys of a mappack with what ManiaExchange says about it.
+///
+/// The two questions are asked side by side, and both go through the
+/// [MX layer](mx_layer::mappacks), so a mappack several people land on at the same moment costs
+/// ManiaExchange one request instead of one per visitor.
 async fn fill_mappack<C: ConnectionTrait>(
     conn: &C,
     redis_pool: &RedisPool,
-    client: &reqwest::Client,
+    mx: &MappackProvider,
     mappack: AnyMappackId<'_>,
     mappack_id: u32,
 ) -> RecordsResult<()> {
-    let maps = map::fetch_mx_mappack_maps(client, mappack_id, None);
+    let (maps, info) = tokio::join!(mx.tracks(mappack_id, None), mx.info(mappack_id));
 
-    let info = async {
-        let res: MXMappackInfoResponse = client
-            .get(format!(
-                "https://sm.mania.exchange/api/mappack/get_info/{mappack_id}"
-            ))
-            .header("User-Agent", "obstacle (discord @ahmadbky)")
-            .send()
-            .await?
-            .json()
-            .await?;
-        RecordsResult::Ok(res)
-    };
-
-    let (maps, info) = tokio::join!(maps, info);
-    let (maps, info) = (maps?, info?);
+    let missing = || internal!("ManiaExchange has no mappack with ID {mappack_id}");
+    let maps = maps?.ok_or_else(missing)?;
+    let info = info?.ok_or_else(missing)?;
 
     let mut pipe = redis::pipe();
     pipe.atomic();
 
     for mx_map in maps {
         // We check that the map exists in our database
-        let _ = must::have_map(conn, &mx_map.TrackUID).await?;
-        pipe.sadd(mappack_key(mappack), mx_map.TrackUID).ignore();
+        let _ = must::have_map(conn, &mx_map.map_uid).await?;
+        pipe.sadd(mappack_key(mappack), mx_map.map_uid).ignore();
     }
 
     // --------
     // These keys would probably be null for some mappacks, because they would belong
     // to an event edition, so these info would be retrieved from our information system.
 
-    pipe.set(mappack_mx_username_key(mappack), info.Username)
+    pipe.set(mappack_mx_username_key(mappack), info.username)
         .ignore();
 
-    pipe.set(mappack_mx_name_key(mappack), info.Name).ignore();
+    pipe.set(mappack_mx_name_key(mappack), info.name).ignore();
 
-    pipe.set(mappack_mx_created_key(mappack), info.Created)
+    pipe.set(mappack_mx_created_key(mappack), info.created)
         .ignore();
 
     let mut redis_conn = redis_pool.get().await?;
@@ -228,17 +214,10 @@ pub async fn get_mappack(
             return Err(RecordsError::InvalidMappackId(mappack_id));
         };
 
-        let client = ctx.data_unchecked::<reqwest::Client>();
+        let mx = ctx.data_unchecked::<MappackProvider>();
 
         // We fill the mappack
-        fill_mappack(
-            &db.sql_conn,
-            &db.redis_pool,
-            client,
-            mappack,
-            mappack_id_int,
-        )
-        .await?;
+        fill_mappack(&db.sql_conn, &db.redis_pool, mx, mappack, mappack_id_int).await?;
 
         // And we update it to have its scores cached
         update_mappack(

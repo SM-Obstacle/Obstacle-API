@@ -1,224 +1,156 @@
-//! Everything about the MX ID of the maps: the ID [ManiaExchange] gives to a map, which the
-//! website shows as a link and which we keep in the `mx_id` column of our maps.
+//! What we ask [ManiaExchange] about maps.
 //!
 //! [ManiaExchange]: https://sm.mania.exchange
 //!
-//! Getting the MX ID of a map means asking ManiaExchange, which is somebody else's API: it can be
-//! slow, it can be down, and it shouldn't be flooded. Everything in this module follows from three
-//! rules that come out of that.
+//! Two questions, which are each other's mirror:
 //!
-//! **Nobody waits for MX.** [`MxIdProvider::get_mx_ids_of_map_uids`] answers with what we already
-//! know and hands the rest to a background worker, so a map UID missing from its answer means
-//! "we have no MX ID for this map *right now*", not "this map isn't on MX". Its callers are on
-//! paths which must stay fast: the game asking about the map a player just joined, and the website
-//! rendering a list of maps server-side.
-//!
-//! **MX is asked at most once every 5 seconds**, whatever our own traffic is. The worker groups the
-//! map UIDs handed to it during that window into a single deduplicated batch. Without it, every page
-//! of the website showing maps we haven't resolved yet would be a request to MX.
-//!
-//! **An answer of MX is remembered**, so we don't ask twice. An MX ID we got is written to our own
-//! database — see [`MxIdSink`] — and read from there afterwards. A map MX doesn't have is remembered
-//! in memory only, and asked again a day later: a map is uploaded to MX once, at a moment which has
-//! nothing to do with our traffic.
-//!
-//! Everything talking to the outside is behind a trait — [`MxFetcher`] for the MX API, [`MxIdSink`]
-//! for our database — so the tests of this module need neither.
-//!
-//! # The flow
-#![doc = simple_mermaid::mermaid!("../docs/flow.mmd")]
-//! Two details of that flow are worth spelling out, because they're what keeps everybody free:
-//!
-//! * the worker **spawns** the batch instead of awaiting it, so it keeps taking map UIDs while MX is
-//!   thinking, instead of making the next callers queue behind a request that isn't theirs;
-//! * the fetch task writes the cache **before** the database, so the answer is visible to the other
-//!   callers as soon as possible; nobody waits for the `UPDATE`.
-//!
-//! When a batch fails, nothing is written down at all. The map UIDs are simply asked again by the next
-//! call, and are never mistaken for maps MX doesn't have.
-//!
-//! # The two lifetimes
-//!
-//! The cached answers don't age the same way, which the cache turns into a per-entry expiration:
-//!
-//! | what we cached | expires after | why |
-//! |---|---|---|
-//! | an MX ID | 2 hours | it never changes, but it's in our database too, and that's where it's read from |
-//! | "MX doesn't have this map" | 24 hours | it may be uploaded one day, but that has nothing to do with our traffic |
-//!
-//! The second one being much longer than the first looks backwards, and isn't: a map whose `mx_id`
-//! column is filled never comes back here, so keeping its entry longer buys nothing. The entries that
-//! carry the load are the negative ones — maps which are *not* on MX keep a null column forever, so
-//! they come back on every page that shows them.
-//!
-//! # Telling "not on MX" from "not asked yet"
-//!
-//! Both leave a map UID out of [`MxIdProvider::get_mx_ids_of_map_uids`]'s answer, and the website
-//! has to tell them apart: one deserves nothing on the page, the other deserves a button to look
-//! again. [`MxIdProvider::status_of`] reports what we have, without asking MX and without scheduling
-//! anything:
-#![doc = simple_mermaid::mermaid!("../docs/status.mmd")]
-//! Note that a map UID handed to the worker is still `Unknown` for the rest of that call: its batch
-//! hasn't come back yet. A map nobody ever asked about therefore always reads `Unknown` the first
-//! time, even when MX has it.
+//! * [`MapMxIds`] goes from a map UID to its MX ID, which we keep in the `mx_id` column of our
+//!   maps table;
+//! * [`MxMaps`] goes the other way, from an MX ID to the map itself: its UID, its name, its
+//!   author. It's how a map MX has and we don't save it to our database.
 
-use core::fmt;
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use std::collections::HashMap;
+use std::time::Duration;
 
-use moka::{Expiry, future::Cache};
 use records_lib::error::RecordsResult;
 
-mod batch;
+use crate::{
+    api::{self, MxApi},
+    polite::{Fetcher, MxQuery, MxStatus, Policy, Provider, Sink},
+};
 
-#[cfg(test)]
-mod fake_mx;
 #[cfg(test)]
 mod tests;
 
-pub use batch::{MxFetcher, MxIdSink, ReqwestMxFetcher};
+/// A map, as MX describes it.
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct MxMap {
+    /// The MX ID of the map.
+    #[serde(rename = "MapID")]
+    pub mx_id: i64,
+    /// The UID of the map, as the game knows it.
+    #[serde(rename = "TrackUID")]
+    pub map_uid: String,
+    /// The name of the map.
+    #[serde(rename = "GbxMapName")]
+    pub name: String,
+    /// The login of the author of the map.
+    #[serde(rename = "AuthorLogin")]
+    pub author_login: String,
+}
 
-use batch::Batcher;
+// --------
+// --- The MX ID of a map, from its UID
+// --------
 
 /// The delay after which we ask MX again about a map it said it doesn't know.
 ///
 /// This answers "has this map been uploaded to MX since?", which happens once, at a moment that
 /// has nothing to do with our traffic: checking often would only flood MX. Whoever knows better
 /// than us that a map just landed on MX can ask for it explicitly instead of waiting for this.
-const UNKNOWN_TIMEOUT: Duration = Duration::from_hours(24);
+const MX_ID_UNKNOWN_TIMEOUT: Duration = Duration::from_hours(24);
+
 /// The delay after which we drop an MX ID we know.
 ///
-/// It's much shorter than [`UNKNOWN_TIMEOUT`], which looks backwards but isn't: an MX ID we know
-/// is saved in our database, and that's where it's read from afterwards. These entries only cover
-/// the moment between the answer of MX and the write, so keeping them longer buys nothing.
-const KNOWN_TIMEOUT: Duration = Duration::from_hours(2);
-/// The amount of map UIDs kept in memory. The least recently used ones are dropped past that.
-const MAX_CACHED_MAP_UIDS: u64 = 50_000;
+/// It's much shorter than [`MX_ID_UNKNOWN_TIMEOUT`], which looks backwards but isn't: an MX ID we
+/// know is saved in our database by the [`MxIdSink`], and that's where it's read from afterwards.
+/// These entries only cover the moment between the answer of MX and the write, so keeping them
+/// longer buys nothing. The entries that carry the load are the negative ones, meaning maps which
+/// are *not* on MX keep a null column forever, so they come back on every page that shows them.
+const MX_ID_KNOWN_TIMEOUT: Duration = Duration::from_hours(2);
 
-/// Represents an item returned by a request to the MX API related to maps.
+/// The amount of map UIDs sent in a single HTTP request to the MX API.
+const MX_ID_CHUNK_SIZE: usize = 50;
+
+/// The MX ID of the maps, identified by their UID.
+///
+/// Nobody waits for this one: see [`MxIdProvider::get_mx_ids_of_map_uids`].
+pub enum MapMxIds {}
+
+impl MxQuery for MapMxIds {
+    type Key = String;
+    type Value = i32;
+
+    const NAME: &'static str = "map MX IDs";
+
+    const POLICY: Policy = Policy {
+        flush_interval: Duration::from_secs(2),
+        known_timeout: MX_ID_KNOWN_TIMEOUT,
+        unknown_timeout: MX_ID_UNKNOWN_TIMEOUT,
+        // This is the query our own traffic goes through, so it's the one worth remembering.
+        max_cached_keys: 50_000,
+        queue_size: 100,
+    };
+}
+
 #[derive(serde::Deserialize)]
 #[allow(non_snake_case)]
-pub struct MxMappackMapItem {
-    /// The UID of the map.
-    pub TrackUID: String,
-    /// The MX ID of the map.
-    pub MapID: i64,
-    /// name of the map.
-    pub GbxMapName: String,
-    /// The login of the author.
-    pub AuthorLogin: String,
+struct MxMapIdResult {
+    MapId: i32,
+    MapUid: String,
 }
 
-/// Fetches the MX API to get the maps of a mappack and returns them.
-///
-/// ## Parameters
-///
-/// * `mappack_id`: the MX ID of the mappack.
-/// * `secret`: an optional mappack secret.
-pub async fn fetch_mx_mappack_maps(
-    client: &reqwest::Client,
-    mappack_id: u32,
-    secret: Option<&str>,
-) -> RecordsResult<Vec<MxMappackMapItem>> {
-    let secret = fmt::from_fn(|f| {
-        if let Some(s) = secret {
-            write!(f, "?secret={s}")?;
+#[derive(serde::Deserialize)]
+#[allow(non_snake_case)]
+struct MxMapIdsResult {
+    Results: Vec<MxMapIdResult>,
+}
+
+impl Fetcher<MapMxIds> for MxApi {
+    #[allow(clippy::manual_async_fn)]
+    fn fetch<'a>(
+        &'a self,
+        map_uids: &'a [&'a String],
+    ) -> impl Future<Output = RecordsResult<HashMap<String, i32>>> + Send + 'a {
+        async move {
+            // This endpoint takes several map UIDs at once, so a batch costs one request per chunk
+            // instead of one per map.
+            let requests = map_uids
+                .chunks(MX_ID_CHUNK_SIZE)
+                .map(|map_uids| {
+                    let map_uids = map_uids.iter().map(|uid| uid.as_str()).collect::<Vec<_>>();
+                    let map_uids = map_uids.join(",");
+
+                    api::json::<MxMapIdsResult>(self.get(format!(
+                        "https://sm.mania.exchange/api/maps\
+                         ?fields=MapId,MapUid&count={MX_ID_CHUNK_SIZE}&uid={map_uids}"
+                    )))
+                })
+                .collect::<Vec<_>>();
+
+            let results = api::gather(requests).await?;
+
+            Ok(results
+                .into_iter()
+                .flat_map(|result| result.Results)
+                .map(|result| (result.MapUid, result.MapId))
+                .collect())
         }
-        Ok(())
-    });
-
-    client
-        .get(format!(
-            "https://sm.mania.exchange/api/mappack/get_mappack_tracks/{mappack_id}{secret}"
-        ))
-        .header("User-Agent", "obstacle (discord @ahmadbky)")
-        .send()
-        .await?
-        .json()
-        .await
-        .map_err(From::from)
+    }
 }
+
+/// Where the MX IDs we fetched are saved, which is the `mx_id` column of our maps.
+pub trait MxIdSink: Sink<MapMxIds> {}
+
+impl<T: Sink<MapMxIds>> MxIdSink for T {}
 
 /// What we know about the MX ID of a map, without asking MX.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MxIdStatus {
-    /// MX gave us this ID.
-    Known(i32),
-    /// MX told us it doesn't know this map, recently enough for us to still believe it.
-    NotOnMx,
-    /// We have no answer for this map: either we never asked, or the last one expired. A batch may
-    /// be on its way.
-    Unknown,
-}
-
-/// What MX told us about the map UIDs: their MX ID, or [`None`] for the ones MX doesn't know.
-///
-/// The batching worker is its only writer; the [`MxIdProvider`]s only read it.
-type MxIdCache = Cache<String, Option<i32>>;
-
-/// How long an answer of MX is worth keeping.
-struct MxIdExpiry;
-
-impl Expiry<String, Option<i32>> for MxIdExpiry {
-    fn expire_after_create(&self, _: &String, mx_id: &Option<i32>, _: Instant) -> Option<Duration> {
-        Some(match mx_id {
-            Some(_) => KNOWN_TIMEOUT,
-            None => UNKNOWN_TIMEOUT,
-        })
-    }
-
-    fn expire_after_update(
-        &self,
-        map_uid: &String,
-        mx_id: &Option<i32>,
-        updated_at: Instant,
-        _: Option<Duration>,
-    ) -> Option<Duration> {
-        // A map UID we had no MX ID for just got one: it's now worth keeping much longer. The
-        // default implementation would keep what's left of its previous, shorter expiration.
-        self.expire_after_create(map_uid, mx_id, updated_at)
-    }
-}
-
-fn new_cache() -> MxIdCache {
-    Cache::builder()
-        .max_capacity(MAX_CACHED_MAP_UIDS)
-        .expire_after(MxIdExpiry)
-        .build()
-}
+pub type MxIdStatus = MxStatus<i32>;
 
 /// Gives the MX ID of the maps, identified by their UID.
 ///
-/// It answers with what we already know, and hands the map UIDs it knows nothing about to a
-/// background worker, which groups them to send at most one request to the MX API every five
-/// seconds. It never waits for that request: those map UIDs are missing from the answer, and the
-/// next calls have them.
-///
-/// Cloning it is cheap, and gives a handle to the same cache and the same worker.
-#[derive(Clone)]
-pub struct MxIdProvider {
-    cache: MxIdCache,
-    batcher: Batcher,
-}
+/// See the [politeness layer](crate::polite) for what it does with the map UIDs it doesn't have an
+/// answer for.
+pub type MxIdProvider = Provider<MapMxIds>;
 
 impl MxIdProvider {
-    /// Creates the provider, and spawns the worker batching the requests to the MX API.
+    /// Creates the provider on top of the provided HTTP client, and spawns the worker batching the
+    /// requests to the MX API.
     ///
     /// This must be called from within a Tokio runtime.
     #[inline]
     pub fn from_client<S: MxIdSink>(client: reqwest::Client, sink: S) -> Self {
-        Self::spawn(ReqwestMxFetcher::new(client), sink)
-    }
-
-    /// Creates the provider on top of the provided fetcher and sink.
-    ///
-    /// This must be called from within a Tokio runtime.
-    pub fn spawn<F: MxFetcher, S: MxIdSink>(fetcher: F, sink: S) -> Self {
-        let cache = new_cache();
-        let batcher = Batcher::spawn(fetcher, sink, cache.clone());
-        Self { cache, batcher }
+        Self::spawn(MxApi::new(client), sink)
     }
 
     /// Returns the MX ID of the provided maps, identified by their UID.
@@ -230,57 +162,110 @@ impl MxIdProvider {
     ///
     /// A map UID missing from the returned map is therefore to be read as "we have no MX ID for
     /// this map *right now*".
+    #[inline]
     pub async fn get_mx_ids_of_map_uids(&self, map_uids: &[&str]) -> HashMap<String, i32> {
-        let mut ret = HashMap::new();
-        let mut map_uids_to_fetch = Vec::new();
-
-        for &map_uid in map_uids {
-            match self.cache.get(map_uid).await {
-                // We already have its MX ID.
-                Some(Some(mx_id)) => {
-                    ret.insert(map_uid.to_owned(), mx_id);
-                }
-                // MX recently told us it doesn't know this map: asking again would be pointless.
-                Some(None) => {}
-                // Either we never saw it, or that answer expired and is worth asking again.
-                None => map_uids_to_fetch.push(map_uid),
-            }
-        }
-
-        if !map_uids_to_fetch.is_empty() {
-            self.batcher.schedule(&map_uids_to_fetch).await;
-        }
-
-        ret
+        self.get_or_schedule(map_uids).await
     }
 
     /// Asks MX about a map right now, and saves what it answers.
     ///
-    /// Unlike [`get_mx_ids_of_map_uids`](Self::get_mx_ids_of_map_uids), this waits for MX, skips the batching window, and
-    /// ignores a cached "MX doesn't have this map": it's meant for someone who explicitly asks us
-    /// to look again, and who knows better than our cache does. It therefore costs a request to
-    /// the MX API every time, and mustn't be driven by our own traffic.
+    /// Unlike [`get_mx_ids_of_map_uids`](Self::get_mx_ids_of_map_uids), this waits for MX, skips
+    /// the batching window, and ignores a cached "MX doesn't have this map": it's meant for
+    /// someone who explicitly asks us to look again, and who knows better than our cache does. It
+    /// therefore costs a request to the MX API every time, and mustn't be driven by our own
+    /// traffic.
     ///
     /// Returns [`None`] when MX doesn't have this map.
+    #[inline]
     pub async fn force_fetch(&self, map_uid: &str) -> RecordsResult<Option<i32>> {
-        // There's nothing to force if we already have its MX ID.
-        if let Some(Some(mx_id)) = self.cache.get(map_uid).await {
-            return Ok(Some(mx_id));
-        }
+        Ok(self.force(&[map_uid]).await?.remove(map_uid))
+    }
+}
 
-        self.batcher.force(map_uid).await
+// --------
+// --- The map behind an MX ID
+// --------
+
+/// The amount of MX IDs sent in a single HTTP request to the MX API.
+const MX_MAP_CHUNK_SIZE: usize = 10;
+
+/// The maps of MX, identified by their MX ID.
+///
+/// Somebody always waits for this one: see [`MxMapProvider::get_maps_of_mx_ids`].
+pub enum MxMaps {}
+
+impl MxQuery for MxMaps {
+    type Key = i64;
+    type Value = MxMap;
+
+    const NAME: &'static str = "MX maps";
+
+    const POLICY: Policy = Policy {
+        flush_interval: Duration::from_secs(2),
+        known_timeout: Duration::from_hours(2),
+        // Nothing here is written down anywhere, and an MX ID which points at no map is an MX ID
+        // somebody mistyped: there's no point in asking again soon.
+        unknown_timeout: Duration::from_hours(2),
+        max_cached_keys: 10_000,
+        queue_size: 100,
+    };
+}
+
+impl Fetcher<MxMaps> for MxApi {
+    #[allow(clippy::manual_async_fn)]
+    fn fetch<'a>(
+        &'a self,
+        mx_ids: &'a [&'a i64],
+    ) -> impl Future<Output = RecordsResult<HashMap<i64, MxMap>>> + Send + 'a {
+        async move {
+            let requests = mx_ids
+                .chunks(MX_MAP_CHUNK_SIZE)
+                .map(|mx_ids| {
+                    let mx_ids = mx_ids
+                        .iter()
+                        .map(|mx_id| mx_id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
+
+                    api::json::<Vec<MxMap>>(self.get(format!(
+                        "https://sm.mania.exchange/api/maps/get_map_info/multi/{mx_ids}"
+                    )))
+                })
+                .collect::<Vec<_>>();
+
+            let results = api::gather(requests).await?;
+
+            Ok(results
+                .into_iter()
+                .flatten()
+                .map(|map| (map.mx_id, map))
+                .collect())
+        }
+    }
+}
+
+/// Gives the maps of MX, identified by their MX ID.
+pub type MxMapProvider = Provider<MxMaps>;
+
+impl MxMapProvider {
+    /// Creates the provider on top of the provided HTTP client, and spawns the worker batching the
+    /// requests to the MX API.
+    ///
+    /// This must be called from within a Tokio runtime.
+    #[inline]
+    pub fn from_client(client: reqwest::Client) -> Self {
+        Self::spawn(MxApi::new(client), ())
     }
 
-    /// Tells what we know about the MX ID of a map, identified by its UID.
+    /// Returns the maps behind the provided MX IDs, waiting for MX when we don't have them yet.
     ///
-    /// This asks MX nothing, and schedules nothing: it only reports what we have. It's meant for
-    /// telling apart "MX doesn't have this map" from "we haven't got an answer yet", which look
-    /// the same in [`get_mx_ids`](Self::get_mx_ids_of_map_uids).
-    pub async fn status_of(&self, map_uid: &str) -> MxIdStatus {
-        match self.cache.get(map_uid).await {
-            Some(Some(mx_id)) => MxIdStatus::Known(mx_id),
-            Some(None) => MxIdStatus::NotOnMx,
-            None => MxIdStatus::Unknown,
-        }
+    /// Whoever asks this is about to write these maps down, so they can't be told to come back
+    /// later. The wait is still polite: the MX IDs join the next batching window like any other
+    /// traffic of ours, deduplicated with whatever else is asked for at that moment.
+    ///
+    /// The MX IDs MX has no map for are missing from the returned map.
+    pub async fn get_maps_of_mx_ids(&self, mx_ids: &[i64]) -> RecordsResult<HashMap<i64, MxMap>> {
+        let mx_ids = mx_ids.iter().collect::<Vec<_>>();
+        self.get_or_fetch(&mx_ids).await
     }
 }

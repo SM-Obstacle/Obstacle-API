@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use entity::maps;
-use mx_layer::maps::MxIdSink;
+use mx_layer::{maps::MapMxIds, polite::Sink};
 use records_lib::error::RecordsResult;
 use sea_orm::{
     ColumnTrait as _, DbConn, EntityTrait as _, QueryFilter as _, sea_query::CaseStatement,
@@ -28,7 +28,7 @@ impl DbMxIdSink {
     }
 }
 
-impl MxIdSink for DbMxIdSink {
+impl Sink<MapMxIds> for DbMxIdSink {
     #[allow(clippy::manual_async_fn)]
     fn store<'a>(
         &'a self,

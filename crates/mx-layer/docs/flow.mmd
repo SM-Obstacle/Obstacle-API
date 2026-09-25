@@ -1,65 +1,76 @@
 sequenceDiagram
     participant Client
-    participant A as MX ID Provider
+    participant A as Provider
     participant Cache as moka Cache
     participant mpscChannel@{"type": "queue"} as MPSC Channel
     participant batchWorker as Batch Worker
     participant Fetcher
-    participant Sink as MX ID Sink
+    participant Sink
     participant DB@{"type": "database"}
 
     par Client
-        Client->>A: get_mx_ids(map_uids)
-        create participant HashMap
-        A->>HashMap: new()
-        create participant map_uids_to_fetch@{"type": "collections"} as Map UIDs to fetch
-        A->>map_uids_to_fetch: new()
+        Client->>A: get_or_schedule(keys) / get_or_fetch(keys)
+        create participant known@{"type": "collections"} as Known
+        A->>known: new()
+        create participant unanswered@{"type": "collections"} as Unanswered keys
+        A->>unanswered: new()
 
-        loop for each map_uid of map_uids
-            A->>Cache: get(map_uid)
+        loop for each key of keys
+            A->>Cache: get(key)
             Cache-->>A: cache entry
-            alt Some(Some(mx_id))
-                A->>HashMap: insert(map_uid, mx_id)
+            alt Some(Some(value))
+                A->>known: insert(key, value)
             else Some(None)
-                Note right of A: MX said it doesn't have it, less than 24h ago:<br/>nothing to return, and nothing to ask
+                Note right of A: MX said it doesn't have it, recently enough:<br/>nothing to return, and nothing to ask
             else None
-                A->>map_uids_to_fetch: push(map_uid)
+                A->>unanswered: push(key)
             end
         end
 
-        destroy map_uids_to_fetch
-        map_uids_to_fetch-->>A: map_uids_to_fetch
+        destroy unanswered
+        unanswered-->>A: unanswered
 
-        opt map_uids_to_fetch is not empty
-            A->>mpscChannel: send(map_uids_to_fetch)
-            Note right of A: fire and forget: no reply channel,<br/>nothing is awaited but the send itself
+        opt unanswered is not empty
+            alt get_or_schedule
+                A->>mpscChannel: send(Schedule(unanswered))
+                Note right of A: fire and forget: no reply channel,<br/>nothing is awaited but the send itself
+            else get_or_fetch
+                A->>mpscChannel: send(Fetch(unanswered, reply_tx))
+                A->>A: await reply_rx
+                Note right of A: waits for the batch, not ahead of it
+            end
         end
 
-        destroy HashMap
-        HashMap-->>A: ret
-        A-->>Client: ret
+        destroy known
+        known-->>A: known
+        A-->>Client: known
 
     and Batch Worker
         create participant Interval
-        batchWorker->>Interval: new(5s), first tick consumed
+        batchWorker->>Interval: new(flush_interval), first tick consumed
         loop Every batch
-            create participant batch@{"type": "collections"} as Batch (set)
+            create participant batch@{"type": "collections"} as Batch (keys + waiters)
             batchWorker->>batch: new()
 
             loop Batching
                 Note over batchWorker: tokio::select!
                 par
                     batchWorker->>mpscChannel: recv()
-                    mpscChannel-->>batchWorker: s1 = pending { map_uids }
+                    mpscChannel-->>batchWorker: s1 = pending { job }
                 and
                     batchWorker->>Interval: tick()
                     Interval-->>batchWorker: s2 = pending
                 end
 
                 alt s1 finished first
-                    batchWorker->>batch: extend(map_uids)
-                    opt no batch sent for 5s (or none ever)
-                        batchWorker->>batchWorker: break
+                    alt Schedule / Fetch
+                        batchWorker->>batch: take_job(job)
+                        opt nothing sent for a whole window (or none ever)
+                            batchWorker->>mpscChannel: drain what is already queued
+                            batchWorker->>batchWorker: break
+                        end
+                    else Force
+                        batchWorker->>batchWorker: spawn its own fetch, off the window
                     end
                 else s2 finished first
                     batchWorker->>batchWorker: break
@@ -67,34 +78,35 @@ sequenceDiagram
             end
 
             destroy batch
-            batch-->>batchWorker: map_uids_batch
-            opt map_uids_batch is not empty
+            batch-->>batchWorker: batch
+            opt batch is not empty
                 batchWorker->>batchWorker: last fetch = now
                 batchWorker->>Interval: reset()
                 create participant fetchTask as Fetch task
-                batchWorker->>fetchTask: spawn(map_uids_batch)
-                Note over batchWorker,fetchTask: spawned, not awaited: the worker keeps taking map UIDs while MX is thinking
+                batchWorker->>fetchTask: spawn(batch)
+                Note over batchWorker,fetchTask: spawned, not awaited: the worker keeps taking keys while MX is thinking
             end
         end
         destroy Interval
         Interval-->batchWorker: drop
     and Fetch task
-        fetchTask->>Fetcher: fetch_mx_ids(map_uids_batch)
+        fetchTask->>Fetcher: fetch(batch.keys)
         activate Fetcher
-        Note over Fetcher: chunks of 50 UIDs, 10 requests in flight
-        Fetcher-->>fetchTask: results = map UIDs with an MX ID
+        Note over Fetcher: as few requests as the endpoint allows, a bounded number in flight
+        Fetcher-->>fetchTask: results = the keys MX has, with their value
         deactivate Fetcher
 
         alt results is error
-            fetchTask->>fetchTask: log error
-            Note right of fetchTask: nothing is written down, so these map UIDs<br/>are asked again by the next call
+            fetchTask->>fetchTask: log error, and tell the waiters
+            Note right of fetchTask: nothing is written down, so these keys<br/>are asked again by the next call
         else
-            loop for each map_uid of map_uids_batch
-                fetchTask->>Cache: insert(map_uid, results.get(map_uid))
-                Note right of Cache: Some(mx_id) expires in 2h<br/>None expires in 24h
+            loop for each key of batch.keys
+                fetchTask->>Cache: insert(key, results.get(key))
+                Note right of Cache: Some(value) expires after known_timeout<br/>None expires after unknown_timeout
             end
+            fetchTask->>A: reply_tx.send(what each waiter asked for)
             destroy fetchTask
             fetchTask->>Sink: store(results)
-            Sink->>DB: UPDATE maps SET mx_id WHERE game_id in results AND mx_id IS NULL
+            Sink->>DB: the query's own way of writing them down
         end
     end

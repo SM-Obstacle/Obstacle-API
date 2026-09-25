@@ -2,41 +2,19 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use moka::Expiry as _;
+use crate::fakes::{FakeMx, FakeSink, ids, settle};
+use crate::polite::MxQuery as _;
 
-use super::batch::FLUSH_INTERVAL;
-use super::fake_mx::{FakeMx, FakeSink, ids, settle};
-use super::{KNOWN_TIMEOUT, MxIdExpiry, MxIdProvider, MxIdStatus, UNKNOWN_TIMEOUT};
+use super::{MapMxIds, MxIdProvider, MxIdStatus};
 
-impl MxIdProvider {
-    /// What the cache holds for this map UID: nothing, an MX ID, or "MX doesn't know it".
-    async fn cached(&self, map_uid: &str) -> Option<Option<i32>> {
-        self.cache.get(map_uid).await
-    }
-}
+const FLUSH_INTERVAL: Duration = MapMxIds::POLICY.flush_interval;
 
-/// The expiration of the entries is left to moka, which uses its own clock: the tests can't move
-/// it, so this is what covers how long an answer of MX lives.
+/// An MX ID we know is saved in our database, and read from there afterwards; a map MX doesn't
+/// have keeps a null column forever, so it comes back on every page that shows it. That's why the
+/// shorter of the two lifetimes is the one for the answers we got, which reads backwards.
 #[test]
 fn an_mx_id_we_know_is_kept_much_longer_than_one_we_dont() {
-    let map_uid = "foo".to_owned();
-    let now = std::time::Instant::now();
-
-    assert_eq!(
-        MxIdExpiry.expire_after_create(&map_uid, &Some(42), now),
-        Some(KNOWN_TIMEOUT)
-    );
-    assert_eq!(
-        MxIdExpiry.expire_after_create(&map_uid, &None, now),
-        Some(UNKNOWN_TIMEOUT)
-    );
-
-    // A map UID MX didn't know which finally got an MX ID mustn't inherit what was left of its
-    // previous, much shorter expiration.
-    assert_eq!(
-        MxIdExpiry.expire_after_update(&map_uid, &Some(42), now, Some(Duration::from_secs(1))),
-        Some(KNOWN_TIMEOUT)
-    );
+    assert!(MapMxIds::POLICY.unknown_timeout > MapMxIds::POLICY.known_timeout);
 }
 
 #[tokio::test(start_paused = true)]
@@ -243,7 +221,7 @@ async fn force_fetch_doesnt_spend_the_batching_window() -> anyhow::Result<()> {
     let mx = FakeMx::new([("foo", 42), ("bar", 1337), ("baz", 7)]);
     let provider = MxIdProvider::spawn(mx.clone(), ());
 
-    // The window opens here, so it closes 5 seconds from now.
+    // The window opens here, so it closes one interval from now.
     provider.get_mx_ids_of_map_uids(&["foo"]).await;
     settle().await;
 

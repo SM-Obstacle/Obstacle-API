@@ -7,8 +7,8 @@ use std::{
 use anyhow::Context as _;
 use deadpool_redis::redis::{self, AsyncCommands as _};
 use entity::{event, event_edition, event_edition_maps, maps};
-use futures::{StreamExt as _, TryStreamExt, stream};
 use itertools::Itertools as _;
+use mx_layer::{MxLayer, maps::MxMap};
 use records_lib::{
     Database, RedisConnection, map,
     mappack::{self, AnyMappackId},
@@ -91,21 +91,9 @@ impl Row {
     }
 }
 
-#[derive(serde::Deserialize)]
-struct MxMapItem {
-    #[serde(rename = "MapID")]
-    mx_id: i64,
-    #[serde(rename = "AuthorLogin")]
-    author_login: String,
-    #[serde(rename = "TrackUID")]
-    map_uid: String,
-    #[serde(rename = "GbxMapName")]
-    name: String,
-}
-
 async fn insert_mx_maps<C: ConnectionTrait>(
     conn: &C,
-    mx_maps: &[MxMapItem],
+    mx_maps: &[MxMap],
 ) -> anyhow::Result<Vec<(i64, maps::Model)>> {
     let mut out = Vec::with_capacity(mx_maps.len());
 
@@ -168,9 +156,9 @@ impl Iterator for MxIdIter {
     }
 }
 
-#[tracing::instrument(skip(client, conn, rows))]
+#[tracing::instrument(skip(mx, conn, rows))]
 async fn populate_mx_maps<C: ConnectionTrait>(
-    client: &reqwest::Client,
+    mx: &MxLayer,
     conn: &C,
     rows: &[(Row, u64)],
 ) -> anyhow::Result<HashMap<i64, maps::Model>> {
@@ -188,29 +176,16 @@ async fn populate_mx_maps<C: ConnectionTrait>(
             ) => MxIdIter::both(mx_id, original_mx_id),
             (Ok(Id::MxId { mx_id }), _) | (_, Some(Id::MxId { mx_id })) => MxIdIter::single(mx_id),
         })
-        .chunks(10);
+        .collect::<Vec<_>>();
 
-    let mx_ids: Vec<_> = stream::iter(&mx_ids)
-        .map(|mut chunk| async move {
-            let url = format!(
-                "https://sm.mania.exchange/api/maps/get_map_info/multi/{}",
-                chunk.join(",")
-            );
-            tracing::info!("Requesting MX ({})...", url);
-            let mx_maps = client
-                .get(url)
-                .header("User-Agent", "obstacle (discord @ahmadbky)")
-                .send()
-                .await?
-                .json::<Vec<MxMapItem>>()
-                .await?;
-            insert_mx_maps(conn, &mx_maps).await
-        })
-        .buffer_unordered(rows.len())
-        .try_collect()
-        .await?;
+    // The layer deduplicates these, chunks them into as few requests as MX accepts, and holds
+    // them to its own rhythm: we get everything back at once.
+    let mx_maps = mx.mx_maps.get_maps_of_mx_ids(&mx_ids).await?;
+    let mx_maps = mx_maps.into_values().collect::<Vec<_>>();
 
-    Ok(mx_ids.into_iter().flatten().collect())
+    tracing::info!("Found {} map(s) on MX", mx_maps.len());
+
+    Ok(insert_mx_maps(conn, &mx_maps).await?.into_iter().collect())
 }
 
 async fn run_populate<C: TransactionTrait + ConnectionTrait>(
@@ -218,7 +193,7 @@ async fn run_populate<C: TransactionTrait + ConnectionTrait>(
     redis_conn: &mut RedisConnection,
     event: &event::Model,
     edition: &event_edition::Model,
-    client: &reqwest::Client,
+    mx: &MxLayer,
     populate_kind: PopulateKind,
 ) -> anyhow::Result<()> {
     let event_key = mappack_key(AnyMappackId::Event(event, edition));
@@ -246,7 +221,7 @@ async fn run_populate<C: TransactionTrait + ConnectionTrait>(
                 populate_from_csv(
                     txn,
                     redis_conn,
-                    client,
+                    mx,
                     (event, edition),
                     &csv_file,
                     transitive_save,
@@ -254,7 +229,7 @@ async fn run_populate<C: TransactionTrait + ConnectionTrait>(
                 .await
             }
             PopulateKind::MxId { mx_id } => {
-                populate_from_mx_id(txn, client, event, edition, mx_id).await
+                populate_from_mx_id(txn, mx, event, edition, mx_id).await
             }
         }
     })
@@ -280,7 +255,7 @@ async fn run_populate<C: TransactionTrait + ConnectionTrait>(
 }
 
 pub async fn populate(
-    client: reqwest::Client,
+    mx: MxLayer,
     db: Database,
     PopulateCommand {
         event_handle,
@@ -293,15 +268,7 @@ pub async fn populate(
     let (event, edition) =
         must::have_event_edition(&db.sql_conn, &event_handle, event_edition).await?;
 
-    run_populate(
-        &db.sql_conn,
-        &mut redis_conn,
-        &event,
-        &edition,
-        &client,
-        kind,
-    )
-    .await?;
+    run_populate(&db.sql_conn, &mut redis_conn, &event, &edition, &mx, kind).await?;
 
     tracing::info!("Filling mappack in the Redis database...");
     mappack::update_mappack(
@@ -373,7 +340,7 @@ fn check_medal_times_consistency(
 async fn populate_from_csv<C: ConnectionTrait>(
     conn: &C,
     redis_conn: &mut RedisConnection,
-    client: &reqwest::Client,
+    mx: &MxLayer,
     (event, edition): (&event::Model, &event_edition::Model),
     csv_file: &Path,
     default_transitive_save: bool,
@@ -417,7 +384,7 @@ async fn populate_from_csv<C: ConnectionTrait>(
 
     tracing::info!("Inserting new content...");
 
-    let mx_maps = populate_mx_maps(client, conn, &rows).await?;
+    let mx_maps = populate_mx_maps(mx, conn, &rows).await?;
 
     let mut pipe = redis::pipe();
     let pipe = pipe.atomic();
@@ -523,7 +490,7 @@ async fn populate_from_csv<C: ConnectionTrait>(
 
 async fn populate_from_mx_id<C: ConnectionTrait>(
     conn: &C,
-    client: &reqwest::Client,
+    mx: &MxLayer,
     event: &event::Model,
     edition: &event_edition::Model,
     mx_id: Option<i64>,
@@ -539,25 +506,32 @@ async fn populate_from_mx_id<C: ConnectionTrait>(
         (None, None) => anyhow::bail!("No MX id provided"),
     };
 
-    let maps = map::fetch_mx_mappack_maps(client, mx_id as _, edition.mx_secret.as_deref()).await?;
+    let maps = mx
+        .mappacks
+        .tracks(mx_id as _, edition.mx_secret.as_deref())
+        .await?
+        .with_context(|| format!("MX has no mappack with ID {mx_id}"))?;
 
     tracing::info!("Found {} map(s) in MX mappack with ID {mx_id}", maps.len());
 
     let mut maps_to_insert = Vec::with_capacity(maps.len());
 
     for map in maps {
-        let player = must::have_player(conn, &map.AuthorLogin).await?;
+        let player = must::have_player(conn, &map.author_login).await?;
 
-        let map_id = match map::get_map_from_uid(conn, &map.TrackUID).await? {
+        let map_id = match map::get_map_from_uid(conn, &map.map_uid).await? {
             Some(map) => map.id,
             None => {
-                let map = maps::ActiveModel {
-                    game_id: Set(map.TrackUID),
+                let new_map = maps::ActiveModel {
+                    game_id: Set(map.map_uid.clone()),
                     player_id: Set(player.id),
-                    name: Set(map.GbxMapName),
+                    name: Set(map.name.clone()),
                     ..Default::default()
                 };
-                maps::Entity::insert(map).exec(conn).await?.last_insert_id
+                maps::Entity::insert(new_map)
+                    .exec(conn)
+                    .await?
+                    .last_insert_id
             }
         };
 
@@ -565,7 +539,7 @@ async fn populate_from_mx_id<C: ConnectionTrait>(
             event_id: Set(event.id),
             edition_id: Set(edition.id),
             map_id: Set(map_id),
-            mx_id: Set(Some(map.MapID)),
+            mx_id: Set(Some(map.mx_id)),
             order: Set(0),
             original_map_id: Set(None),
             ..Default::default()

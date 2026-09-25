@@ -9,7 +9,6 @@ clap = { version = "4.5.54", features = ["derive"] }
 csv = { workspace = true }
 deadpool-redis = { workspace = true }
 dotenvy = { workspace = true }
-futures = { workspace = true }
 itertools = { workspace = true }
 records-lib = { path = "../records_lib", features = ["tracing"] }
 reqwest = { workspace = true }
@@ -21,6 +20,7 @@ tracing-subscriber = { workspace = true }
 mkenv = { workspace = true }
 prettytable = { workspace = true }
 entity = { path = "../entity" }
+mx-layer = { path = "../mx-layer" }
 sea-orm = { workspace = true }
 
 [features]

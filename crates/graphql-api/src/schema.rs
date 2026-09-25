@@ -1,5 +1,5 @@
 use async_graphql::{SchemaBuilder, dataloader::DataLoader, extensions::ApolloTracing};
-use mx_layer::maps::MxIdProvider;
+use mx_layer::MxLayer;
 use records_lib::{
     Database,
     records_notifier::{LatestRecordsSubscription, RecordsNotifier},
@@ -35,13 +35,16 @@ pub fn create_schema_standalone() -> Schema {
     create_schema_impl(dummy.get_subscription()).finish()
 }
 
-pub fn create_schema(
-    db: Database,
-    mx_ids: MxIdProvider,
-    client: reqwest::Client,
-    records_sub: LatestRecordsSubscription,
-) -> Schema {
+pub fn create_schema(db: Database, mx: MxLayer, records_sub: LatestRecordsSubscription) -> Schema {
     let db_clone = db.clone();
+
+    // The maps of MX, by MX ID, are only ever asked for by the command line tool populating an
+    // event edition: no resolver here has anything to do with them.
+    let MxLayer {
+        map_mx_ids: mx_ids,
+        mappacks,
+        ..
+    } = mx;
 
     create_schema_impl(records_sub)
         .extension(ApolloTracing)
@@ -99,10 +102,10 @@ pub fn create_schema(
         ))
         .data(DataLoader::new(MapMxIdLoader(mx_ids.clone()), tokio::spawn))
         .data(mx_ids)
+        .data(mappacks)
         .data(db_clone.sql_conn)
         .data(db_clone.redis_pool)
         .data(db)
-        .data(client)
         .limit_depth(16)
         .finish()
 }

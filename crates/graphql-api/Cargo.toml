@@ -13,7 +13,6 @@ futures = { workspace = true }
 hmac = "0.12.1"
 mkenv = { workspace = true }
 records-lib = { path = "../records_lib" }
-reqwest = { workspace = true }
 sea-orm = { workspace = true }
 serde = { workspace = true }
 sha2 = "0.10.9"

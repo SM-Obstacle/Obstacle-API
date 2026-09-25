@@ -10,10 +10,9 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use graphql_api::error::{ApiGqlError, ApiGqlErrorKind};
 use graphql_api::schema::{Schema, create_schema};
-use mx_layer::maps::MxIdProvider;
+use mx_layer::MxLayer;
 use records_lib::Database;
 use records_lib::records_notifier::LatestRecordsSubscription;
-use reqwest::Client;
 use tracing_actix_web::RequestId;
 
 use crate::{ApiErrorKind, RecordsResult, Res, configure};
@@ -143,14 +142,9 @@ async fn index_subscriptions(
     .start(&req, payload)
 }
 
-pub fn graphql_route(
-    db: Database,
-    mx_ids: MxIdProvider,
-    client: Client,
-    records_sub: LatestRecordsSubscription,
-) -> Scope {
+pub fn graphql_route(db: Database, mx: MxLayer, records_sub: LatestRecordsSubscription) -> Scope {
     web::scope("/graphql")
-        .app_data(create_schema(db, mx_ids, client, records_sub))
+        .app_data(create_schema(db, mx, records_sub))
         .route("", web::get().to(index_playground))
         .route("", web::post().to(index_graphql))
         .route(
