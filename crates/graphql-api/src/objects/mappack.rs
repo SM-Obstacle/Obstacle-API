@@ -49,7 +49,7 @@ async fn fill_mappack<C: ConnectionTrait>(
     // These keys would probably be null for some mappacks, because they would belong
     // to an event edition, so these info would be retrieved from our information system.
 
-    pipe.set(mappack_mx_username_key(mappack), info.username)
+    pipe.set(mappack_mx_username_key(mappack), info.creator.name)
         .ignore();
 
     pipe.set(mappack_mx_name_key(mappack), info.name).ignore();

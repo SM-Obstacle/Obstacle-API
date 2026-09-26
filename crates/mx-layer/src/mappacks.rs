@@ -46,18 +46,31 @@ pub struct MappackRef {
     pub secret: Option<String>,
 }
 
+/// The description MX gives of the creator of a mappack.
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct MxMappackInfoCreator {
+    /// The name of the creator of the mappack.
+    #[serde(rename = "Name")]
+    pub name: String,
+}
+
 /// The description MX gives of a mappack.
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct MxMappackInfo {
-    /// The name of whoever made the mappack.
-    #[serde(rename = "Username")]
-    pub username: String,
+    /// Whoever made the mappack.
+    #[serde(rename = "Creator")]
+    pub creator: MxMappackInfoCreator,
     /// The name of the mappack.
     #[serde(rename = "Name")]
     pub name: String,
     /// When the mappack was created, as MX formats it.
-    #[serde(rename = "Created")]
+    #[serde(rename = "CreatedAt")]
     pub created: String,
+}
+
+#[derive(serde::Deserialize)]
+struct MxMappackInfoResult {
+    results: Vec<MxMappackInfo>,
 }
 
 /// The maps of the mappacks.
@@ -78,6 +91,11 @@ impl MxQuery for MappackTracks {
     };
 }
 
+#[derive(serde::Deserialize)]
+struct MxMappackTracksApiResult {
+    results: Vec<MxMap>,
+}
+
 impl Fetcher<MappackTracks> for MxApi {
     #[allow(clippy::manual_async_fn)]
     fn fetch<'a>(
@@ -96,13 +114,14 @@ impl Fetcher<MappackTracks> for MxApi {
                         None => Ok(()),
                     });
 
-                    let tracks = api::json_or_absent::<Vec<MxMap>>(self.get(format!(
-                        "https://sm.mania.exchange/api/mappack\
+                    let tracks =
+                        api::json_or_absent::<MxMappackTracksApiResult>(self.get(format!(
+                            "https://sm.mania.exchange/api/mappack\
                          /get_mappack_tracks/{mappack_id}{secret}"
-                    )))
-                    .await?;
+                        )))
+                        .await?;
 
-                    RecordsResult::Ok(tracks.map(|tracks| (mappack.clone(), tracks)))
+                    RecordsResult::Ok(tracks.map(|tracks| (mappack.clone(), tracks.results)))
                 })
                 .collect::<Vec<_>>();
 
@@ -141,12 +160,15 @@ impl Fetcher<MappackInfos> for MxApi {
             let requests = mappack_ids
                 .iter()
                 .map(|&&mappack_id| async move {
-                    let info = api::json_or_absent::<MxMappackInfo>(self.get(format!(
+                    let info = api::json_or_absent::<MxMappackInfoResult>(self.get(format!(
                         "https://sm.mania.exchange/api/mappack/get_info/{mappack_id}"
                     )))
                     .await?;
 
-                    RecordsResult::Ok(info.map(|info| (mappack_id, info)))
+                    RecordsResult::Ok(
+                        info.and_then(|info| info.results.into_iter().next())
+                            .map(|info| (mappack_id, info)),
+                    )
                 })
                 .collect::<Vec<_>>();
 
