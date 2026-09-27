@@ -168,16 +168,21 @@ impl Mappack {
             .all(&db.sql_conn)
             .await?;
 
-        let players = player_loader
+        let mut players = player_loader
             .load_many(scores.iter().map(|score| score.player_id))
             .await?;
-        let out = players
-            .into_values()
-            .map(|player| MappackPlayer {
-                inner: player,
-                mappack: self,
+        let out = scores
+            .into_iter()
+            .map(move |score| {
+                let player = players.remove(&score.player_id).ok_or_else(|| {
+                    internal!("player_id in mappack_player_periodic_ranking should exist")
+                });
+                player.map(|inner| MappackPlayer {
+                    inner,
+                    mappack: self,
+                })
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         Ok(out)
     }
