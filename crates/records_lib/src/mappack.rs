@@ -243,10 +243,12 @@ async fn save<C: ConnectionTrait>(
     })
     .exec(conn)
     .await?;
-    let period_id = entity::ranking_period::Entity::insert(entity::ranking_period::ActiveModel {
-        period_date: Set(chrono::Utc::now().naive_utc()),
-        ..Default::default()
-    })
+    let period_id = entity::mappack_ranking_period::Entity::insert(
+        entity::mappack_ranking_period::ActiveModel {
+            period_date: Set(chrono::Utc::now().naive_utc()),
+            ..Default::default()
+        },
+    )
     .exec(conn)
     .await?
     .last_insert_id;
@@ -369,8 +371,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
 
     let mut scores = Vec::<PlayerScore>::with_capacity(maps.len());
 
-    for i in 0..maps.len() {
-        let map_id = maps[i].map_id;
+    for map in &mut maps {
         let mut query = Query::select();
         query
             .expr(Expr::col(("r", Asterisk)))
@@ -384,7 +385,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
                 Expr::col(("p", players::Column::Id))
                     .eq(Expr::col(("r", records::Column::RecordPlayerId))),
             )
-            .and_where(Expr::col(("r", records::Column::MapId)).eq(map_id))
+            .and_where(Expr::col(("r", records::Column::MapId)).eq(map.map_id))
             .order_by_expr(Expr::col(("r", records::Column::Time)).into(), Order::Asc);
 
         match event.get() {
@@ -411,7 +412,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
         let ranks = ranks::get_ranks(
             conn,
             &mut redis_conn,
-            res.iter().map(|record| (map_id, record.record.time)),
+            res.iter().map(|record| (map.map_id, record.record.time)),
             event,
         )
         .await?;
@@ -433,7 +434,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
             records.push(RankedRecordRow { rank, record });
         }
 
-        maps[i].records = Some(records);
+        map.records = Some(records);
     }
 
     for (map_idx, map) in maps.iter_mut().enumerate() {

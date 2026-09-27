@@ -20,6 +20,7 @@ pub mod mappack_map_periodic_ranking;
 pub mod mappack_maps;
 pub mod mappack_periodic_ranking;
 pub mod mappack_player_periodic_ranking;
+pub mod mappack_ranking_period;
 pub mod mappacks;
 pub mod maps;
 pub mod player_periodic_ranking;

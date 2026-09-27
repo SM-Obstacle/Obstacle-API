@@ -9,6 +9,24 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
+                    .table(MappackRankingPeriod::Table)
+                    .col(
+                        ColumnDef::new(MappackRankingPeriod::PeriodId)
+                            .integer()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackRankingPeriod::PeriodDate)
+                            .date_time()
+                            .not_null(),
+                    )
+                    .take(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
                     .table(MappackPeriodicRanking::Table)
                     .col(
                         ColumnDef::new(MappackPeriodicRanking::PeriodId)
@@ -33,7 +51,7 @@ impl MigrationTrait for Migration {
                                 MappackPeriodicRanking::Table,
                                 MappackPeriodicRanking::PeriodId,
                             )
-                            .to(RankingPeriod::Table, RankingPeriod::PeriodId)
+                            .to(MappackRankingPeriod::Table, MappackRankingPeriod::PeriodId)
                             .on_delete(ForeignKeyAction::Cascade),
                     )
                     .foreign_key(
@@ -257,14 +275,18 @@ impl MigrationTrait for Migration {
         manager
             .drop_table(Table::drop().table(MappackPeriodicRanking::Table).take())
             .await?;
+        manager
+            .drop_table(Table::drop().table(MappackRankingPeriod::Table).take())
+            .await?;
         Ok(())
     }
 }
 
 #[derive(DeriveIden)]
-enum RankingPeriod {
+enum MappackRankingPeriod {
     Table,
     PeriodId,
+    PeriodDate,
 }
 #[derive(DeriveIden)]
 enum Players {

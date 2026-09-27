@@ -15,21 +15,21 @@ pub struct Model {
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
-        belongs_to = "super::ranking_period::Entity",
+        belongs_to = "super::mappack_ranking_period::Entity",
         from = "Column::PeriodId",
-        to = "super::ranking_period::Column::PeriodId",
+        to = "super::mappack_ranking_period::Column::PeriodId",
         on_delete = "Cascade"
     )]
-    RankingPeriod,
+    MappackRankingPeriod,
     #[sea_orm(has_many = "super::mappack_player_periodic_ranking::Entity")]
     PlayerScores,
     #[sea_orm(has_many = "super::mappack_map_periodic_ranking::Entity")]
     MapScores,
 }
 
-impl Related<super::ranking_period::Entity> for Entity {
+impl Related<super::mappack_ranking_period::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::RankingPeriod.def()
+        Relation::MappackRankingPeriod.def()
     }
 }
 

@@ -18,6 +18,7 @@ pub use super::mappack_map_periodic_ranking::Entity as MappackMapPeriodicRanking
 pub use super::mappack_maps::Entity as MappackMaps;
 pub use super::mappack_periodic_ranking::Entity as MappackPeriodicRanking;
 pub use super::mappack_player_periodic_ranking::Entity as MappackPlayerPeriodicRanking;
+pub use super::mappack_ranking_period::Entity as MappackRankingPeriod;
 pub use super::mappacks::Entity as Mappacks;
 pub use super::maps::Entity as Maps;
 pub use super::player_periodic_ranking::Entity as PlayerPeriodicRanking;

@@ -1,3 +1,4 @@
+use async_graphql::dataloader::DataLoader;
 use entity::{mappack_maps, mappack_periodic_ranking, mappack_player_periodic_ranking, mappacks};
 use mkenv::prelude::*;
 use mx_layer::mappacks::MappackProvider;
@@ -6,14 +7,16 @@ use records_lib::{
     error::{RecordsError, RecordsResult},
     internal,
     mappack::{AnyMappackId, update_mappack},
-    must, player,
+    must,
 };
 use sea_orm::{
     ActiveValue::Set, ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _,
     PaginatorTrait as _, QueryFilter as _, QueryOrder as _, QuerySelect, TransactionTrait,
 };
 
-use crate::{error::GqlResult, objects::mappack_player::MappackPlayer};
+use crate::{
+    error::GqlResult, loaders::player::PlayerLoader, objects::mappack_player::MappackPlayer,
+};
 
 /// Stores a mappack and what ManiaExchange says about it in SQL.
 ///
@@ -144,6 +147,7 @@ impl Mappack {
         limit: Option<u64>,
     ) -> GqlResult<Vec<MappackPlayer<'a>>> {
         let db = ctx.data_unchecked::<Database>();
+        let player_loader = ctx.data_unchecked::<DataLoader<PlayerLoader>>();
         let Some(snapshot) = mappack_periodic_ranking::Entity::find()
             .filter(mappack_periodic_ranking::Column::MappackId.eq(&self.mappack_id))
             .order_by_desc(mappack_periodic_ranking::Column::PeriodId)
@@ -164,15 +168,16 @@ impl Mappack {
             .all(&db.sql_conn)
             .await?;
 
-        let mut out = Vec::with_capacity(scores.len());
-
-        for score in scores {
-            let player = player::get_player_from_id(&db.sql_conn, score.player_id).await?;
-            out.push(MappackPlayer {
-                inner: player.into(),
+        let players = player_loader
+            .load_many(scores.iter().map(|score| score.player_id))
+            .await?;
+        let out = players
+            .into_values()
+            .map(|player| MappackPlayer {
+                inner: player,
                 mappack: self,
-            });
-        }
+            })
+            .collect();
 
         Ok(out)
     }
@@ -206,11 +211,11 @@ impl Mappack {
             last_updated_at
                 .and_then(|last| {
                     let elapsed = chrono::Utc::now().naive_utc() - last;
-                    u64::try_from(records_lib::env().event_scores_interval.get().as_secs())
-                        .ok()
-                        .and_then(|interval| {
-                            interval.checked_sub(elapsed.num_seconds().max(0) as u64)
-                        })
+                    records_lib::env()
+                        .event_scores_interval
+                        .get()
+                        .as_secs()
+                        .checked_sub(elapsed.num_seconds().max(0) as u64)
                 })
                 .unwrap_or_default(),
         ))
