@@ -1,0 +1,330 @@
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(MappackPeriodicRanking::Table)
+                    .col(
+                        ColumnDef::new(MappackPeriodicRanking::PeriodId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackPeriodicRanking::MappackId)
+                            .string_len(64)
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(MappackPeriodicRanking::EventId).unsigned())
+                    .col(ColumnDef::new(MappackPeriodicRanking::EditionId).unsigned())
+                    .col(
+                        ColumnDef::new(MappackPeriodicRanking::MapsCount)
+                            .unsigned()
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(
+                                MappackPeriodicRanking::Table,
+                                MappackPeriodicRanking::PeriodId,
+                            )
+                            .to(RankingPeriod::Table, RankingPeriod::PeriodId)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(
+                                MappackPeriodicRanking::Table,
+                                (
+                                    MappackPeriodicRanking::EventId,
+                                    MappackPeriodicRanking::EditionId,
+                                ),
+                            )
+                            .to(
+                                EventEdition::Table,
+                                (EventEdition::EventId, EventEdition::Id),
+                            )
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(MappackPeriodicRanking::PeriodId)
+                            .col(MappackPeriodicRanking::MappackId),
+                    )
+                    .index(
+                        Index::create()
+                            .name("idx_mappack_periodic_ranking_mappack")
+                            .col(MappackPeriodicRanking::MappackId)
+                            .col(MappackPeriodicRanking::PeriodId),
+                    )
+                    .take(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(MappackPlayerPeriodicRanking::Table)
+                    .col(
+                        ColumnDef::new(MappackPlayerPeriodicRanking::PeriodId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackPlayerPeriodicRanking::MappackId)
+                            .string_len(64)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackPlayerPeriodicRanking::PlayerId)
+                            .unsigned()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackPlayerPeriodicRanking::Rank)
+                            .unsigned()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackPlayerPeriodicRanking::RankAverage)
+                            .double()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackPlayerPeriodicRanking::MapsFinished)
+                            .unsigned()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackPlayerPeriodicRanking::WorstRank)
+                            .unsigned()
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(
+                                MappackPlayerPeriodicRanking::Table,
+                                MappackPlayerPeriodicRanking::PlayerId,
+                            )
+                            .to(Players::Table, Players::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(MappackPlayerPeriodicRanking::PeriodId)
+                            .col(MappackPlayerPeriodicRanking::MappackId)
+                            .col(MappackPlayerPeriodicRanking::PlayerId),
+                    )
+                    .take(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(MappackMapPeriodicRanking::Table)
+                    .col(
+                        ColumnDef::new(MappackMapPeriodicRanking::PeriodId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackMapPeriodicRanking::MappackId)
+                            .string_len(64)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackMapPeriodicRanking::MapId)
+                            .unsigned()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackMapPeriodicRanking::PlayerId)
+                            .unsigned()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackMapPeriodicRanking::Rank)
+                            .unsigned()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MappackMapPeriodicRanking::LastRank)
+                            .unsigned()
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(
+                                MappackMapPeriodicRanking::Table,
+                                MappackMapPeriodicRanking::MapId,
+                            )
+                            .to(Maps::Table, Maps::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(
+                                MappackMapPeriodicRanking::Table,
+                                MappackMapPeriodicRanking::PlayerId,
+                            )
+                            .to(Players::Table, Players::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(MappackMapPeriodicRanking::PeriodId)
+                            .col(MappackMapPeriodicRanking::MappackId)
+                            .col(MappackMapPeriodicRanking::MapId)
+                            .col(MappackMapPeriodicRanking::PlayerId),
+                    )
+                    .take(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(Mappacks::Table)
+                    .col(
+                        ColumnDef::new(Mappacks::Id)
+                            .string_len(64)
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(Mappacks::MxAuthor).string_len(255))
+                    .col(ColumnDef::new(Mappacks::MxName).string_len(255))
+                    .col(ColumnDef::new(Mappacks::MxCreatedAt).string_len(64))
+                    .col(ColumnDef::new(Mappacks::LastUpdatedAt).date_time())
+                    .take(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(MappackMaps::Table)
+                    .col(
+                        ColumnDef::new(MappackMaps::MappackId)
+                            .string_len(64)
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(MappackMaps::MapId).unsigned().not_null())
+                    .col(ColumnDef::new(MappackMaps::MapOrder).unsigned().not_null())
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(MappackMaps::Table, MappackMaps::MappackId)
+                            .to(Mappacks::Table, Mappacks::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(MappackMaps::Table, MappackMaps::MapId)
+                            .to(Maps::Table, Maps::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(MappackMaps::MappackId)
+                            .col(MappackMaps::MapId),
+                    )
+                    .take(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(Table::drop().table(MappackMaps::Table).take())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Mappacks::Table).take())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(MappackMapPeriodicRanking::Table).take())
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(MappackPlayerPeriodicRanking::Table)
+                    .take(),
+            )
+            .await?;
+        manager
+            .drop_table(Table::drop().table(MappackPeriodicRanking::Table).take())
+            .await?;
+        Ok(())
+    }
+}
+
+#[derive(DeriveIden)]
+enum RankingPeriod {
+    Table,
+    PeriodId,
+}
+#[derive(DeriveIden)]
+enum Players {
+    Table,
+    Id,
+}
+#[derive(DeriveIden)]
+enum Maps {
+    Table,
+    Id,
+}
+#[derive(DeriveIden)]
+enum Mappacks {
+    Table,
+    Id,
+    MxAuthor,
+    MxName,
+    MxCreatedAt,
+    LastUpdatedAt,
+}
+#[derive(DeriveIden)]
+enum MappackMaps {
+    Table,
+    MappackId,
+    MapId,
+    MapOrder,
+}
+#[derive(DeriveIden)]
+enum EventEdition {
+    Table,
+    EventId,
+    Id,
+}
+#[derive(DeriveIden)]
+enum MappackPeriodicRanking {
+    Table,
+    PeriodId,
+    MappackId,
+    EventId,
+    EditionId,
+    MapsCount,
+}
+#[derive(DeriveIden)]
+enum MappackPlayerPeriodicRanking {
+    Table,
+    PeriodId,
+    MappackId,
+    PlayerId,
+    Rank,
+    RankAverage,
+    MapsFinished,
+    WorstRank,
+}
+#[derive(DeriveIden)]
+enum MappackMapPeriodicRanking {
+    Table,
+    PeriodId,
+    MappackId,
+    MapId,
+    PlayerId,
+    Rank,
+    LastRank,
+}

@@ -1,31 +1,27 @@
+use entity::{mappack_maps, mappack_periodic_ranking, mappack_player_periodic_ranking, mappacks};
 use mkenv::prelude::*;
-use std::time::SystemTime;
-
-use deadpool_redis::redis::{self, AsyncCommands as _};
 use mx_layer::mappacks::MappackProvider;
 use records_lib::{
-    Database, RedisPool,
+    Database,
     error::{RecordsError, RecordsResult},
     internal,
     mappack::{AnyMappackId, update_mappack},
     must, player,
-    redis_key::{
-        mappack_key, mappack_lb_key, mappack_mx_created_key, mappack_mx_name_key,
-        mappack_mx_username_key, mappack_nb_map_key, mappack_time_key,
-    },
 };
-use sea_orm::{ConnectionTrait, DbConn};
+use sea_orm::{
+    ActiveValue::Set, ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _,
+    PaginatorTrait as _, QueryFilter as _, QueryOrder as _, QuerySelect, TransactionTrait,
+};
 
 use crate::{error::GqlResult, objects::mappack_player::MappackPlayer};
 
-/// Fills the Redis keys of a mappack with what ManiaExchange says about it.
+/// Stores a mappack and what ManiaExchange says about it in SQL.
 ///
 /// The two questions are asked side by side, and both go through the
 /// [MX layer](mx_layer::mappacks), so a mappack several people land on at the same moment costs
 /// ManiaExchange one request instead of one per visitor.
-async fn fill_mappack<C: ConnectionTrait>(
+async fn fill_mappack<C: ConnectionTrait + TransactionTrait>(
     conn: &C,
-    redis_pool: &RedisPool,
     mx: &MappackProvider,
     mappack: AnyMappackId<'_>,
     mappack_id: u32,
@@ -36,29 +32,44 @@ async fn fill_mappack<C: ConnectionTrait>(
     let maps = maps?.ok_or_else(missing)?;
     let info = info?.ok_or_else(missing)?;
 
-    let mut pipe = redis::pipe();
-    pipe.atomic();
-
-    for mx_map in maps {
+    let mappack_id = mappack.mappack_id().to_string();
+    let txn = conn.begin().await?;
+    mappacks::Entity::insert(mappacks::ActiveModel {
+        id: Set(mappack_id.clone()),
+        mx_author: Set(Some(info.creator.name)),
+        mx_name: Set(Some(info.name)),
+        mx_created_at: Set(Some(info.created)),
+        ..Default::default()
+    })
+    .on_conflict(
+        sea_orm::sea_query::OnConflict::column(mappacks::Column::Id)
+            .update_columns([
+                mappacks::Column::MxAuthor,
+                mappacks::Column::MxName,
+                mappacks::Column::MxCreatedAt,
+            ])
+            .to_owned(),
+    )
+    .exec(&txn)
+    .await?;
+    mappack_maps::Entity::delete_many()
+        .filter(mappack_maps::Column::MappackId.eq(&mappack_id))
+        .exec(&txn)
+        .await?;
+    let mut map_rows = Vec::with_capacity(maps.len());
+    for (map_order, mx_map) in maps.into_iter().enumerate() {
         // We check that the map exists in our database
-        let _ = must::have_map(conn, &mx_map.map_uid).await?;
-        pipe.sadd(mappack_key(mappack), mx_map.map_uid).ignore();
+        let map = must::have_map(&txn, &mx_map.map_uid).await?;
+        map_rows.push(mappack_maps::ActiveModel {
+            mappack_id: Set(mappack_id.clone()),
+            map_id: Set(map.id),
+            map_order: Set(map_order as u32),
+        });
     }
-
-    // --------
-    // These keys would probably be null for some mappacks, because they would belong
-    // to an event edition, so these info would be retrieved from our information system.
-
-    pipe.set(mappack_mx_username_key(mappack), info.creator.name)
-        .ignore();
-
-    pipe.set(mappack_mx_name_key(mappack), info.name).ignore();
-
-    pipe.set(mappack_mx_created_key(mappack), info.created)
-        .ignore();
-
-    let mut redis_conn = redis_pool.get().await?;
-    pipe.exec_async(&mut redis_conn).await?;
+    mappack_maps::Entity::insert_many(map_rows)
+        .exec(&txn)
+        .await?;
+    txn.commit().await?;
 
     Ok(())
 }
@@ -80,33 +91,32 @@ impl From<String> for Mappack {
 #[async_graphql::Object]
 impl Mappack {
     async fn nb_maps(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<usize> {
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let redis_conn = &mut redis_pool.get().await?;
-        let nb_map = redis_conn
-            .get(mappack_nb_map_key(AnyMappackId::Id(&self.mappack_id)))
+        let conn = ctx.data_unchecked::<DbConn>();
+        let nb_map = mappack_maps::Entity::find()
+            .filter(mappack_maps::Column::MappackId.eq(&self.mappack_id))
+            .count(conn)
             .await?;
-        Ok(nb_map)
+        Ok(nb_map as usize)
     }
 
     async fn mx_author(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<String>> {
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let redis_conn = &mut redis_pool.get().await?;
-        let author = redis_conn
-            .get(mappack_mx_username_key(AnyMappackId::Id(&self.mappack_id)))
+        let conn = ctx.data_unchecked::<DbConn>();
+        let author = mappacks::Entity::find_by_id(&self.mappack_id)
+            .one(conn)
             .await?;
-        Ok(author)
+        Ok(author.and_then(|m| m.mx_author))
     }
 
     async fn mx_created_at(
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> GqlResult<Option<chrono::NaiveDateTime>> {
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let redis_conn = &mut redis_pool.get().await?;
-        let created_at: Option<String> = redis_conn
-            .get(mappack_mx_created_key(AnyMappackId::Id(&self.mappack_id)))
+        let conn = ctx.data_unchecked::<DbConn>();
+        let created_at = mappacks::Entity::find_by_id(&self.mappack_id)
+            .one(conn)
             .await?;
         let parsed_date = created_at
+            .and_then(|m| m.mx_created_at)
             .map(|s| {
                 s.parse().map_err(|e| {
                     internal!(
@@ -121,32 +131,43 @@ impl Mappack {
     }
 
     async fn mx_name(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<String>> {
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let redis_conn = &mut redis_pool.get().await?;
-        let name = redis_conn
-            .get(mappack_mx_name_key(AnyMappackId::Id(&self.mappack_id)))
+        let conn = ctx.data_unchecked::<DbConn>();
+        let name = mappacks::Entity::find_by_id(&self.mappack_id)
+            .one(conn)
             .await?;
-        Ok(name)
+        Ok(name.and_then(|m| m.mx_name))
     }
 
     async fn leaderboard<'a>(
         &'a self,
         ctx: &async_graphql::Context<'_>,
-        limit: Option<isize>,
+        limit: Option<u64>,
     ) -> GqlResult<Vec<MappackPlayer<'a>>> {
         let db = ctx.data_unchecked::<Database>();
-        let mut redis_conn = db.redis_pool.get().await?;
-
-        let limit = limit.map(|l| l.saturating_sub(1)).unwrap_or(-1);
-
-        let leaderboard: Vec<u32> = redis_conn
-            .zrange(mappack_lb_key(AnyMappackId::Id(&self.mappack_id)), 0, limit)
+        let Some(snapshot) = mappack_periodic_ranking::Entity::find()
+            .filter(mappack_periodic_ranking::Column::MappackId.eq(&self.mappack_id))
+            .order_by_desc(mappack_periodic_ranking::Column::PeriodId)
+            .one(&db.sql_conn)
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+        let scores = mappack_player_periodic_ranking::Entity::find()
+            .filter(
+                mappack_player_periodic_ranking::Column::PeriodId
+                    .eq(snapshot.period_id)
+                    .and(mappack_player_periodic_ranking::Column::MappackId.eq(&self.mappack_id)),
+            )
+            .order_by_asc(mappack_player_periodic_ranking::Column::Rank)
+            .order_by_asc(mappack_player_periodic_ranking::Column::PlayerId)
+            .limit(limit)
+            .all(&db.sql_conn)
             .await?;
 
-        let mut out = Vec::with_capacity(leaderboard.len());
+        let mut out = Vec::with_capacity(scores.len());
 
-        for id in leaderboard {
-            let player = player::get_player_from_id(&db.sql_conn, id).await?;
+        for score in scores {
+            let player = player::get_player_from_id(&db.sql_conn, score.player_id).await?;
             out.push(MappackPlayer {
                 inner: player.into(),
                 mappack: self,
@@ -177,18 +198,19 @@ impl Mappack {
         }
 
         let db = ctx.data_unchecked::<Database>();
-        let redis_conn = &mut db.redis_pool.get().await?;
-        let last_upd_time: Option<u64> = redis_conn
-            .get(mappack_time_key(AnyMappackId::Id(&self.mappack_id)))
+        let last_updated_at = mappacks::Entity::find_by_id(&self.mappack_id)
+            .one(&db.sql_conn)
             .await?;
+        let last_updated_at = last_updated_at.and_then(|m| m.last_updated_at);
         Ok(Some(
-            last_upd_time
-                .map(|last| last + records_lib::env().event_scores_interval.get().as_secs())
+            last_updated_at
                 .and_then(|last| {
-                    SystemTime::UNIX_EPOCH
-                        .elapsed()
+                    let elapsed = chrono::Utc::now().naive_utc() - last;
+                    u64::try_from(records_lib::env().event_scores_interval.get().as_secs())
                         .ok()
-                        .and_then(|d| last.checked_sub(d.as_secs()))
+                        .and_then(|interval| {
+                            interval.checked_sub(elapsed.num_seconds().max(0) as u64)
+                        })
                 })
                 .unwrap_or_default(),
         ))
@@ -203,13 +225,13 @@ pub async fn get_mappack(
 
     let mappack = AnyMappackId::Id(&mappack_id);
 
-    let mappack_uids: Vec<String> = {
-        let mut redis_conn = db.redis_pool.get().await?;
-        redis_conn.smembers(mappack_key(mappack)).await?
-    };
+    let mappack_exists = mappacks::Entity::find_by_id(&mappack_id)
+        .one(&db.sql_conn)
+        .await?
+        .is_some();
 
     // We load the campaign, and update it, before retrieving the scores from it
-    if mappack_uids.is_empty() {
+    if !mappack_exists {
         let Ok(mappack_id_int) = mappack_id.parse() else {
             return Err(RecordsError::InvalidMappackId(mappack_id));
         };
@@ -217,7 +239,7 @@ pub async fn get_mappack(
         let mx = ctx.data_unchecked::<MappackProvider>();
 
         // We fill the mappack
-        fill_mappack(&db.sql_conn, &db.redis_pool, mx, mappack, mappack_id_int).await?;
+        fill_mappack(&db.sql_conn, mx, mappack, mappack_id_int).await?;
 
         // And we update it to have its scores cached
         update_mappack(

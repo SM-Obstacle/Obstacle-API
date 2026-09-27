@@ -1,13 +1,8 @@
-use deadpool_redis::redis::AsyncCommands as _;
-use records_lib::{
-    Database, RedisPool, internal,
-    mappack::AnyMappackId,
-    must,
-    redis_key::{
-        mappack_lb_key, mappack_map_last_rank, mappack_player_map_finished_key,
-        mappack_player_rank_avg_key, mappack_player_ranks_key, mappack_player_worst_rank_key,
-    },
+use entity::{
+    mappack_map_periodic_ranking, mappack_periodic_ranking, mappack_player_periodic_ranking, maps,
 };
+use records_lib::{Database, internal, mappack::AnyMappackId};
+use sea_orm::{ColumnTrait as _, EntityTrait as _, QueryFilter as _, QueryOrder as _};
 
 use crate::{
     error::GqlResult,
@@ -24,12 +19,23 @@ pub(super) async fn player_rank(
     mappack: AnyMappackId<'_>,
     player_id: u32,
 ) -> GqlResult<usize> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let rank = redis_conn
-        .zscore(mappack_lb_key(mappack), player_id)
-        .await?;
-    Ok(rank)
+    let db = ctx.data_unchecked::<Database>();
+    let Some(snapshot) = latest_snapshot(&db.sql_conn, mappack).await? else {
+        return Ok(0);
+    };
+    Ok(mappack_player_periodic_ranking::Entity::find()
+        .filter(
+            mappack_player_periodic_ranking::Column::PeriodId
+                .eq(snapshot.period_id)
+                .and(
+                    mappack_player_periodic_ranking::Column::MappackId
+                        .eq(mappack.mappack_id().to_string()),
+                )
+                .and(mappack_player_periodic_ranking::Column::PlayerId.eq(player_id)),
+        )
+        .one(&db.sql_conn)
+        .await?
+        .map_or(0, |score| score.rank as usize))
 }
 
 pub(super) async fn player_rank_avg(
@@ -37,12 +43,23 @@ pub(super) async fn player_rank_avg(
     mappack: AnyMappackId<'_>,
     player_id: u32,
 ) -> GqlResult<f64> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let rank = redis_conn
-        .get(mappack_player_rank_avg_key(mappack, player_id))
-        .await?;
-    Ok(rank)
+    let db = ctx.data_unchecked::<Database>();
+    let Some(snapshot) = latest_snapshot(&db.sql_conn, mappack).await? else {
+        return Ok(0.);
+    };
+    Ok(mappack_player_periodic_ranking::Entity::find()
+        .filter(
+            mappack_player_periodic_ranking::Column::PeriodId
+                .eq(snapshot.period_id)
+                .and(
+                    mappack_player_periodic_ranking::Column::MappackId
+                        .eq(mappack.mappack_id().to_string()),
+                )
+                .and(mappack_player_periodic_ranking::Column::PlayerId.eq(player_id)),
+        )
+        .one(&db.sql_conn)
+        .await?
+        .map_or(0., |score| score.rank_average))
 }
 
 pub(super) async fn player_map_finished(
@@ -50,12 +67,23 @@ pub(super) async fn player_map_finished(
     mappack: AnyMappackId<'_>,
     player_id: u32,
 ) -> GqlResult<usize> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let map_finished = redis_conn
-        .get(mappack_player_map_finished_key(mappack, player_id))
-        .await?;
-    Ok(map_finished)
+    let db = ctx.data_unchecked::<Database>();
+    let Some(snapshot) = latest_snapshot(&db.sql_conn, mappack).await? else {
+        return Ok(0);
+    };
+    Ok(mappack_player_periodic_ranking::Entity::find()
+        .filter(
+            mappack_player_periodic_ranking::Column::PeriodId
+                .eq(snapshot.period_id)
+                .and(
+                    mappack_player_periodic_ranking::Column::MappackId
+                        .eq(mappack.mappack_id().to_string()),
+                )
+                .and(mappack_player_periodic_ranking::Column::PlayerId.eq(player_id)),
+        )
+        .one(&db.sql_conn)
+        .await?
+        .map_or(0, |score| score.maps_finished as usize))
 }
 
 pub(super) async fn player_worst_rank(
@@ -63,12 +91,34 @@ pub(super) async fn player_worst_rank(
     mappack: AnyMappackId<'_>,
     player_id: u32,
 ) -> GqlResult<i32> {
-    let redis_pool = ctx.data_unchecked::<RedisPool>();
-    let redis_conn = &mut redis_pool.get().await?;
-    let worst_rank = redis_conn
-        .get(mappack_player_worst_rank_key(mappack, player_id))
-        .await?;
-    Ok(worst_rank)
+    let db = ctx.data_unchecked::<Database>();
+    let Some(snapshot) = latest_snapshot(&db.sql_conn, mappack).await? else {
+        return Ok(0);
+    };
+    Ok(mappack_player_periodic_ranking::Entity::find()
+        .filter(
+            mappack_player_periodic_ranking::Column::PeriodId
+                .eq(snapshot.period_id)
+                .and(
+                    mappack_player_periodic_ranking::Column::MappackId
+                        .eq(mappack.mappack_id().to_string()),
+                )
+                .and(mappack_player_periodic_ranking::Column::PlayerId.eq(player_id)),
+        )
+        .one(&db.sql_conn)
+        .await?
+        .map_or(0, |score| score.worst_rank as i32))
+}
+
+pub(super) async fn latest_snapshot<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    mappack: AnyMappackId<'_>,
+) -> GqlResult<Option<mappack_periodic_ranking::Model>> {
+    Ok(mappack_periodic_ranking::Entity::find()
+        .filter(mappack_periodic_ranking::Column::MappackId.eq(mappack.mappack_id().to_string()))
+        .order_by_desc(mappack_periodic_ranking::Column::PeriodId)
+        .one(conn)
+        .await?)
 }
 
 #[async_graphql::Object]
@@ -88,41 +138,37 @@ impl MappackPlayer<'_> {
 
     async fn ranks(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Vec<MappackMap>> {
         let db = ctx.data_unchecked::<Database>();
-        let mut redis_conn = db.redis_pool.get().await?;
-
-        let maps_uids: Vec<String> = redis_conn
-            .zrange_withscores(
-                mappack_player_ranks_key(
-                    AnyMappackId::Id(&self.mappack.mappack_id),
-                    self.inner.inner.id,
-                ),
-                0,
-                -1,
+        let Some(snapshot) =
+            latest_snapshot(&db.sql_conn, AnyMappackId::Id(&self.mappack.mappack_id)).await?
+        else {
+            return Ok(Vec::new());
+        };
+        let scores = mappack_map_periodic_ranking::Entity::find()
+            .filter(
+                mappack_map_periodic_ranking::Column::PeriodId
+                    .eq(snapshot.period_id)
+                    .and(
+                        mappack_map_periodic_ranking::Column::MappackId
+                            .eq(&self.mappack.mappack_id),
+                    )
+                    .and(mappack_map_periodic_ranking::Column::PlayerId.eq(self.inner.inner.id)),
             )
+            .order_by_asc(mappack_map_periodic_ranking::Column::Rank)
+            .all(&db.sql_conn)
             .await?;
-        let (maps_uids, _) = maps_uids.as_chunks::<2>();
 
-        let mut out = Vec::with_capacity(maps_uids.len());
+        let mut out = Vec::with_capacity(scores.len());
 
-        for [game_id, rank] in maps_uids {
-            let rank = rank.parse().map_err(|e| {
-                internal!(
-                    "error when parsing rank to int for map UID `{game_id}` for mappack {}: {e}",
-                    self.mappack.mappack_id
-                )
-            })?;
-            let last_rank = redis_conn
-                .get(mappack_map_last_rank(
-                    AnyMappackId::Id(&self.mappack.mappack_id),
-                    game_id,
-                ))
-                .await?;
-            let map = must::have_map(&db.sql_conn, game_id).await?;
+        for score in scores {
+            let map = maps::Entity::find_by_id(score.map_id)
+                .one(&db.sql_conn)
+                .await?
+                .ok_or_else(|| internal!("map {} should be in database", score.map_id))?;
 
             out.push(MappackMap {
                 map: map.into(),
-                rank,
-                last_rank,
+                rank: score.rank as i32,
+                last_rank: score.last_rank as i32,
             });
         }
 

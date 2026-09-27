@@ -1,8 +1,7 @@
 use async_graphql::dataloader::DataLoader;
-use deadpool_redis::redis::AsyncCommands as _;
-use records_lib::{
-    RedisPool, event as event_utils, mappack::AnyMappackId, redis_key::mappack_map_last_rank,
-};
+use entity::mappack_map_periodic_ranking;
+use records_lib::{event as event_utils, mappack::AnyMappackId};
+use sea_orm::{ColumnTrait as _, EntityTrait as _, QueryFilter as _, QueryOrder as _};
 
 use crate::{
     error::GqlResult,
@@ -22,20 +21,29 @@ impl EventEditionMapExt<'_> {
     }
 
     async fn last_rank(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<i32> {
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let redis_conn = &mut redis_pool.get().await?;
-
-        let last_rank = redis_conn
-            .get(mappack_map_last_rank(
-                AnyMappackId::Event(
-                    &self.edition_player.edition.event.inner,
-                    &self.edition_player.edition.inner,
-                ),
-                &self.inner.inner.game_id,
-            ))
-            .await?;
-
-        Ok(last_rank)
+        let db = ctx.data_unchecked::<records_lib::Database>();
+        let snapshot = super::mappack_player::latest_snapshot(
+            &db.sql_conn,
+            AnyMappackId::Event(
+                &self.edition_player.edition.event.inner,
+                &self.edition_player.edition.inner,
+            ),
+        )
+        .await?;
+        let Some(snapshot) = snapshot else {
+            return Ok(0);
+        };
+        Ok(mappack_map_periodic_ranking::Entity::find()
+            .filter(
+                mappack_map_periodic_ranking::Column::PeriodId
+                    .eq(snapshot.period_id)
+                    .and(mappack_map_periodic_ranking::Column::MappackId.eq(snapshot.mappack_id))
+                    .and(mappack_map_periodic_ranking::Column::MapId.eq(self.inner.inner.id)),
+            )
+            .order_by_desc(mappack_map_periodic_ranking::Column::LastRank)
+            .one(&db.sql_conn)
+            .await?
+            .map_or(0, |score| score.last_rank as i32))
     }
 
     async fn medal_times(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<MedalTimes>> {

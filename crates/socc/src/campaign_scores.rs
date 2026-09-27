@@ -8,7 +8,7 @@ use records_lib::{
 use sea_orm::{ConnectionTrait, StreamTrait, TransactionTrait};
 
 #[tracing::instrument(skip(conn, redis_pool), fields(mappack = %mappack.mappack_id()))]
-async fn update_mappack<C: TransactionTrait + Sync>(
+async fn update_mappack<C: ConnectionTrait + TransactionTrait + Sync>(
     conn: &C,
     redis_pool: &RedisPool,
     mappack: AnyMappackId<'_>,

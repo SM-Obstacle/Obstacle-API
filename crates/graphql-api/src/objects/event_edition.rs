@@ -1,16 +1,14 @@
 use std::borrow::Cow;
 
-use deadpool_redis::redis::AsyncCommands as _;
-use entity::{event, event_category, event_edition, event_edition_categories};
+use entity::{event, event_category, event_edition, event_edition_categories, mappacks};
 use futures::TryStreamExt as _;
 use records_lib::{
-    Expirable as _, RedisPool,
+    Expirable as _,
     error::{RecordsError, RecordsResult},
     event::{self as event_utils, EventMap},
     internal,
     mappack::AnyMappackId,
     must,
-    redis_key::mappack_time_key,
 };
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, QueryFilter as _,
@@ -55,13 +53,14 @@ impl EventEdition<'_> {
     }
 
     async fn mappack(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<Mappack>> {
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let mut redis_conn = redis_pool.get().await?;
-
         let mappack_id = AnyMappackId::Event(&self.event.inner, &self.inner);
-        let last_update_time: Option<i64> = redis_conn.get(mappack_time_key(mappack_id)).await?;
+        let conn = ctx.data_unchecked::<DbConn>();
+        let exists = mappacks::Entity::find_by_id(mappack_id.mappack_id().to_string())
+            .one(conn)
+            .await?
+            .is_some();
 
-        Ok(last_update_time.map(|_| Mappack {
+        Ok(exists.then_some(Mappack {
             mappack_id: mappack_id.mappack_id().to_string(),
             event_has_expired: self.inner.has_expired(),
         }))
