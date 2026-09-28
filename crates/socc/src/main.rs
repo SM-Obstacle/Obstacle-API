@@ -67,6 +67,11 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
+    // Init tasks
+    campaign_scores::init(db.clone())
+        .await
+        .context("cannot initialize campaign_scores task")?;
+
     let event_scores_handle = tokio::spawn(handle(
         db.clone(),
         event_scores_interval,

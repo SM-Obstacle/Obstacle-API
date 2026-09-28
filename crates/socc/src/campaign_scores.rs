@@ -61,6 +61,12 @@ where
     Ok(())
 }
 
+pub async fn init(db: Database) -> anyhow::Result<()> {
+    let mut redis_conn = db.redis_pool.get().await?;
+    let _: () = redis_conn.del(mappacks_key()).await?;
+    Ok(())
+}
+
 pub async fn update(db: Database) -> anyhow::Result<()> {
     update_event_mappacks(&db.sql_conn, &db.redis_pool).await?;
 

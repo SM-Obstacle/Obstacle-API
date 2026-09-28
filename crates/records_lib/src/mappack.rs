@@ -167,55 +167,55 @@ pub async fn update_mappack<C: TransactionTrait + ConnectionTrait + Sync>(
             .await?;
     }
 
-    async fn ensure_mappack<C: ConnectionTrait>(
-        conn: &C,
-        mappack: AnyMappackId<'_>,
-    ) -> RecordsResult<()> {
-        let mappack_id = mappack.mappack_id().to_string();
-        mappacks::Entity::insert(mappacks::ActiveModel {
-            id: Set(mappack_id.clone()),
-            ..Default::default()
-        })
-        .on_conflict_do_nothing()
-        .exec(conn)
-        .await?;
-        if let AnyMappackId::Event(event, edition) = mappack {
-            let maps = event_edition_maps::Entity::find()
-                .filter(
-                    event_edition_maps::Column::EventId
-                        .eq(event.id)
-                        .and(event_edition_maps::Column::EditionId.eq(edition.id)),
-                )
-                .all(conn)
-                .await?;
-            mappack_maps::Entity::delete_many()
-                .filter(mappack_maps::Column::MappackId.eq(&mappack_id))
-                .exec(conn)
-                .await?;
-            let rows = maps
-                .into_iter()
-                .enumerate()
-                .map(|(order, map)| mappack_maps::ActiveModel {
-                    mappack_id: Set(mappack_id.clone()),
-                    map_id: Set(map.map_id),
-                    map_order: Set(order as u32),
-                });
-            mappack_maps::Entity::insert_many(rows)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::columns([
-                        mappack_maps::Column::MappackId,
-                        mappack_maps::Column::MapId,
-                    ])
-                    .update_columns([mappack_maps::Column::MapOrder])
-                    .to_owned(),
-                )
-                .exec(conn)
-                .await?;
-        }
-        Ok(())
-    }
-
     Ok(total_scores)
+}
+
+async fn ensure_mappack<C: ConnectionTrait>(
+    conn: &C,
+    mappack: AnyMappackId<'_>,
+) -> RecordsResult<()> {
+    let mappack_id = mappack.mappack_id().to_string();
+    mappacks::Entity::insert(mappacks::ActiveModel {
+        id: Set(mappack_id.clone()),
+        ..Default::default()
+    })
+    .on_conflict_do_nothing()
+    .exec(conn)
+    .await?;
+    if let AnyMappackId::Event(event, edition) = mappack {
+        let maps = event_edition_maps::Entity::find()
+            .filter(
+                event_edition_maps::Column::EventId
+                    .eq(event.id)
+                    .and(event_edition_maps::Column::EditionId.eq(edition.id)),
+            )
+            .all(conn)
+            .await?;
+        mappack_maps::Entity::delete_many()
+            .filter(mappack_maps::Column::MappackId.eq(&mappack_id))
+            .exec(conn)
+            .await?;
+        let rows = maps
+            .into_iter()
+            .enumerate()
+            .map(|(order, map)| mappack_maps::ActiveModel {
+                mappack_id: Set(mappack_id.clone()),
+                map_id: Set(map.map_id),
+                map_order: Set(order as u32),
+            });
+        mappack_maps::Entity::insert_many(rows)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::columns([
+                    mappack_maps::Column::MappackId,
+                    mappack_maps::Column::MapId,
+                ])
+                .update_columns([mappack_maps::Column::MapOrder])
+                .to_owned(),
+            )
+            .exec(conn)
+            .await?;
+    }
+    Ok(())
 }
 
 #[cfg_attr(feature = "tracing", tracing::instrument(skip(conn, scores)))]
