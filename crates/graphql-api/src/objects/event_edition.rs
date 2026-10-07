@@ -1,14 +1,18 @@
 use std::borrow::Cow;
 
-use entity::{event, event_category, event_edition, event_edition_categories, mappacks};
+use entity::{
+    event, event_category, event_edition, event_edition_categories, mappack_periodic_ranking,
+    mappacks,
+};
 use futures::TryStreamExt as _;
 use records_lib::{
     Expirable as _,
     error::{RecordsError, RecordsResult},
     event::{self as event_utils, EventMap},
     internal,
-    mappack::AnyMappackId,
+    mappack::{AnyMappackId, MappackRetention, update_mappack},
     must,
+    opt_event::OptEvent,
 };
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, QueryFilter as _,
@@ -54,14 +58,38 @@ impl EventEdition<'_> {
 
     async fn mappack(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<Mappack>> {
         let mappack_id = AnyMappackId::Event(&self.event.inner, &self.inner);
-        let conn = ctx.data_unchecked::<DbConn>();
-        let exists = mappacks::Entity::find_by_id(mappack_id.mappack_id().to_string())
+        let db = ctx.data_unchecked::<records_lib::Database>();
+        let conn = &db.sql_conn;
+        let mappack_id_string = mappack_id.mappack_id().to_string();
+        let exists = mappacks::Entity::find_by_id(&mappack_id_string)
+            .one(conn)
+            .await?
+            .is_some();
+        let has_scores = mappack_periodic_ranking::Entity::find()
+            .filter(
+                mappack_periodic_ranking::Column::MappackId
+                    .eq(&mappack_id_string)
+                    .and(mappack_periodic_ranking::Column::EventId.eq(self.inner.event_id))
+                    .and(mappack_periodic_ranking::Column::EditionId.eq(self.inner.id)),
+            )
             .one(conn)
             .await?
             .is_some();
 
+        if self.inner.has_expired() && !has_scores {
+            update_mappack(
+                conn,
+                &db.redis_pool,
+                mappack_id,
+                OptEvent::new(&self.event.inner, &self.inner),
+                MappackRetention::Temporary,
+            )
+            .await?;
+        }
+
+        let exists = exists || self.inner.has_expired();
         Ok(exists.then_some(Mappack {
-            mappack_id: mappack_id.mappack_id().to_string(),
+            mappack_id: mappack_id_string,
             event_has_expired: self.inner.has_expired(),
         }))
     }

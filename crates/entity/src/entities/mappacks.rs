@@ -9,6 +9,7 @@ pub struct Model {
     pub mx_name: Option<String>,
     pub mx_created_at: Option<String>,
     pub last_updated_at: Option<DateTime>,
+    pub expires_at: Option<DateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -276,6 +276,7 @@ pub async fn populate(
         &db.redis_pool,
         AnyMappackId::Event(&event, &edition),
         Default::default(),
+        mappack::MappackRetention::Permanent,
     )
     .await?;
 

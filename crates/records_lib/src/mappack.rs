@@ -7,10 +7,11 @@ use entity::{
     event, event_edition, event_edition_maps, global_event_records, global_records, mappack_maps,
     mappacks, maps, players, records,
 };
+use mkenv::prelude::*;
 use sea_orm::{
     ActiveValue::Set,
     ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, Order, QueryFilter, QueryOrder,
-    StreamTrait, TransactionTrait,
+    QueryTrait, StreamTrait, TransactionTrait,
     prelude::Expr,
     sea_query::{Asterisk, Query},
 };
@@ -76,6 +77,16 @@ pub enum AnyMappackId<'a> {
     Id(&'a str),
 }
 
+/// Controls how long computed mappack scores are retained.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum MappackRetention {
+    /// Retain the mappack and its scores indefinitely.
+    #[default]
+    Permanent,
+    /// Retain the mappack and its scores until the configured cleanup time.
+    Temporary,
+}
+
 impl fmt::Debug for AnyMappackId<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.mappack_id(), f)
@@ -136,8 +147,9 @@ pub async fn update_mappack<C: TransactionTrait + ConnectionTrait + Sync>(
     redis_pool: &RedisPool,
     mappack: AnyMappackId<'_>,
     event: OptEvent<'_>,
+    retention: MappackRetention,
 ) -> RecordsResult<usize> {
-    ensure_mappack(conn, mappack).await?;
+    ensure_mappack(conn, mappack, retention).await?;
     // Calculate the scores
     let scores = crate::assert_future_send(sync::transaction_with_config(
         conn,
@@ -173,13 +185,26 @@ pub async fn update_mappack<C: TransactionTrait + ConnectionTrait + Sync>(
 async fn ensure_mappack<C: ConnectionTrait>(
     conn: &C,
     mappack: AnyMappackId<'_>,
+    retention: MappackRetention,
 ) -> RecordsResult<()> {
     let mappack_id = mappack.mappack_id().to_string();
+    let expires_at = match retention {
+        MappackRetention::Permanent => None,
+        MappackRetention::Temporary => Some(
+            chrono::Utc::now().naive_utc()
+                + chrono::Duration::seconds(crate::env().temporary_mappack_ttl.get()),
+        ),
+    };
     mappacks::Entity::insert(mappacks::ActiveModel {
         id: Set(mappack_id.clone()),
+        expires_at: Set(expires_at),
         ..Default::default()
     })
-    .on_conflict_do_nothing()
+    .on_conflict(
+        sea_orm::sea_query::OnConflict::column(mappacks::Column::Id)
+            .update_columns([mappacks::Column::ExpiresAt])
+            .to_owned(),
+    )
     .exec(conn)
     .await?;
     if let AnyMappackId::Event(event, edition) = mappack {
@@ -215,6 +240,85 @@ async fn ensure_mappack<C: ConnectionTrait>(
             .exec(conn)
             .await?;
     }
+    Ok(())
+}
+
+/// Removes on-demand score snapshots that are no longer needed.
+///
+/// Expired event editions keep their mappack metadata, while temporary MX
+/// mappacks and all of their associated score data are removed.
+pub async fn cleanup_temporary_mappacks<C: ConnectionTrait + TransactionTrait + Sync>(
+    conn: &C,
+) -> RecordsResult<()> {
+    use crate::Expirable;
+
+    let expired_editions = event_edition::Entity::find()
+        .all(conn)
+        .await?
+        .into_iter()
+        .filter(|edition| edition.has_expired())
+        .collect::<Vec<_>>();
+
+    let mut expired_event_mappacks = Vec::new();
+    for edition in expired_editions {
+        let periods = entity::mappack_periodic_ranking::Entity::find()
+            .filter(
+                entity::mappack_periodic_ranking::Column::EventId
+                    .eq(edition.event_id)
+                    .and(entity::mappack_periodic_ranking::Column::EditionId.eq(edition.id)),
+            )
+            .all(conn)
+            .await?;
+        expired_event_mappacks.extend(periods.iter().map(|period| period.mappack_id.clone()));
+        let period_ids = periods
+            .into_iter()
+            .map(|period| period.period_id)
+            .collect::<Vec<_>>();
+        if !period_ids.is_empty() {
+            entity::mappack_ranking_period::Entity::delete_many()
+                .filter(entity::mappack_ranking_period::Column::PeriodId.is_in(period_ids))
+                .exec(conn)
+                .await?;
+        }
+    }
+
+    let now = chrono::Utc::now().naive_utc();
+    let temporary_mappacks = mappacks::Entity::find()
+        .filter(
+            mappacks::Column::ExpiresAt
+                .is_not_null()
+                .and(mappacks::Column::ExpiresAt.lt(now)),
+        )
+        .apply_if(
+            (!expired_event_mappacks.is_empty()).then_some(expired_event_mappacks),
+            |query, ids| query.filter(mappacks::Column::Id.is_not_in(ids)),
+        )
+        .all(conn)
+        .await?;
+    for mappack in temporary_mappacks {
+        let periods = entity::mappack_periodic_ranking::Entity::find()
+            .filter(entity::mappack_periodic_ranking::Column::MappackId.eq(&mappack.id))
+            .all(conn)
+            .await?;
+        let period_ids = periods
+            .into_iter()
+            .map(|period| period.period_id)
+            .collect::<Vec<_>>();
+        if !period_ids.is_empty() {
+            entity::mappack_ranking_period::Entity::delete_many()
+                .filter(entity::mappack_ranking_period::Column::PeriodId.is_in(period_ids))
+                .exec(conn)
+                .await?;
+        }
+        mappack_maps::Entity::delete_many()
+            .filter(mappack_maps::Column::MappackId.eq(&mappack.id))
+            .exec(conn)
+            .await?;
+        mappacks::Entity::delete_by_id(mappack.id)
+            .exec(conn)
+            .await?;
+    }
+
     Ok(())
 }
 

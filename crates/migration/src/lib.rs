@@ -15,6 +15,7 @@ mod m20260818_235037_add_records_player_map_time_index;
 mod m20260819_005446_add_unstyled_name;
 mod m20260820_081712_add_map_mx_id;
 mod m20260926_215938_mappack_scores;
+mod m20260929_000000_temporary_mappacks;
 
 use sea_orm_migration::prelude::*;
 
@@ -43,6 +44,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260819_005446_add_unstyled_name::Migration),
             Box::new(m20260820_081712_add_map_mx_id::Migration),
             Box::new(m20260926_215938_mappack_scores::Migration),
+            Box::new(m20260929_000000_temporary_mappacks::Migration),
         ]
     }
 }

@@ -64,6 +64,17 @@ mkenv::make_config! {
             default_val_fmt: "604,800",
         },
 
+        /// The retention time for mappacks computed on demand by the API.
+        pub temporary_mappack_ttl: {
+            var_name: "RECORDS_API_TEMPORARY_MAPPACK_TTL",
+            layers: [
+                parsed_from_str<i64>(),
+                or_default_val(|| 86_400),
+            ],
+            description: "The retention time, in seconds, of mappacks computed on demand",
+            default_val_fmt: "86,400",
+        },
+
         /// The default alignment of the titles of an event edition in the Titlepack menu.
         pub ingame_default_titles_align: {
             var_name: "RECORDS_API_INGAME_DEFAULT_TITLES_ALIGN",

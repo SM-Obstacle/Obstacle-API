@@ -17,6 +17,7 @@ mod expirable;
 mod mptypes;
 
 pub mod error;
+pub use expirable::Expirable;
 pub mod event;
 pub mod leaderboard;
 pub mod map;
@@ -43,7 +44,6 @@ pub type RedisConnection = deadpool_redis::Connection;
 use std::future::Future;
 
 pub use env::*;
-pub use expirable::Expirable;
 pub use mptypes::*;
 pub use pool::Database;
 use rand::Rng as _;

@@ -1,13 +1,17 @@
 use async_graphql::dataloader::DataLoader;
-use entity::{mappack_maps, mappack_periodic_ranking, mappack_player_periodic_ranking, mappacks};
+use entity::{
+    event, event_edition, mappack_maps, mappack_periodic_ranking, mappack_player_periodic_ranking,
+    mappacks,
+};
 use mkenv::prelude::*;
 use mx_layer::mappacks::MappackProvider;
 use records_lib::{
-    Database,
+    Database, Expirable,
     error::{RecordsError, RecordsResult},
     internal,
-    mappack::{AnyMappackId, update_mappack},
+    mappack::{AnyMappackId, MappackRetention, update_mappack},
     must,
+    opt_event::OptEvent,
 };
 use sea_orm::{
     ActiveValue::Set, ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _,
@@ -229,37 +233,83 @@ impl Mappack {
 
 pub async fn get_mappack(
     ctx: &async_graphql::Context<'_>,
-    mappack_id: String,
+    raw_mappack_id: String,
 ) -> RecordsResult<Mappack> {
     let db = ctx.data_unchecked::<Database>();
+    let Ok(mappack_id_int) = raw_mappack_id.parse() else {
+        return Err(RecordsError::InvalidMappackId(raw_mappack_id));
+    };
 
-    let mappack = AnyMappackId::Id(&mappack_id);
-
-    let mappack_exists = mappacks::Entity::find_by_id(&mappack_id)
+    if let Some(edition) = event_edition::Entity::find()
+        .filter(event_edition::Column::MxId.eq(mappack_id_int))
         .one(&db.sql_conn)
         .await?
-        .is_some();
+    {
+        if edition.has_expired() {
+            let has_scores = mappack_periodic_ranking::Entity::find()
+                .filter(
+                    mappack_periodic_ranking::Column::MappackId
+                        .eq(&raw_mappack_id)
+                        .and(mappack_periodic_ranking::Column::EventId.eq(edition.event_id))
+                        .and(mappack_periodic_ranking::Column::EditionId.eq(edition.id)),
+                )
+                .one(&db.sql_conn)
+                .await?
+                .is_some();
 
-    // We load the campaign, and update it, before retrieving the scores from it
-    if !mappack_exists {
-        let Ok(mappack_id_int) = mappack_id.parse() else {
-            return Err(RecordsError::InvalidMappackId(mappack_id));
-        };
+            if !has_scores {
+                let event = event::Entity::find_by_id(edition.event_id)
+                    .one(&db.sql_conn)
+                    .await?
+                    .ok_or_else(|| {
+                        internal!(
+                            "event of edition {}/{} should exist",
+                            edition.event_id,
+                            edition.id
+                        )
+                    })?;
+                update_mappack(
+                    &db.sql_conn,
+                    &db.redis_pool,
+                    AnyMappackId::Event(&event, &edition),
+                    OptEvent::new(&event, &edition),
+                    MappackRetention::Temporary,
+                )
+                .await?;
+            }
+        }
+    } else {
+        let registered_mappack = mappacks::Entity::find_by_id(&raw_mappack_id)
+            .one(&db.sql_conn)
+            .await?;
+        let is_registered = registered_mappack.is_some();
+        let should_update = registered_mappack
+            .and_then(|mappack| mappack.last_updated_at)
+            .map(|last_updated_at| {
+                let elapsed = (chrono::Utc::now().naive_utc() - last_updated_at)
+                    .num_seconds()
+                    .max(0) as u64;
+                elapsed >= records_lib::env().event_scores_interval.get().as_secs()
+            })
+            .unwrap_or(true);
 
-        let mx = ctx.data_unchecked::<MappackProvider>();
+        if should_update {
+            let mappack_id = AnyMappackId::Id(&raw_mappack_id);
+            if !is_registered {
+                let mx = ctx.data_unchecked::<MappackProvider>();
+                fill_mappack(&db.sql_conn, mx, mappack_id, mappack_id_int).await?;
+            }
 
-        // We fill the mappack
-        fill_mappack(&db.sql_conn, mx, mappack, mappack_id_int).await?;
-
-        // And we update it to have its scores cached
-        update_mappack(
-            &db.sql_conn,
-            &db.redis_pool,
-            AnyMappackId::Id(&mappack_id),
-            Default::default(),
-        )
-        .await?;
+            update_mappack(
+                &db.sql_conn,
+                &db.redis_pool,
+                mappack_id,
+                Default::default(),
+                MappackRetention::Temporary,
+            )
+            .await?;
+        }
     }
 
-    Ok(From::from(mappack_id))
+    Ok(From::from(raw_mappack_id))
 }
