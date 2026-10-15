@@ -16,6 +16,7 @@ mod m20260819_005446_add_unstyled_name;
 mod m20260820_081712_add_map_mx_id;
 mod m20260926_215938_mappack_scores;
 mod m20260929_000000_temporary_mappacks;
+mod m20261015_230631_add_checkpoint_times_index;
 
 use sea_orm_migration::prelude::*;
 
@@ -45,6 +46,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260820_081712_add_map_mx_id::Migration),
             Box::new(m20260926_215938_mappack_scores::Migration),
             Box::new(m20260929_000000_temporary_mappacks::Migration),
+            Box::new(m20261015_230631_add_checkpoint_times_index::Migration),
         ]
     }
 }
