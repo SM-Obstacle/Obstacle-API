@@ -2,6 +2,7 @@ pub mod error;
 pub mod loaders;
 pub mod mutations;
 pub mod objects;
+pub mod path_tracing;
 pub mod schema;
 pub mod subscriptions;
 

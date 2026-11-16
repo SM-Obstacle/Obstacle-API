@@ -16,6 +16,7 @@ use crate::{
     },
     mutations::root::MutationRoot,
     objects::root::QueryRoot,
+    path_tracing::PathTracing,
     subscriptions::root::SubscriptionRoot,
     utils::force_fetch::ForceFetchBudgetExtension,
 };
@@ -48,6 +49,7 @@ pub fn create_schema(db: Database, mx: MxLayer, records_sub: LatestRecordsSubscr
 
     create_schema_impl(records_sub)
         .extension(ApolloTracing)
+        .extension(PathTracing)
         .data(DataLoader::new(
             PlayerLoader(db.clone().sql_conn),
             tokio::spawn,

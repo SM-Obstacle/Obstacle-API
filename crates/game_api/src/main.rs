@@ -22,7 +22,10 @@ use mkenv::prelude::*;
 use records_lib::{Database, records_notifier::RecordsNotifier};
 use tracing::level_filters::LevelFilter;
 use tracing_actix_web::TracingLogger;
-use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
+use tracing_subscriber::{
+    EnvFilter,
+    fmt::{format::FmtSpan, writer::MakeWriterExt as _},
+};
 
 /// The main entry point.
 #[tokio::main]
@@ -47,6 +50,11 @@ async fn main() -> anyhow::Result<()> {
 
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::CLOSE)
+        // There's one GraphQL path span per resolved field: logging each of their closes would
+        // flood the output.
+        .with_writer(std::io::stdout.with_filter(|meta| {
+            !(meta.is_span() && meta.target() == graphql_api::path_tracing::TARGET)
+        }))
         .with_env_filter(
             EnvFilter::builder()
                 .with_default_directive(LevelFilter::INFO.into())
