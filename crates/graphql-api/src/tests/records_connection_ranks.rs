@@ -17,12 +17,15 @@ use deadpool_redis::redis::AsyncCommands as _;
 use entity::{maps, players, records};
 use itertools::Itertools;
 use records_lib::redis_key::map_key;
-use sea_orm::{ActiveValue::Set, EntityTrait};
+use sea_orm::{ActiveValue::Set, ColumnTrait as _, EntityTrait, QueryFilter as _};
 
 use crate::{
     config::InitError,
     cursors::ConnectionParameters,
-    objects::{player::get_player_records_connection, root::get_records_connection},
+    objects::{
+        map::get_map_records, player::get_player_records_connection,
+        root::get_records_connection,
+    },
 };
 
 fn setup() {
@@ -250,6 +253,60 @@ async fn player_ranks_without_cached_leaderboards() -> anyhow::Result<()> {
                 edge.node.inner.record.map_id
             );
         }
+
+        anyhow::Ok(())
+    })
+    .await
+}
+
+/// A leaderboard of the right size may still hold an outdated time.
+///
+/// When a player improves but the Redis update gets lost (a failed `ZADD` after the SQL commit,
+/// a Redis restored from an older snapshot, …), the leaderboard keeps the same number of
+/// entries. Comparing sizes alone then never repairs it, and ranks are computed against the
+/// stale time: two records with different times end up sharing a rank.
+#[tokio::test]
+async fn map_ranks_with_outdated_leaderboard_time() -> anyhow::Result<()> {
+    setup();
+
+    test_env::wrap(async |db| {
+        let fixture = insert_fixture(&db).await?;
+        let map_id = fixture.map_ids[0];
+
+        // Bring the leaderboard in, exactly in sync with the database.
+        get_map_records(&db.sql_conn, &db.redis_pool, map_id, Default::default(), None, None)
+            .await?;
+
+        // The slowest player of the map improves to between the 1st and the 2nd, behind
+        // Redis' back: the leaderboard keeps the same size, with the old time.
+        let slowest_id = PLAYERS_PER_MAP as u32;
+        records::Entity::update_many()
+            .col_expr(records::Column::Time, sea_orm::sea_query::Expr::value(1500))
+            .filter(records::Column::RecordPlayerId.eq(slowest_id))
+            .exec(&db.sql_conn)
+            .await?;
+
+        let records =
+            get_map_records(&db.sql_conn, &db.redis_pool, map_id, Default::default(), None, None)
+                .await?;
+
+        let ranked = records
+            .iter()
+            .map(|r| (r.inner.record.record_player_id, r.inner.record.time, r.inner.rank))
+            .collect_vec();
+
+        // Times 1000, 1500, 2000, 3000, 4000: all distinct, so are the ranks.
+        let mut expected = vec![(1, 1000, 1), (slowest_id, 1500, 2)];
+        expected.extend((2..PLAYERS_PER_MAP as u32).map(|p| (p, 1000 * p as i32, p as i32 + 1)));
+        assert_eq!(ranked, expected);
+
+        let cached: Option<f64> = db
+            .redis_pool
+            .get()
+            .await?
+            .zscore(map_key(map_id, Default::default()), slowest_id)
+            .await?;
+        assert_eq!(cached, Some(1500.), "the outdated time should have been repaired");
 
         anyhow::Ok(())
     })

@@ -65,7 +65,7 @@ impl From<maps::Model> for Map {
     }
 }
 
-async fn get_map_records<C: ConnectionTrait + StreamTrait>(
+pub(crate) async fn get_map_records<C: ConnectionTrait + StreamTrait>(
     conn: &C,
     redis_pool: &RedisPool,
     map_id: u32,

@@ -512,6 +512,19 @@ async fn many_records() -> anyhow::Result<()> {
                 old_rank: 5,
             },
         },
+        // No improvement: player 4 stays at 5400, 3rd behind 2500 and 3000.
+        TimeWithExpectedResponse {
+            player_id: 4,
+            time: 6000,
+            rs_count: 9,
+            expected_response: Response {
+                has_improved: false,
+                old: 5400,
+                new: 6000,
+                current_rank: 3,
+                old_rank: 3,
+            },
+        },
     ];
 
     base::with_db(async |db| {

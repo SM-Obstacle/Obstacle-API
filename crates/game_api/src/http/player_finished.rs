@@ -1,14 +1,12 @@
 use crate::{ApiErrorKind, RecordsResult, RecordsResultExt};
 use actix_web::web::Json;
 use chrono::{DateTime, Utc};
-use deadpool_redis::redis;
 use entity::{checkpoint_times, event_edition_records, maps, records, types};
 use records_lib::{
     NullableInteger, RedisPool,
     opt_event::OptEvent,
     ranks,
     records_notifier::{NewRecordEvent, NewRecordMap, NewRecordPlayer, RecordsNotifier},
-    redis_key::map_key,
     sync,
 };
 use sea_orm::{
@@ -241,41 +239,36 @@ where
 
     let mut redis_conn = redis_pool.get().await.with_api_err()?;
 
-    let (old, new, has_improved, old_rank) = match result.old_record {
-        Some(records::Model { time: old, .. }) => (
-            old,
-            params.body.time,
-            params.body.time < old,
-            Some(ranks::get_rank(conn, &mut redis_conn, map.id, old, params.event).await?),
-        ),
-        None => (params.body.time, params.body.time, true, None),
-    };
+    let new = params.body.time;
+    let old_time = result.old_record.map(|record| record.time);
+    let has_improved = old_time.is_none_or(|old| new < old);
+    let old = old_time.unwrap_or(new);
+
+    // The SQL transaction is committed, so the leaderboard gets rebuilt from the database, with
+    // the new record in it, before the ranks are read.
+    let ranks = ranks::get_ranks(
+        conn,
+        &mut redis_conn,
+        [(map.id, old), (map.id, new)],
+        params.event,
+    )
+    .await
+    .with_api_err()?;
+
+    let old_rank = old_time.is_some().then(|| {
+        ranks[0]
+            - if has_improved {
+                // On an improvement, the player's own new time is faster than their old one
+                // and counted ahead of it: leave them out, so that the old rank is the one
+                // they had among the others before.
+                1
+            } else {
+                0
+            }
+    });
 
     let current_rank = if has_improved {
-        // We update the score in Redis then get the new rank.
-        //
-        // N.B.: we must update the time in Redis **after** the SQL transaction is committed, so
-        // that any other operation acting on the same leaderboard doesn't update the ZSET with an
-        // outdated version.
-        //
-        // If the Redis time were updated before the SQL transaction, a race condition could occur
-        // where other operations update the same leaderboard after the Redis update, but before
-        // the transaction finishes.
-
-        ranks::update_leaderboard(conn, &mut redis_conn, map.id, params.event)
-            .await
-            .with_api_err()?;
-
-        let mut pipe = redis::pipe();
-        pipe.atomic();
-
-        let map_key = map_key(map.id, params.event);
-        pipe.zadd(&map_key, player_id, new)
-            .ignore()
-            .zcount(&map_key, "-inf", new - 1);
-
-        let (count,): (i32,) = pipe.query_async(&mut redis_conn).await.with_api_err()?;
-        let new_rank = count + 1;
+        let new_rank = ranks[1];
 
         records_notifier.notify_new_record(NewRecordEvent {
             record_id: result.record_id,
@@ -294,9 +287,8 @@ where
 
         new_rank
     } else {
-        ranks::get_rank(conn, &mut redis_conn, map.id, old, params.event)
-            .await
-            .with_api_err()?
+        // Their best time is still the old one.
+        ranks[0]
     };
 
     Ok(FinishedOutput {

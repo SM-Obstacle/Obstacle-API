@@ -8,7 +8,7 @@ use entity::{event_edition_records, records};
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter as _, QuerySelect, QueryTrait as _,
     Select,
-    sea_query::{Func, expr},
+    sea_query::{Alias, Query, expr},
 };
 
 /// Selects the records of the provided maps, restricted to the optional event.
@@ -27,35 +27,94 @@ where
         })
 }
 
-/// Counts the records of each of the provided maps, in the database.
+/// Selects the best time of each player on each of the provided maps, restricted to the
+/// optional event, as `(map_id, record_player_id, time)` rows.
+///
+/// This is exactly the content a map's Redis leaderboard is supposed to hold.
+fn best_times_of<I>(map_ids: I, event: OptEvent<'_>) -> Select<records::Entity>
+where
+    I: IntoIterator<Item = u32>,
+{
+    find_records_of(map_ids, event)
+        .select_only()
+        .column(records::Column::MapId)
+        .column(records::Column::RecordPlayerId)
+        .column_as(expr::Expr::col(records::Column::Time).min(), "time")
+        .group_by(records::Column::MapId)
+        .group_by(records::Column::RecordPlayerId)
+}
+
+/// A cheap fingerprint of a leaderboard's content, comparable between MariaDB and Redis.
+///
+/// Comparing the number of entries alone isn't enough: when a player improves their time and
+/// the Redis update gets lost (a failed `ZADD` after the SQL commit, a Redis restored from an
+/// older snapshot, …), the leaderboard keeps the same size but holds an outdated time. Ranks
+/// are then computed against that stale time, and two records with different times may end up
+/// sharing the same rank. Summing the times and the player IDs catches those drifts too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct LeaderboardDigest {
+    count: u64,
+    times_sum: i64,
+    players_sum: i64,
+}
+
+/// Computes the digest of the leaderboard of each of the provided maps, from the database.
 ///
 /// Maps without any record are absent from the returned map.
-async fn count_records_maps<C, I>(
+async fn db_digests<C, I>(
     conn: &C,
     map_ids: I,
     event: OptEvent<'_>,
-) -> RecordsResult<HashMap<u32, u64>>
+) -> RecordsResult<HashMap<u32, LeaderboardDigest>>
 where
     C: ConnectionTrait,
     I: IntoIterator<Item = u32>,
 {
-    let counts = find_records_of(map_ids, event)
-        .select_only()
-        .column(records::Column::MapId)
-        .expr(Func::count_distinct(expr::Expr::col(
-            records::Column::RecordPlayerId,
-        )))
-        .group_by(records::Column::MapId)
-        // MariaDB answers `COUNT` with a signed `BIGINT`, whatever the counted column.
-        .into_tuple::<(u32, i64)>()
-        .all(conn)
+    let best = Alias::new("best");
+    let stmt = Query::select()
+        .from_subquery(best_times_of(map_ids, event).into_query(), best.clone())
+        .column((best, records::Column::MapId))
+        // MariaDB answers `COUNT` with a signed `BIGINT`, and `SUM` with a `DECIMAL`.
+        .expr(expr::Expr::cust("COUNT(*)"))
+        .expr(expr::Expr::cust("CAST(SUM(`time`) AS SIGNED)"))
+        .expr(expr::Expr::cust("CAST(SUM(`record_player_id`) AS SIGNED)"))
+        .group_by_col(records::Column::MapId)
+        .to_owned();
+
+    let rows = conn
+        .query_all(conn.get_database_backend().build(&stmt))
         .await?;
 
-    Ok(counts
-        .into_iter()
-        .map(|(map_id, count)| (map_id, count as u64))
-        .collect())
+    rows.into_iter()
+        .map(|row| {
+            let map_id: u32 = row.try_get_by_index(0)?;
+            let count: i64 = row.try_get_by_index(1)?;
+            Ok((
+                map_id,
+                LeaderboardDigest {
+                    count: count as u64,
+                    times_sum: row.try_get_by_index(2)?,
+                    players_sum: row.try_get_by_index(3)?,
+                },
+            ))
+        })
+        .collect()
 }
+
+/// Computes the digest of a Redis leaderboard server-side, so the whole sorted set never has
+/// to travel over the network. A missing key yields an empty digest.
+///
+/// The sums stay well below 2^53, so Lua's doubles hold them exactly, and Redis converts them
+/// to integer replies without loss.
+const REDIS_DIGEST_SCRIPT: &str = r#"
+local z = redis.call('ZRANGE', KEYS[1], 0, -1, 'WITHSCORES')
+local times, players = 0, 0
+for i = 1, #z, 2 do
+    players = players + tonumber(z[i])
+    times = times + tonumber(z[i + 1])
+end
+return {#z / 2, times, players}
+"#;
 
 /// Rebuilds the Redis leaderboards of the provided maps from the database, unconditionally.
 async fn force_update_leaderboards<C: ConnectionTrait>(
@@ -64,13 +123,7 @@ async fn force_update_leaderboards<C: ConnectionTrait>(
     map_ids: &[u32],
     event: OptEvent<'_>,
 ) -> RecordsResult<()> {
-    let rows = find_records_of(map_ids.iter().copied(), event)
-        .select_only()
-        .column(records::Column::MapId)
-        .column(records::Column::RecordPlayerId)
-        .column_as(expr::Expr::col(records::Column::Time).min(), "time")
-        .group_by(records::Column::MapId)
-        .group_by(records::Column::RecordPlayerId)
+    let rows = best_times_of(map_ids.iter().copied(), event)
         .into_tuple::<(u32, u32, i32)>()
         .all(conn)
         .await?;
@@ -92,8 +145,12 @@ async fn force_update_leaderboards<C: ConnectionTrait>(
     Ok(())
 }
 
-/// Checks whether the Redis leaderboards of the provided maps hold as many records as the
+/// Checks whether the Redis leaderboards of the provided maps hold the same best times as the
 /// database does, and regenerates the ones that don't.
+///
+/// The comparison goes through a [`LeaderboardDigest`] (entries count, sum of the times, sum of
+/// the player IDs), so a leaderboard holding an outdated time is caught even when its size is
+/// right.
 ///
 /// This is both a repair of any drift between MariaDB and Redis, and the guarantee that a map
 /// has a leaderboard at all: Redis answers `ZCOUNT` with `0` on a missing key, which is
@@ -124,19 +181,29 @@ where
         return Ok(HashMap::new());
     }
 
-    let mysql_counts = count_records_maps(conn, map_ids.iter().copied(), event).await?;
+    let db_digests = db_digests(conn, map_ids.iter().copied(), event).await?;
 
     let mut pipe = redis::pipe();
     for &map_id in &map_ids {
-        pipe.zcard(map_key(map_id, event));
+        // A plain `EVAL` rather than `EVALSHA`, so that a pipeline never fails on a script
+        // Redis hasn't cached yet. The script is tiny.
+        pipe.cmd("EVAL")
+            .arg(REDIS_DIGEST_SCRIPT)
+            .arg(1)
+            .arg(map_key(map_id, event));
     }
-    let redis_counts: Vec<u64> = pipe.query_async(redis_conn).await?;
+    let redis_digests: Vec<(u64, i64, i64)> = pipe.query_async(redis_conn).await?;
 
     let stale: Vec<u32> = map_ids
         .iter()
-        .zip(redis_counts)
-        .filter(|(map_id, redis_count)| {
-            mysql_counts.get(*map_id).copied().unwrap_or(0) != *redis_count
+        .zip(redis_digests)
+        .filter(|(map_id, (count, times_sum, players_sum))| {
+            let redis_digest = LeaderboardDigest {
+                count: *count,
+                times_sum: *times_sum,
+                players_sum: *players_sum,
+            };
+            db_digests.get(*map_id).copied().unwrap_or_default() != redis_digest
         })
         .map(|(map_id, _)| *map_id)
         .collect();
@@ -145,7 +212,10 @@ where
         force_update_leaderboards(conn, redis_conn, &stale, event).await?;
     }
 
-    Ok(mysql_counts)
+    Ok(db_digests
+        .into_iter()
+        .map(|(map_id, digest)| (map_id, digest.count))
+        .collect())
 }
 
 /// Checks if the Redis leaderboard for the map with the provided ID has a different count
