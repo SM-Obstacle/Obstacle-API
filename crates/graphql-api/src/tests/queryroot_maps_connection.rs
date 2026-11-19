@@ -107,6 +107,7 @@ async fn default_page() -> anyhow::Result<()> {
                 .with_ymd_and_hms(2025, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
         },
         ranking_period::ActiveModel {
             period_id: Set(2),
@@ -114,6 +115,16 @@ async fn default_page() -> anyhow::Result<()> {
                 .with_ymd_and_hms(2026, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
+        },
+        // A newer global period, which must be ignored
+        ranking_period::ActiveModel {
+            period_id: Set(3),
+            period_date: Set(chrono::Utc
+                .with_ymd_and_hms(2026, 9, 17, 00, 00, 00)
+                .unwrap()
+                .naive_utc()),
+            is_global: Set(true),
         },
     ];
 
@@ -127,6 +138,11 @@ async fn default_page() -> anyhow::Result<()> {
             period_id: Set(2),
             map_id: Set((i + 1) as _),
             score: Set((map_amount - i) as _),
+        }))
+        .chain((0..map_amount).map(|i| map_periodic_ranking::ActiveModel {
+            period_id: Set(3),
+            map_id: Set((i + 1) as _),
+            score: Set(f64::MAX),
         }));
 
     let source = gen_map_ranking_key();
@@ -250,6 +266,7 @@ async fn test_first_x_after_y(
                 .with_ymd_and_hms(2025, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
         },
         ranking_period::ActiveModel {
             period_id: Set(2),
@@ -257,6 +274,7 @@ async fn test_first_x_after_y(
                 .with_ymd_and_hms(2026, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
         },
     ];
 
@@ -404,6 +422,7 @@ async fn test_last_x_before_y(
                 .with_ymd_and_hms(2025, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
         },
         ranking_period::ActiveModel {
             period_id: Set(2),
@@ -411,6 +430,7 @@ async fn test_last_x_before_y(
                 .with_ymd_and_hms(2026, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
         },
     ];
 

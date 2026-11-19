@@ -4,7 +4,7 @@ use async_graphql::{
     ID,
     connection::{self, CursorType},
 };
-use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
+use deadpool_redis::redis::{self, ToRedisArgs};
 use entity::{
     event as event_entity, event_edition, event_edition_records, global_records,
     map_periodic_ranking, maps, player_periodic_ranking, players, ranking_period, records,
@@ -555,6 +555,46 @@ impl IntoValueTuple for &PlayerMapRankingCursor {
     }
 }
 
+/// Returns the rank of each member in the player or map ranking at `key`.
+///
+/// Members with equal scores share the same rank, which is the number of members with a strictly
+/// higher score, plus one. This is the same convention as the [records ranks][records_lib::ranks].
+///
+/// Unlike the records leaderboards, the player/map rankings are only filled by the SOCC, so a
+/// member missing from Redis (or the key being absent) is reported as an error, rather than
+/// silently ranking everyone first.
+async fn get_ranking_ranks<S, I>(
+    redis_conn: &mut RedisConnection,
+    key: &S,
+    members: I,
+) -> GqlResult<Vec<i32>>
+where
+    S: ToRedisArgs + Send + Sync,
+    I: IntoIterator<Item = u32>,
+{
+    let members = members.into_iter().collect::<Vec<_>>();
+    if members.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut pipe = redis::pipe();
+    for member in &members {
+        pipe.zscore(key, member);
+    }
+    let scores: Vec<Option<f64>> = pipe.query_async(redis_conn).await?;
+
+    let mut pipe = redis::pipe();
+    for (member, score) in members.iter().zip(scores) {
+        let score = score.ok_or_else(|| {
+            internal!("member {member} should be present in the player/map ranking")
+        })?;
+        pipe.zcount(key, format!("({score}"), "+inf");
+    }
+    let counts: Vec<i32> = pipe.query_async(redis_conn).await?;
+
+    Ok(counts.into_iter().map(|count| count + 1).collect())
+}
+
 pub(crate) type PlayersConnectionInput<S = PlayerRanking> =
     ConnectionInput<PlayerMapRankingCursor, PlayersFilter, PlayerMapRankingSort, S>;
 
@@ -609,11 +649,14 @@ where
             sea_orm::JoinType::LeftJoin,
             ranking_period::Entity,
             "newest_period",
-            Expr::col(("newest_period", ranking_period::Column::PeriodDate)).gt(Expr::col((
-                "score_period",
-                ranking_period::Column::PeriodDate,
-            ))),
+            Expr::col(("newest_period", ranking_period::Column::PeriodDate))
+                .gt(Expr::col((
+                    "score_period",
+                    ranking_period::Column::PeriodDate,
+                )))
+                .and(Expr::col(("newest_period", ranking_period::Column::IsGlobal)).eq(false)),
         )
+        .and_where(Expr::col(("score_period", ranking_period::Column::IsGlobal)).eq(false))
         .and_where(Expr::col(("newest_period", ranking_period::Column::PeriodId)).is_null());
     let query = SelectStatement::new()
         .expr(Expr::col(("player", Asterisk)))
@@ -685,12 +728,19 @@ where
 
     connection.edges.reserve(players.len());
 
-    for player in players {
-        let rank: i32 = redis_conn.zrevrank(&input.source, player.player.id).await?;
+    let players = players.collect::<Vec<_>>();
+    let ranks = get_ranking_ranks(
+        redis_conn,
+        &input.source,
+        players.iter().map(|player| player.player.id),
+    )
+    .await?;
+
+    for (player, rank) in players.into_iter().zip(ranks) {
         connection.edges.push(connection::Edge::new(
             ID((cursor_encoder)(&player)),
             PlayerWithScore {
-                rank: rank + 1,
+                rank,
                 player: player.player.into(),
                 score: player.score,
             },
@@ -754,11 +804,14 @@ where
             sea_orm::JoinType::LeftJoin,
             ranking_period::Entity,
             "newest_period",
-            Expr::col(("newest_period", ranking_period::Column::PeriodDate)).gt(Expr::col((
-                "score_period",
-                ranking_period::Column::PeriodDate,
-            ))),
+            Expr::col(("newest_period", ranking_period::Column::PeriodDate))
+                .gt(Expr::col((
+                    "score_period",
+                    ranking_period::Column::PeriodDate,
+                )))
+                .and(Expr::col(("newest_period", ranking_period::Column::IsGlobal)).eq(false)),
         )
+        .and_where(Expr::col(("score_period", ranking_period::Column::IsGlobal)).eq(false))
         .and_where(Expr::col(("newest_period", ranking_period::Column::PeriodDate)).is_null());
     let query = SelectStatement::new()
         .expr(Expr::col(("map", Asterisk)))
@@ -849,12 +902,15 @@ where
 
     connection.edges.reserve(maps.len());
 
-    for map in maps {
-        let rank: i32 = redis_conn.zrevrank(&input.source, map.map.id).await?;
+    let maps = maps.collect::<Vec<_>>();
+    let ranks =
+        get_ranking_ranks(redis_conn, &input.source, maps.iter().map(|map| map.map.id)).await?;
+
+    for (map, rank) in maps.into_iter().zip(ranks) {
         connection.edges.push(connection::Edge::new(
             ID((cursor_encoder)(&map)),
             MapWithScore {
-                rank: rank + 1,
+                rank,
                 map: map.map.into(),
                 score: map.score,
             },

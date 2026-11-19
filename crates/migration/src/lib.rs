@@ -17,6 +17,7 @@ mod m20260820_081712_add_map_mx_id;
 mod m20260926_215938_mappack_scores;
 mod m20260929_000000_temporary_mappacks;
 mod m20261015_230631_add_checkpoint_times_index;
+mod m20261119_120000_add_ranking_period_is_global;
 
 use sea_orm_migration::prelude::*;
 
@@ -47,6 +48,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260926_215938_mappack_scores::Migration),
             Box::new(m20260929_000000_temporary_mappacks::Migration),
             Box::new(m20261015_230631_add_checkpoint_times_index::Migration),
+            Box::new(m20261119_120000_add_ranking_period_is_global::Migration),
         ]
     }
 }

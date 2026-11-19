@@ -99,6 +99,7 @@ async fn default_page() -> anyhow::Result<()> {
                 .with_ymd_and_hms(2025, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
         },
         ranking_period::ActiveModel {
             period_id: Set(2),
@@ -106,6 +107,16 @@ async fn default_page() -> anyhow::Result<()> {
                 .with_ymd_and_hms(2026, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
+        },
+        // A newer global period, which must be ignored
+        ranking_period::ActiveModel {
+            period_id: Set(3),
+            period_date: Set(chrono::Utc
+                .with_ymd_and_hms(2026, 9, 17, 00, 00, 00)
+                .unwrap()
+                .naive_utc()),
+            is_global: Set(true),
         },
     ];
 
@@ -120,6 +131,13 @@ async fn default_page() -> anyhow::Result<()> {
                 period_id: Set(2),
                 player_id: Set((i + 1) as _),
                 score: Set((player_amount - i) as _),
+            }),
+        )
+        .chain(
+            (0..player_amount).map(|i| player_periodic_ranking::ActiveModel {
+                period_id: Set(3),
+                player_id: Set((i + 1) as _),
+                score: Set(f64::MAX),
             }),
         );
 
@@ -237,6 +255,7 @@ async fn test_first_x_after_y(
                 .with_ymd_and_hms(2025, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
         },
         ranking_period::ActiveModel {
             period_id: Set(2),
@@ -244,6 +263,7 @@ async fn test_first_x_after_y(
                 .with_ymd_and_hms(2026, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
         },
     ];
 
@@ -384,6 +404,7 @@ async fn test_last_x_before_y(
                 .with_ymd_and_hms(2025, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
         },
         ranking_period::ActiveModel {
             period_id: Set(2),
@@ -391,6 +412,7 @@ async fn test_last_x_before_y(
                 .with_ymd_and_hms(2026, 8, 17, 00, 00, 00)
                 .unwrap()
                 .naive_utc()),
+            is_global: Set(false),
         },
     ];
 
@@ -634,4 +656,80 @@ async fn last_x() -> anyhow::Result<()> {
     .await?;
 
     Ok(())
+}
+
+#[tokio::test]
+async fn equal_scores_share_rank() -> anyhow::Result<()> {
+    setup();
+
+    // Player 1 is first, players 2 to 4 are tied, player 5 is last.
+    let scores = [10., 5., 5., 5., 1.];
+
+    let players = (0..scores.len()).map(|i| players::ActiveModel {
+        id: Set((i + 1) as _),
+        login: Set(format!("player_{i}_login")),
+        name: Set(format!("player_{i}_name")),
+        role: Set(0),
+        ..Default::default()
+    });
+
+    let period = ranking_period::ActiveModel {
+        period_id: Set(1),
+        period_date: Set(chrono::Utc
+            .with_ymd_and_hms(2026, 8, 17, 00, 00, 00)
+            .unwrap()
+            .naive_utc()),
+        is_global: Set(false),
+    };
+
+    let player_scores =
+        scores
+            .iter()
+            .enumerate()
+            .map(|(i, score)| player_periodic_ranking::ActiveModel {
+                period_id: Set(1),
+                player_id: Set((i + 1) as _),
+                score: Set(*score),
+            });
+
+    let source = gen_player_ranking_key();
+
+    test_env::wrap(async |db| {
+        players::Entity::insert_many(players)
+            .exec(&db.sql_conn)
+            .await?;
+        ranking_period::Entity::insert(period)
+            .exec(&db.sql_conn)
+            .await?;
+        player_periodic_ranking::Entity::insert_many(player_scores)
+            .exec(&db.sql_conn)
+            .await?;
+
+        let mut redis_conn = db.redis_pool.get().await?;
+        fill_redis_lb(
+            &mut redis_conn,
+            &source,
+            scores.iter().enumerate().map(|(i, score)| (i + 1, *score)),
+        )
+        .await?;
+
+        let result = get_players_connection(
+            &db.sql_conn,
+            &mut redis_conn,
+            ConnectionInputBuilder::default().build(source),
+        )
+        .await?;
+
+        itertools::assert_equal(
+            result
+                .edges
+                .into_iter()
+                .map(|edge| (edge.node.player.inner.id, edge.node.rank)),
+            // Tied players are sorted by descending ID, like the cursor.
+            [(1, 1), (4, 2), (3, 2), (2, 2), (5, 5)],
+        );
+
+        anyhow::Ok(())
+    })
+    .await
 }

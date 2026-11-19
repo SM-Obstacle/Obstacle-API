@@ -8,6 +8,7 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub period_id: i32,
     pub period_date: DateTime,
+    pub is_global: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

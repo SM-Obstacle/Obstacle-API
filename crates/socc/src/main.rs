@@ -59,6 +59,8 @@ async fn main() -> anyhow::Result<()> {
     env.init();
     let event_scores_interval = env.lib_env.event_scores_interval.get();
     let player_ranking_scores_interval = env.lib_env.player_map_ranking_scores_interval.get();
+    let player_global_ranking_scores_interval =
+        env.lib_env.player_map_global_ranking_scores_interval.get();
     records_lib::init_env(env.lib_env);
 
     let db = Database::from_db_url(
@@ -78,15 +80,10 @@ async fn main() -> anyhow::Result<()> {
         campaign_scores::update,
     ));
 
-    let player_map_ranking_handle = tokio::spawn(handle(
+    let player_map_ranking_handle = tokio::spawn(player_map_ranking::run(
         db.clone(),
         player_ranking_scores_interval,
-        move |db| {
-            player_map_ranking::update(
-                db,
-                Some(chrono::Utc::now() - player_ranking_scores_interval),
-            )
-        },
+        player_global_ranking_scores_interval,
     ));
 
     info!("Spawned all tasks");
