@@ -1,6 +1,6 @@
 //! A tiny module to make SQL transactions and wrap them with type-check.
 
-use sea_orm::{AccessMode, DatabaseTransaction, DbErr, IsolationLevel, TransactionTrait};
+use sea_orm::{AccessMode, DbErr, IsolationLevel, TransactionSession as _, TransactionTrait};
 
 /// Wraps the call of the provided function with an SQL transaction with the provided mode.
 ///
@@ -21,7 +21,7 @@ pub async fn transaction_with_config<F, C, T, E>(
     f: F,
 ) -> Result<T, E>
 where
-    F: for<'a> AsyncFnOnce(&'a DatabaseTransaction) -> Result<T, E>,
+    F: for<'a> AsyncFnOnce(&'a C::Transaction) -> Result<T, E>,
     E: From<DbErr>,
     C: TransactionTrait,
 {
@@ -51,7 +51,7 @@ where
 /// [`assert_future_send`](crate::assert_future_send) function.
 pub async fn transaction<F, C, T, E>(conn: &C, f: F) -> Result<T, E>
 where
-    F: for<'a> AsyncFnOnce(&'a DatabaseTransaction) -> Result<T, E>,
+    F: for<'a> AsyncFnOnce(&'a C::Transaction) -> Result<T, E>,
     E: From<DbErr>,
     C: TransactionTrait,
 {

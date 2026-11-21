@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use async_graphql::dataloader::Loader;
 use entity::records;
 use sea_orm::{
-    ColumnTrait as _, DbConn, EntityTrait as _, QueryFilter as _, QuerySelect as _, prelude::Expr,
-    sea_query::Func,
+    ColumnTrait as _, DbConn, EntityTrait as _, ExprTrait as _, QueryFilter as _, QuerySelect as _,
+    prelude::Expr, sea_query::Func,
 };
 
 use crate::error::ApiGqlError;
@@ -23,8 +23,8 @@ impl Loader<(u32, u32)> for TryCountLoader {
         // MariaDB turns a tuple `IN` into an index range, unlike a tuple comparison, so this
         // uses the `(record_player_id, map_id, record_date)` index.
         let pairs = Expr::tuple([
-            Expr::col(records::Column::RecordPlayerId).into(),
-            Expr::col(records::Column::MapId).into(),
+            Expr::col(records::Column::RecordPlayerId),
+            Expr::col(records::Column::MapId),
         ])
         .in_tuples(keys.iter().copied());
 

@@ -4,7 +4,7 @@ use entity::{checkpoint_times, global_event_records, global_records, maps, playe
 use futures::{Stream as _, StreamExt, TryStreamExt};
 use records_lib::opt_event::OptEvent;
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, FromQueryResult, StreamTrait, prelude::Expr,
+    ColumnTrait as _, ConnectionTrait, ExprTrait as _, FromQueryResult, StreamTrait, prelude::Expr,
     sea_query::Query,
 };
 use serde::{Deserialize, Serialize};
@@ -90,9 +90,8 @@ pub async fn pb<C: ConnectionTrait + StreamTrait>(
             "time",
         );
 
-    let stmt = conn.get_database_backend().build(&*times);
     let times = conn
-        .stream(stmt)
+        .stream(&*times)
         .await
         .with_api_err()?
         .map_ok(|result| PbResponseItem::from_query_result(&result, ""))

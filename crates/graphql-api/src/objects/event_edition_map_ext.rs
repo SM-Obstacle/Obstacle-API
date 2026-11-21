@@ -1,7 +1,9 @@
 use async_graphql::dataloader::DataLoader;
 use entity::mappack_map_periodic_ranking;
 use records_lib::{event as event_utils, mappack::AnyMappackId};
-use sea_orm::{ColumnTrait as _, EntityTrait as _, QueryFilter as _, QueryOrder as _};
+use sea_orm::{
+    ColumnTrait as _, EntityTrait as _, ExprTrait as _, QueryFilter as _, QueryOrder as _,
+};
 
 use crate::{
     error::GqlResult,

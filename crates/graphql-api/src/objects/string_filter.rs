@@ -1,4 +1,5 @@
 use async_graphql::InputObject;
+use sea_orm::ExprTrait as _;
 use sea_orm::sea_query::{Expr, SimpleExpr};
 
 /// How a filter compares a string column against the text it is given
@@ -24,7 +25,7 @@ impl StringFilter {
             // `utf8mb4_bin`.
             Expr::cust_with_exprs(
                 "? = ? COLLATE utf8mb4_bin",
-                [col.into(), Expr::val(self.value.as_str()).into()],
+                [col, Expr::val(self.value.as_str())],
             )
         } else {
             col.like(format!("%{}%", escape_like(&self.value)))

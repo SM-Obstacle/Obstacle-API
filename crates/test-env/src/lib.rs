@@ -77,9 +77,9 @@ where
         .await?;
     tracing::info!("Created database {db_name}");
 
-    let db = match master_db {
+    let db = match master_db.inner {
         #[cfg(feature = "mysql")]
-        sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(_) => {
+        sea_orm::DatabaseConnectionType::SqlxMySqlPoolConnection(_) => {
             use sea_orm::sqlx;
 
             let connect_options = master_db.get_mysql_connection_pool().connect_options();
@@ -89,7 +89,7 @@ where
             DbConn::from(db)
         }
         #[cfg(feature = "postgres")]
-        sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(_) => {
+        sea_orm::DatabaseConnectionType::SqlxPostgresPoolConnection(_) => {
             use sea_orm::sqlx;
 
             let connect_options = master_db.get_postgres_connection_pool().connect_options();

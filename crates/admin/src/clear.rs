@@ -1,7 +1,9 @@
 use deadpool_redis::redis::AsyncCommands;
 use entity::{event, event_edition, event_edition_maps};
 use records_lib::{Database, RedisConnection, mappack::AnyMappackId, must, redis_key::mappack_key};
-use sea_orm::{ColumnTrait as _, ConnectionTrait, EntityTrait as _, QueryFilter as _};
+use sea_orm::{
+    ColumnTrait as _, ConnectionTrait, EntityTrait as _, ExprTrait as _, QueryFilter as _,
+};
 
 #[derive(clap::Args)]
 pub struct ClearCommand {

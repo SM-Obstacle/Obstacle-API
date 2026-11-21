@@ -2,7 +2,9 @@ use entity::{
     mappack_map_periodic_ranking, mappack_periodic_ranking, mappack_player_periodic_ranking, maps,
 };
 use records_lib::{Database, internal, mappack::AnyMappackId};
-use sea_orm::{ColumnTrait as _, EntityTrait as _, QueryFilter as _, QueryOrder as _};
+use sea_orm::{
+    ColumnTrait as _, EntityTrait as _, ExprTrait as _, QueryFilter as _, QueryOrder as _,
+};
 
 use crate::{
     error::GqlResult,

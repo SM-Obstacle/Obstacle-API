@@ -6,8 +6,8 @@ use crate::{RedisConnection, error::RecordsResult, opt_event::OptEvent, redis_ke
 use deadpool_redis::redis;
 use entity::{event_edition_records, records};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter as _, QuerySelect, QueryTrait as _,
-    Select,
+    ColumnTrait as _, ConnectionTrait, EntityTrait, ExprTrait as _, QueryFilter as _, QuerySelect,
+    QueryTrait as _, Select,
     sea_query::{Alias, Query, expr},
 };
 
@@ -81,9 +81,7 @@ where
         .group_by_col(records::Column::MapId)
         .to_owned();
 
-    let rows = conn
-        .query_all(conn.get_database_backend().build(&stmt))
-        .await?;
+    let rows = conn.query_all(&stmt).await?;
 
     rows.into_iter()
         .map(|row| {

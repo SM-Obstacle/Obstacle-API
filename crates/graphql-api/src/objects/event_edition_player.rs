@@ -2,7 +2,7 @@ use entity::{event_category, event_edition_maps, maps, players, records};
 use futures::{Stream as _, StreamExt as _};
 use records_lib::{event as event_utils, mappack::AnyMappackId};
 use sea_orm::{
-    ColumnTrait as _, DbConn, EntityTrait as _, QueryFilter as _, QuerySelect as _,
+    ColumnTrait as _, DbConn, EntityTrait as _, ExprTrait as _, QueryFilter as _, QuerySelect as _,
     RelationTrait as _, prelude::Expr, sea_query::IntoCondition as _,
 };
 

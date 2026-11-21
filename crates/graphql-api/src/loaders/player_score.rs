@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use async_graphql::dataloader::Loader;
 use entity::player_periodic_ranking;
-use sea_orm::{ColumnTrait, DbConn, EntityTrait as _, QueryFilter as _, QuerySelect};
+use sea_orm::{
+    ColumnTrait, DbConn, EntityTrait as _, ExprTrait as _, QueryFilter as _, QuerySelect,
+};
 
 use crate::{error::ApiGqlError, utils::get_last_period_id};
 

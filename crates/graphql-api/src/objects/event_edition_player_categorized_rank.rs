@@ -3,8 +3,8 @@ use entity::{
     records,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait as _, DbConn, EntityTrait as _, PaginatorTrait as _,
-    QueryFilter as _, QuerySelect as _, prelude::Expr, sea_query::Query,
+    ColumnTrait as _, ConnectionTrait as _, DbConn, EntityTrait as _, ExprTrait as _,
+    PaginatorTrait as _, QueryFilter as _, QuerySelect as _, prelude::Expr, sea_query::Query,
 };
 
 use crate::{
@@ -112,9 +112,8 @@ impl EventEditionPlayerCategorizedRank<'_> {
             select.from_as(global_event_records::Entity, "r");
         }
 
-        let stmt = conn.get_database_backend().build(&*select);
         let res = conn
-            .query_all(stmt)
+            .query_all(&*select)
             .await?
             .into_iter()
             .map(|result| {

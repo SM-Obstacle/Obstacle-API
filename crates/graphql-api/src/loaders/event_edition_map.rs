@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use async_graphql::dataloader::Loader;
 use entity::event_edition_maps;
-use sea_orm::{DbConn, EntityTrait as _, QueryFilter as _, prelude::Expr};
+use sea_orm::{DbConn, EntityTrait as _, ExprTrait as _, QueryFilter as _, prelude::Expr};
 
 use crate::error::ApiGqlError;
 
@@ -26,9 +26,9 @@ impl Loader<EventEditionMapKey> for EventEditionMapLoader {
         // MariaDB turns a tuple `IN` into an index range, unlike a tuple comparison, so this
         // uses the primary key.
         let ids = Expr::tuple([
-            Expr::col(event_edition_maps::Column::EventId).into(),
-            Expr::col(event_edition_maps::Column::EditionId).into(),
-            Expr::col(event_edition_maps::Column::MapId).into(),
+            Expr::col(event_edition_maps::Column::EventId),
+            Expr::col(event_edition_maps::Column::EditionId),
+            Expr::col(event_edition_maps::Column::MapId),
         ])
         .in_tuples(keys.iter().copied());
 

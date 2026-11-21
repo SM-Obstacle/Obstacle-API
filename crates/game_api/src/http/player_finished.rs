@@ -10,8 +10,8 @@ use records_lib::{
     sync,
 };
 use sea_orm::{
-    ActiveValue::Set, ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter as _, QueryOrder,
-    QuerySelect, QueryTrait, TransactionTrait,
+    ActiveValue::Set, ColumnTrait as _, ConnectionTrait, EntityTrait, ExprTrait as _,
+    QueryFilter as _, QueryOrder, QuerySelect, QueryTrait, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 

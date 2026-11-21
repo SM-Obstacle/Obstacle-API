@@ -40,13 +40,14 @@ pub async fn del_note(
     ExtractDbConn(conn): ExtractDbConn,
     Json(body): Json<DelNoteBody>,
 ) -> RecordsResult<impl Responder> {
-    players::Entity::update(players::ActiveModel {
-        admins_note: Set(None),
-        ..Default::default()
-    })
-    .filter(players::Column::Login.eq(body.player_login))
-    .exec(&conn)
-    .await?;
+    players::Entity::update_many()
+        .set(players::ActiveModel {
+            admins_note: Set(None),
+            ..Default::default()
+        })
+        .filter(players::Column::Login.eq(body.player_login))
+        .exec(&conn)
+        .await?;
 
     Ok(HttpResponse::Ok().finish())
 }
@@ -77,14 +78,15 @@ pub async fn set_role(
         .with_api_err()?
         .ok_or_else(|| internal!("Role with ID {} should exist in database", body.role))?;
 
-    players::Entity::update(players::ActiveModel {
-        role: Set(body.role),
-        ..Default::default()
-    })
-    .filter(players::Column::Login.eq(&body.player_login))
-    .exec(&conn)
-    .await
-    .with_api_err()?;
+    players::Entity::update_many()
+        .set(players::ActiveModel {
+            role: Set(body.role),
+            ..Default::default()
+        })
+        .filter(players::Column::Login.eq(&body.player_login))
+        .exec(&conn)
+        .await
+        .with_api_err()?;
 
     json(SetRoleResponse {
         player_login: body.player_login,
@@ -338,9 +340,7 @@ pub async fn unban(
         )
         .and_where(banishments::Column::Id.eq(ban.inner.id));
 
-    let query = conn.get_database_backend().build(&*query);
-
-    conn.execute(query).await.with_api_err()?;
+    conn.execute(&*query).await.with_api_err()?;
 
     json(UnbanResponse {
         player_login: body.player_login,
