@@ -64,6 +64,17 @@ mkenv::make_config! {
             default_val_fmt: "604,800",
         },
 
+        /// The retention time for mappacks computed on demand by the API.
+        pub temporary_mappack_ttl: {
+            var_name: "RECORDS_API_TEMPORARY_MAPPACK_TTL",
+            layers: [
+                parsed_from_str<i64>(),
+                or_default_val(|| 86_400),
+            ],
+            description: "The retention time, in seconds, of mappacks computed on demand",
+            default_val_fmt: "86,400",
+        },
+
         /// The default alignment of the titles of an event edition in the Titlepack menu.
         pub ingame_default_titles_align: {
             var_name: "RECORDS_API_INGAME_DEFAULT_TITLES_ALIGN",
@@ -210,6 +221,21 @@ mkenv::make_config! {
             ],
             description: "The interval of the update of the player/map ranking scores, in seconds",
             default_val_fmt: "every week",
+        },
+
+        /// The interval of the global player/map ranking update
+        pub player_map_global_ranking_scores_interval: {
+            var_name: "PLAYER_MAP_GLOBAL_RANKING_SCORES_INTERVAL",
+            layers: [
+                parsed<Duration>(|input| {
+                    input.parse().map(Duration::from_secs).map_err(From::from)
+                }),
+                or_default_val(|| Duration::from_secs(3600 * 24 * 30)),
+            ],
+            description: "The interval of the update of the global (all-time) player/map ranking \
+                scores, in seconds. The periodic ranking uses them to order the players/maps \
+                that weren't active during the last period.",
+            default_val_fmt: "every 30 days",
         }
     }
 }

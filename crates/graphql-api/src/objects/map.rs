@@ -5,9 +5,9 @@ use async_graphql::{
 };
 use deadpool_redis::redis::AsyncCommands as _;
 use entity::{
-    event_edition, event_edition_maps, global_event_records, global_records, maps, player_rating,
-    records,
+    event_edition, event_edition_maps, global_event_records, global_records, maps, records,
 };
+use mx_layer::maps::MxIdProvider;
 use records_lib::{
     Database, RedisPool, internal,
     opt_event::OptEvent,
@@ -19,7 +19,7 @@ use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
     QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
-    sea_query::{Asterisk, ExprTrait as _, Func, IntoValueTuple, Query},
+    sea_query::{Asterisk, IntoValueTuple, Query},
 };
 
 use crate::{
@@ -28,12 +28,16 @@ use crate::{
         query_trait::CursorPaginable,
     },
     error::{self, ApiGqlError, CursorDecodeError, CursorDecodeErrorKind, GqlResult},
-    loaders::{map::MapLoader, player::PlayerLoader},
+    loaders::{
+        map::MapLoader, map_average_cps_times::MapAverageCpsTimesLoader,
+        map_average_rating::MapAverageRatingLoader, map_mx_id::MapMxIdLoader,
+        map_score::MapScoreLoader, player::PlayerLoader,
+    },
     objects::{
-        event_edition::EventEdition, player::Player, player_rating::PlayerRating,
-        ranked_record::RankedRecord, records_filter::RecordsFilter,
-        related_edition::RelatedEdition, sort::MapRecordSort, sort_order::SortOrder,
-        sort_state::SortState, sortable_fields::MapRecordSortableField,
+        checkpoint_time::CheckpointTime, event_edition::EventEdition, mx_id_status::MxIdStatus,
+        player::Player, player_rating::PlayerRating, ranked_record::RankedRecord,
+        records_filter::RecordsFilter, related_edition::RelatedEdition, sort::MapRecordSort,
+        sort_order::SortOrder, sort_state::SortState, sortable_fields::MapRecordSortableField,
     },
     utils::{
         page_input::{PaginationInput, apply_cursor_input},
@@ -61,7 +65,7 @@ impl From<maps::Model> for Map {
     }
 }
 
-async fn get_map_records<C: ConnectionTrait + StreamTrait>(
+pub(crate) async fn get_map_records<C: ConnectionTrait + StreamTrait>(
     conn: &C,
     redis_pool: &RedisPool,
     map_id: u32,
@@ -71,7 +75,8 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
 ) -> GqlResult<Vec<RankedRecord>> {
     let key = map_key(map_id, event);
 
-    update_leaderboard(conn, redis_pool, map_id, event).await?;
+    let mut redis_conn = redis_pool.get().await?;
+    update_leaderboard(conn, &mut redis_conn, map_id, event).await?;
 
     let to_reverse = matches!(rank_sort_by, Some(SortState::Reverse));
     let record_ids: Vec<i32> = {
@@ -139,14 +144,19 @@ async fn get_map_records<C: ConnectionTrait + StreamTrait>(
         .map(|result| records::Model::from_query_result(&result, ""))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut ranked_records = Vec::with_capacity(records.len());
+    let ranks = ranks::get_ranks(
+        conn,
+        &mut redis_conn,
+        records.iter().map(|record| (map_id, record.time)),
+        event,
+    )
+    .await?;
 
-    let mut redis_conn = redis_pool.get().await?;
-
-    for record in records {
-        let rank = ranks::get_rank(&mut redis_conn, map_id, record.time, event).await?;
-        ranked_records.push(records::RankedRecord { rank, record }.into());
-    }
+    let ranked_records = records
+        .into_iter()
+        .zip(ranks)
+        .map(|(record, rank)| records::RankedRecord { rank, record }.into())
+        .collect();
 
     Ok(ranked_records)
 }
@@ -310,20 +320,26 @@ pub(crate) async fn get_map_records_connection<C: ConnectionTrait + StreamTrait>
         iter: records,
     } = get_paginated(conn, query, &pagination_input).await?;
 
-    connection.edges.reserve(records.len());
-
-    ranks::update_leaderboard(conn, redis_pool, map_id, event).await?;
+    let records = records.collect::<Vec<_>>();
 
     let mut redis_conn = redis_pool.get().await?;
 
-    for record in records {
-        let rank = ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?;
+    let ranks = ranks::get_ranks(
+        conn,
+        &mut redis_conn,
+        records.iter().map(|record| (record.map_id, record.time)),
+        event,
+    )
+    .await?;
 
-        connection.edges.push(connection::Edge::new(
-            ID((cursor_encoder)(&record)),
-            records::RankedRecord { rank, record }.into(),
-        ));
-    }
+    connection
+        .edges
+        .extend(records.into_iter().zip(ranks).map(|(record, rank)| {
+            connection::Edge::new(
+                ID((cursor_encoder)(&record)),
+                records::RankedRecord { rank, record }.into(),
+            )
+        }));
 
     Ok(connection)
 }
@@ -396,8 +412,32 @@ impl Map {
 
 #[async_graphql::Object]
 impl Map {
-    pub async fn id(&self) -> ID {
+    async fn id(&self) -> ID {
         ID(format!("v0:Map:{}", self.inner.id))
+    }
+
+    async fn mx_id(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<i32>> {
+        if let Some(mx_id) = self.inner.mx_id {
+            return Ok(Some(mx_id));
+        }
+
+        // Ask MX for it. Saving it in our database is the provider's job; if it isn't there yet,
+        // this returns null and the next query has it.
+        let loader = ctx.data_unchecked::<DataLoader<MapMxIdLoader>>();
+        loader.load_one(self.inner.game_id.clone()).await
+    }
+
+    /// What we know about the MX ID of this map, to tell apart a map ManiaExchange doesn't have
+    /// from one we haven't got an answer for yet.
+    async fn mx_id_status(&self, ctx: &async_graphql::Context<'_>) -> MxIdStatus {
+        if self.inner.mx_id.is_some() {
+            return MxIdStatus::Known;
+        }
+
+        ctx.data_unchecked::<MxIdProvider>()
+            .status_of(&self.inner.game_id)
+            .await
+            .into()
     }
 
     async fn game_id(&self) -> &str {
@@ -429,8 +469,14 @@ impl Map {
         &self.inner.name
     }
 
-    async fn score(&self) -> f64 {
-        self.inner.score
+    async fn score(&self, ctx: &async_graphql::Context<'_>) -> f64 {
+        let loader = ctx.data_unchecked::<DataLoader<MapScoreLoader>>();
+        loader
+            .load_one(self.inner.id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default()
     }
 
     async fn related_event_editions(
@@ -479,26 +525,30 @@ impl Map {
         Ok(out)
     }
 
+    async fn average_cps_times(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> GqlResult<Vec<CheckpointTime>> {
+        let times = ctx
+            .data_unchecked::<DataLoader<MapAverageCpsTimesLoader>>()
+            .load_one(self.inner.id)
+            .await?;
+
+        // A map without any checkpoint is legitimate.
+        Ok(times.unwrap_or_default())
+    }
+
     async fn average_rating(
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> GqlResult<Vec<PlayerRating>> {
-        let conn = ctx.data_unchecked::<DbConn>();
-        let all = player_rating::Entity::find()
-            .filter(player_rating::Column::MapId.eq(self.inner.id))
-            .group_by(player_rating::Column::Kind)
-            .order_by_asc(player_rating::Column::Kind)
-            .select_only()
-            .expr_as(1.cast_as("UNSIGNED"), "player_id")
-            .columns([player_rating::Column::MapId, player_rating::Column::Kind])
-            .expr_as(
-                Func::avg(Expr::col(player_rating::Column::Rating)),
-                "rating",
-            )
-            .into_model()
-            .all(conn)
+        let ratings = ctx
+            .data_unchecked::<DataLoader<MapAverageRatingLoader>>()
+            .load_one(self.inner.id)
             .await?;
-        Ok(all)
+
+        // A map nobody rated yet has no average.
+        Ok(ratings.unwrap_or_default())
     }
 
     async fn records(

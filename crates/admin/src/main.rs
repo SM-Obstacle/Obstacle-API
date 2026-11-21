@@ -50,11 +50,13 @@ async fn main() -> anyhow::Result<()> {
 
     let cmd = Command::parse();
 
-    let client = reqwest::Client::new();
+    // Every request this tool sends to ManiaExchange goes through this, so it stays as polite as
+    // the API is.
+    let mx = mx_layer::MxLayer::new(reqwest::Client::new(), ());
 
     match cmd {
         Command::Event(event) => match event {
-            EventCommand::Populate(cmd) => populate::populate(client, db, cmd).await,
+            EventCommand::Populate(cmd) => populate::populate(mx, db, cmd).await,
             EventCommand::Clear(cmd) => clear::clear(db, cmd).await,
         },
         Command::Leaderboard(cmd) => leaderboard::leaderboard(db, cmd).await,

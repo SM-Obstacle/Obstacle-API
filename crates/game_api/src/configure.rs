@@ -12,6 +12,7 @@ use actix_web::{
 };
 use dsc_webhook::{FormattedRequestHead, WebhookBody, WebhookBodyEmbed, WebhookBodyEmbedField};
 use mkenv::prelude::*;
+use mx_layer::MxLayer;
 use records_lib::{Database, pool::clone_dbconn, records_notifier::RecordsNotifier};
 use tracing_actix_web::{DefaultRootSpanBuilder, RequestId};
 
@@ -234,12 +235,42 @@ impl tracing_actix_web::RootSpanBuilder for RootSpanBuilder {
     }
 }
 
-pub fn configure(cfg: &mut web::ServiceConfig, db: Database, records_notifier: RecordsNotifier) {
+/// The parts of the application which every worker must share.
+///
+/// [`configure`] runs once per worker thread, so anything it builds is one per worker. For the MX
+/// layer that would be wrong twice over: each worker would answer from a cache the others never
+/// see, and each would enforce the "one request per window" rate limit on its own, so the MX API
+/// would take as many requests as there are workers.
+///
+/// Cloning this is cheap: both fields are handles to the same thing.
+#[derive(Clone)]
+pub struct SharedState {
+    client: reqwest::Client,
+    mx: MxLayer,
+}
+
+/// Builds what every worker shares. This must be called once, before the workers are started.
+pub fn shared_state(db: &Database) -> SharedState {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(5))
+        .read_timeout(Duration::from_secs(10))
         .build()
         .unwrap();
 
+    let mx = MxLayer::new(
+        client.clone(),
+        crate::DbMxIdSink::new(clone_dbconn(&db.sql_conn)),
+    );
+
+    SharedState { client, mx }
+}
+
+pub fn configure(
+    cfg: &mut web::ServiceConfig,
+    db: Database,
+    records_notifier: RecordsNotifier,
+    SharedState { client, mx }: SharedState,
+) {
     let records_subscription = records_notifier.get_subscription();
 
     cfg.app_data(web::Data::new(crate::AuthState::default()))
@@ -248,11 +279,8 @@ pub fn configure(cfg: &mut web::ServiceConfig, db: Database, records_notifier: R
         .app_data(db.redis_pool.clone())
         .app_data(db.clone())
         .app_data(records_notifier)
-        .service(crate::graphql_route(
-            db.clone(),
-            client,
-            records_subscription,
-        ))
+        .app_data(mx.map_mx_ids.clone())
+        .service(crate::graphql_route(db.clone(), mx, records_subscription))
         .service(crate::api_route())
         .default_service(web::to(not_found));
 }

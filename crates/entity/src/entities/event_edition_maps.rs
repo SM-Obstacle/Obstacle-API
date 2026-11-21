@@ -46,9 +46,9 @@ pub struct Model {
     pub thumbnail_source: Option<String>,
     /// Whether the map is available or not to play.
     ///
-    /// Most of the time, this is true, but it might be false if the map is hidden from MX, and the
-    /// author explicitly wants it to not be playable.
-    pub is_available: bool,
+    /// If None, then we consider it as true. Most of the time, it is available, but it might not
+    /// if the map is hidden from MX, and the author explicitly wants it to not be playable.
+    pub is_available: Option<bool>,
     /// Whether the map should be disabled.
     ///
     /// The difference with the [`is_available`](Model::is_available) field, is that the latter is

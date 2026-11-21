@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "game-api-3099",
+      "runtimeExecutable": "zsh",
+      "runtimeArgs": ["-c", "RECORDS_API_PORT=3099 cargo run -p game-api -F mysql"],
+      "port": 3099
+    }
+  ]
+}

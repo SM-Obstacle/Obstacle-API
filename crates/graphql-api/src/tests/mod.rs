@@ -4,3 +4,4 @@ mod queryroot_records_connection;
 
 mod maps_records_connection;
 mod players_records_connection;
+mod records_connection_ranks;

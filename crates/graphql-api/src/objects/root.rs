@@ -4,10 +4,10 @@ use async_graphql::{
     ID,
     connection::{self, CursorType},
 };
-use deadpool_redis::redis::{AsyncCommands, ToRedisArgs};
+use deadpool_redis::redis::{self, ToRedisArgs};
 use entity::{
-    event as event_entity, event_edition, event_edition_records, functions, global_records, maps,
-    players, records,
+    event as event_entity, event_edition, event_edition_records, global_records,
+    map_periodic_ranking, maps, player_periodic_ranking, players, ranking_period, records,
 };
 use records_lib::{
     Database, RedisConnection, RedisPool, internal, must,
@@ -72,7 +72,7 @@ async fn get_record<C: ConnectionTrait + StreamTrait>(
     let mut redis_conn = redis_pool.get().await?;
 
     let out = records::RankedRecord {
-        rank: ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?,
+        rank: ranks::get_rank(conn, &mut redis_conn, record.map_id, record.time, event).await?,
         record,
     }
     .into();
@@ -98,21 +98,27 @@ async fn get_records<C: ConnectionTrait + StreamTrait>(
         .all(conn)
         .await?;
 
-    let mut ranked_records = Vec::with_capacity(records.len());
-
     let mut redis_conn = redis_pool.get().await?;
 
-    for record in records {
-        let rank = ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?;
+    let ranks = ranks::get_ranks(
+        conn,
+        &mut redis_conn,
+        records.iter().map(|record| (record.map_id, record.time)),
+        event,
+    )
+    .await?;
 
-        ranked_records.push(
+    let ranked_records = records
+        .into_iter()
+        .zip(ranks)
+        .map(|(record, rank)| {
             records::RankedRecord {
                 rank,
                 record: record.into(),
             }
-            .into(),
-        );
-    }
+            .into()
+        })
+        .collect();
 
     Ok(ranked_records)
 }
@@ -155,26 +161,34 @@ pub(crate) async fn get_records_connection_impl<C: ConnectionTrait + Transaction
         iter: records,
     } = get_paginated(conn, query, &pagination_input).await?;
 
-    connection.edges.reserve(records.len());
+    let records = records.collect::<Vec<_>>();
 
     let mut redis_conn = redis_pool.get().await?;
 
-    for record in records {
-        let rank = ranks::get_rank(&mut redis_conn, record.map_id, record.time, event).await?;
+    let ranks = ranks::get_ranks(
+        conn,
+        &mut redis_conn,
+        records.iter().map(|record| (record.map_id, record.time)),
+        event,
+    )
+    .await?;
 
-        connection.edges.push(connection::Edge::new(
-            ID(RecordDateCursor {
-                record_date: record.record_date.and_utc(),
-                data: record.record_id,
-            }
-            .encode_cursor()),
-            records::RankedRecord {
-                rank,
-                record: record.into(),
-            }
-            .into(),
-        ));
-    }
+    connection
+        .edges
+        .extend(records.into_iter().zip(ranks).map(|(record, rank)| {
+            connection::Edge::new(
+                ID(RecordDateCursor {
+                    record_date: record.record_date.and_utc(),
+                    data: record.record_id,
+                }
+                .encode_cursor()),
+                records::RankedRecord {
+                    rank,
+                    record: record.into(),
+                }
+                .into(),
+            )
+        }));
 
     Ok(connection)
 }
@@ -541,14 +555,54 @@ impl IntoValueTuple for &PlayerMapRankingCursor {
     }
 }
 
+/// Returns the rank of each member in the player or map ranking at `key`.
+///
+/// Members with equal scores share the same rank, which is the number of members with a strictly
+/// higher score, plus one. This is the same convention as the [records ranks][records_lib::ranks].
+///
+/// Unlike the records leaderboards, the player/map rankings are only filled by the SOCC, so a
+/// member missing from Redis (or the key being absent) is reported as an error, rather than
+/// silently ranking everyone first.
+async fn get_ranking_ranks<S, I>(
+    redis_conn: &mut RedisConnection,
+    key: &S,
+    members: I,
+) -> GqlResult<Vec<i32>>
+where
+    S: ToRedisArgs + Send + Sync,
+    I: IntoIterator<Item = u32>,
+{
+    let members = members.into_iter().collect::<Vec<_>>();
+    if members.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut pipe = redis::pipe();
+    for member in &members {
+        pipe.zscore(key, member);
+    }
+    let scores: Vec<Option<f64>> = pipe.query_async(redis_conn).await?;
+
+    let mut pipe = redis::pipe();
+    for (member, score) in members.iter().zip(scores) {
+        let score = score.ok_or_else(|| {
+            internal!("member {member} should be present in the player/map ranking")
+        })?;
+        pipe.zcount(key, format!("({score}"), "+inf");
+    }
+    let counts: Vec<i32> = pipe.query_async(redis_conn).await?;
+
+    Ok(counts.into_iter().map(|count| count + 1).collect())
+}
+
 pub(crate) type PlayersConnectionInput<S = PlayerRanking> =
     ConnectionInput<PlayerMapRankingCursor, PlayersFilter, PlayerMapRankingSort, S>;
 
 #[derive(FromQueryResult)]
-struct PlayerWithUnstyledName {
+struct PlayerWithScoreRow {
     #[sea_orm(nested)]
     player: players::Model,
-    unstyled_player_name: String,
+    score: f64,
 }
 
 pub(crate) async fn get_players_connection<C, S>(
@@ -562,26 +616,48 @@ where
 {
     let pagination_input = PaginationInput::try_from_input(input.connection_parameters)?;
     let cursor_encoder = match input.sort.map(|s| s.field) {
-        Some(PlayerMapRankingSortableField::Name) => |player: &PlayerWithUnstyledName| {
+        Some(PlayerMapRankingSortableField::Name) => |player: &PlayerWithScoreRow| {
             TextCursor {
-                text: player.unstyled_player_name.clone(),
+                text: player.player.unstyled_name.clone(),
                 data: player.player.id,
             }
             .encode_cursor()
         },
-        _ => |player: &PlayerWithUnstyledName| {
+        _ => |player: &PlayerWithScoreRow| {
             F64Cursor {
-                score: player.player.score,
+                score: player.score,
                 data: player.player.id,
             }
             .encode_cursor()
         },
     };
 
-    let mut query = players::Entity::find().expr_as(
-        functions::unstyled(players::Column::Name),
-        "unstyled_player_name",
-    );
+    let mut query = players::Entity::find()
+        .column_as(player_periodic_ranking::Column::Score, "score")
+        .inner_join(player_periodic_ranking::Entity);
+    QuerySelect::query(&mut query)
+        .join_as(
+            sea_orm::JoinType::InnerJoin,
+            ranking_period::Entity,
+            "score_period",
+            player_periodic_ranking::Relation::RankingPeriod
+                .def()
+                .rev()
+                .from_alias("score_period"),
+        )
+        .join_as(
+            sea_orm::JoinType::LeftJoin,
+            ranking_period::Entity,
+            "newest_period",
+            Expr::col(("newest_period", ranking_period::Column::PeriodDate))
+                .gt(Expr::col((
+                    "score_period",
+                    ranking_period::Column::PeriodDate,
+                )))
+                .and(Expr::col(("newest_period", ranking_period::Column::IsGlobal)).eq(false)),
+        )
+        .and_where(Expr::col(("score_period", ranking_period::Column::IsGlobal)).eq(false))
+        .and_where(Expr::col(("newest_period", ranking_period::Column::PeriodId)).is_null());
     let query = SelectStatement::new()
         .expr(Expr::col(("player", Asterisk)))
         .from_subquery(QuerySelect::query(&mut query).take(), "player")
@@ -589,12 +665,12 @@ where
             query
                 .apply_if(filter.player_login, |query, login| {
                     query.and_where(
-                        Expr::col(("player", players::Column::Login)).like(format!("%{login}%")),
+                        login.to_condition(Expr::col(("player", players::Column::Login))),
                     );
                 })
                 .apply_if(filter.player_name, |query, name| {
                     query.and_where(
-                        Expr::col(("player", "unstyled_player_name")).like(format!("%{name}%")),
+                        name.to_condition(Expr::col(("player", players::Column::UnstyledName))),
                     );
                 });
         })
@@ -610,7 +686,7 @@ where
                 query,
                 "player".into_iden(),
                 Identity::Binary(
-                    "unstyled_player_name".into_iden(),
+                    players::Column::UnstyledName.into_iden(),
                     players::Column::Id.into_iden(),
                 ),
             )
@@ -618,10 +694,10 @@ where
         _ => CursorQueryBuilder::new(
             query,
             "player".into_iden(),
-            (players::Column::Score, players::Column::Id),
+            Identity::Binary("score".into_iden(), players::Column::Id.into_iden()),
         ),
     }
-    .into_model::<PlayerWithUnstyledName>();
+    .into_model::<PlayerWithScoreRow>();
 
     apply_cursor_input(&mut query, &pagination_input);
 
@@ -652,13 +728,21 @@ where
 
     connection.edges.reserve(players.len());
 
-    for player in players {
-        let rank: i32 = redis_conn.zrevrank(&input.source, player.player.id).await?;
+    let players = players.collect::<Vec<_>>();
+    let ranks = get_ranking_ranks(
+        redis_conn,
+        &input.source,
+        players.iter().map(|player| player.player.id),
+    )
+    .await?;
+
+    for (player, rank) in players.into_iter().zip(ranks) {
         connection.edges.push(connection::Edge::new(
             ID((cursor_encoder)(&player)),
             PlayerWithScore {
-                rank: rank + 1,
+                rank,
                 player: player.player.into(),
+                score: player.score,
             },
         ));
     }
@@ -670,10 +754,10 @@ pub(crate) type MapsConnectionInput<S = MapRanking> =
     ConnectionInput<PlayerMapRankingCursor, MapsFilter, PlayerMapRankingSort, S>;
 
 #[derive(FromQueryResult)]
-struct MapWithUnstyledName {
+struct MapWithScoreRow {
     #[sea_orm(nested)]
     map: maps::Model,
-    unstyled_map_name: String,
+    score: f64,
 }
 
 pub(crate) async fn get_maps_connection<C, S>(
@@ -687,24 +771,48 @@ where
 {
     let pagination_input = PaginationInput::try_from_input(input.connection_parameters)?;
     let cursor_encoder = match input.sort.map(|s| s.field) {
-        Some(PlayerMapRankingSortableField::Name) => |map: &MapWithUnstyledName| {
+        Some(PlayerMapRankingSortableField::Name) => |map: &MapWithScoreRow| {
             TextCursor {
-                text: map.unstyled_map_name.clone(),
+                text: map.map.unstyled_name.clone(),
                 data: map.map.id,
             }
             .encode_cursor()
         },
-        _ => |map: &MapWithUnstyledName| {
+        _ => |map: &MapWithScoreRow| {
             F64Cursor {
-                score: map.map.score,
+                score: map.score,
                 data: map.map.id,
             }
             .encode_cursor()
         },
     };
 
-    let mut query =
-        maps::Entity::find().expr_as(functions::unstyled(maps::Column::Name), "unstyled_map_name");
+    let mut query = maps::Entity::find()
+        .column_as(map_periodic_ranking::Column::Score, "score")
+        .inner_join(map_periodic_ranking::Entity);
+    QuerySelect::query(&mut query)
+        .join_as(
+            sea_orm::JoinType::InnerJoin,
+            ranking_period::Entity,
+            "score_period",
+            map_periodic_ranking::Relation::RankingPeriod
+                .def()
+                .rev()
+                .from_alias("score_period"),
+        )
+        .join_as(
+            sea_orm::JoinType::LeftJoin,
+            ranking_period::Entity,
+            "newest_period",
+            Expr::col(("newest_period", ranking_period::Column::PeriodDate))
+                .gt(Expr::col((
+                    "score_period",
+                    ranking_period::Column::PeriodDate,
+                )))
+                .and(Expr::col(("newest_period", ranking_period::Column::IsGlobal)).eq(false)),
+        )
+        .and_where(Expr::col(("score_period", ranking_period::Column::IsGlobal)).eq(false))
+        .and_where(Expr::col(("newest_period", ranking_period::Column::PeriodDate)).is_null());
     let query = SelectStatement::new()
         .expr(Expr::col(("map", Asterisk)))
         .from_subquery(QuerySelect::query(&mut query).take(), "map")
@@ -721,25 +829,22 @@ where
                         )
                         .apply_if(filter.player_login, |query, login| {
                             query.and_where(
-                                Expr::col(("author", players::Column::Login))
-                                    .like(format!("%{login}%")),
+                                login.to_condition(Expr::col(("author", players::Column::Login))),
                             );
                         })
                         .apply_if(filter.player_name, |query, name| {
-                            query.and_where(
-                                functions::unstyled(Expr::col(("author", players::Column::Name)))
-                                    .like(format!("%{name}%")),
-                            );
+                            query.and_where(name.to_condition(Expr::col((
+                                "author",
+                                players::Column::UnstyledName,
+                            ))));
                         });
                 })
                 .apply_if(filter.map_uid, |query, uid| {
-                    query.and_where(
-                        Expr::col(("map", maps::Column::GameId)).like(format!("%{uid}%")),
-                    );
+                    query.and_where(uid.to_condition(Expr::col(("map", maps::Column::GameId))));
                 })
                 .apply_if(filter.map_name, |query, name| {
                     query.and_where(
-                        Expr::col(("map", "unstyled_map_name")).like(format!("%{name}%")),
+                        name.to_condition(Expr::col(("map", maps::Column::UnstyledName))),
                     );
                 });
         })
@@ -755,7 +860,7 @@ where
                 query,
                 "map".into_iden(),
                 Identity::Binary(
-                    "unstyled_map_name".into_iden(),
+                    maps::Column::UnstyledName.into_iden(),
                     maps::Column::Id.into_iden(),
                 ),
             )
@@ -763,10 +868,10 @@ where
         _ => CursorQueryBuilder::new(
             query,
             "map".into_iden(),
-            (maps::Column::Score, maps::Column::Id),
+            Identity::Binary("score".into_iden(), maps::Column::Id.into_iden()),
         ),
     }
-    .into_model::<MapWithUnstyledName>();
+    .into_model::<MapWithScoreRow>();
 
     apply_cursor_input(&mut query, &pagination_input);
 
@@ -797,13 +902,17 @@ where
 
     connection.edges.reserve(maps.len());
 
-    for map in maps {
-        let rank: i32 = redis_conn.zrevrank(&input.source, map.map.id).await?;
+    let maps = maps.collect::<Vec<_>>();
+    let ranks =
+        get_ranking_ranks(redis_conn, &input.source, maps.iter().map(|map| map.map.id)).await?;
+
+    for (map, rank) in maps.into_iter().zip(ranks) {
         connection.edges.push(connection::Edge::new(
             ID((cursor_encoder)(&map)),
             MapWithScore {
-                rank: rank + 1,
+                rank,
                 map: map.map.into(),
+                score: map.score,
             },
         ));
     }

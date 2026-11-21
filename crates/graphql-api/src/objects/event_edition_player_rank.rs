@@ -1,6 +1,6 @@
-use deadpool_redis::redis::AsyncCommands as _;
-use records_lib::{RedisPool, mappack::AnyMappackId, must, redis_key::mappack_player_ranks_key};
-use sea_orm::DbConn;
+use entity::{mappack_map_periodic_ranking, maps};
+use records_lib::{mappack::AnyMappackId, must};
+use sea_orm::{ColumnTrait as _, DbConn, EntityTrait as _, QueryFilter as _};
 
 use crate::{
     error::GqlResult,
@@ -18,21 +18,36 @@ pub struct EventEditionPlayerRank<'a> {
 #[async_graphql::Object]
 impl EventEditionPlayerRank<'_> {
     async fn rank(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<usize> {
-        let redis_pool = ctx.data_unchecked::<RedisPool>();
-        let redis_conn = &mut redis_pool.get().await?;
-        let rank = redis_conn
-            .zscore(
-                mappack_player_ranks_key(
-                    AnyMappackId::Event(
-                        &self.edition_player.edition.event.inner,
-                        &self.edition_player.edition.inner,
+        let db = ctx.data_unchecked::<records_lib::Database>();
+        let mappack = AnyMappackId::Event(
+            &self.edition_player.edition.event.inner,
+            &self.edition_player.edition.inner,
+        );
+        let Some(snapshot) = super::mappack_player::latest_snapshot(&db.sql_conn, mappack).await?
+        else {
+            return Ok(0);
+        };
+        let Some(map) = maps::Entity::find()
+            .filter(maps::Column::GameId.eq(&self.map_game_id))
+            .one(&db.sql_conn)
+            .await?
+        else {
+            return Ok(0);
+        };
+        Ok(mappack_map_periodic_ranking::Entity::find()
+            .filter(
+                mappack_map_periodic_ranking::Column::PeriodId
+                    .eq(snapshot.period_id)
+                    .and(mappack_map_periodic_ranking::Column::MappackId.eq(snapshot.mappack_id))
+                    .and(mappack_map_periodic_ranking::Column::MapId.eq(map.id))
+                    .and(
+                        mappack_map_periodic_ranking::Column::PlayerId
+                            .eq(self.edition_player.player.id),
                     ),
-                    self.edition_player.player.id,
-                ),
-                &self.map_game_id,
             )
-            .await?;
-        Ok(rank)
+            .one(&db.sql_conn)
+            .await?
+            .map_or(0, |score| score.rank as usize))
     }
 
     async fn time(&self) -> i32 {

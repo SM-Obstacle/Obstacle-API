@@ -12,6 +12,12 @@ pub struct Model {
     pub login: String,
     /// The player name.
     pub name: String,
+    /// The player name stripped of its ManiaPlanet style codes.
+    ///
+    /// Maintained by a trigger from [`Model::name`], so it never has to be set when inserting or
+    /// updating a player. Filter and sort on this rather than on `name`, which contains the raw
+    /// markup.
+    pub unstyled_name: String,
     /// When the player played ShootMania Obstacle for the first time.
     pub join_date: Option<DateTime>,
     /// The player zone path.
@@ -20,8 +26,6 @@ pub struct Model {
     pub admins_note: Option<String>,
     /// The player role.
     pub role: u8,
-    /// The score of the player, calculated periodically.
-    pub score: f64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -103,3 +107,17 @@ impl Related<super::maps::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+impl Related<super::player_periodic_ranking::Entity> for Entity {
+    fn to() -> RelationDef {
+        super::player_periodic_ranking::Relation::Players
+            .def()
+            .rev()
+    }
+}
+
+impl Related<super::ranking_period::Entity> for Entity {
+    fn to() -> RelationDef {
+        super::player_periodic_ranking::Relation::RankingPeriod.def()
+    }
+}

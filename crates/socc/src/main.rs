@@ -13,7 +13,7 @@ use tokio::{task::JoinHandle, time};
 use tracing::info;
 
 mod campaign_scores;
-mod player_ranking;
+mod player_map_ranking;
 
 async fn handle<F, Fut>(db: Database, period: Duration, f: F) -> anyhow::Result<()>
 where
@@ -59,6 +59,8 @@ async fn main() -> anyhow::Result<()> {
     env.init();
     let event_scores_interval = env.lib_env.event_scores_interval.get();
     let player_ranking_scores_interval = env.lib_env.player_map_ranking_scores_interval.get();
+    let player_global_ranking_scores_interval =
+        env.lib_env.player_map_global_ranking_scores_interval.get();
     records_lib::init_env(env.lib_env);
 
     let db = Database::from_db_url(
@@ -67,21 +69,21 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
+    // Init tasks
+    campaign_scores::init(db.clone())
+        .await
+        .context("cannot initialize campaign_scores task")?;
+
     let event_scores_handle = tokio::spawn(handle(
         db.clone(),
         event_scores_interval,
         campaign_scores::update,
     ));
 
-    let player_map_ranking_handle = tokio::spawn(handle(
+    let player_map_ranking_handle = tokio::spawn(player_map_ranking::run(
         db.clone(),
         player_ranking_scores_interval,
-        move |db| {
-            player_ranking::update(
-                db,
-                Some(chrono::Utc::now() - player_ranking_scores_interval),
-            )
-        },
+        player_global_ranking_scores_interval,
     ));
 
     info!("Spawned all tasks");

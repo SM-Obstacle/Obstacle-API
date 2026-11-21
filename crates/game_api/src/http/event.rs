@@ -463,6 +463,35 @@ async fn edition(
         .map(|map| (map.map.id, map))
         .collect::<HashMap<_, _>>();
 
+    // Gather the medal times of every map of the edition at once, rather than querying them
+    // one by one in the loop below.
+    let medal_times_by_map = event_edition_maps::Entity::find()
+        .filter(
+            event_edition_maps::Column::EventId
+                .eq(event.id)
+                .and(event_edition_maps::Column::EditionId.eq(edition.id)),
+        )
+        .select_only()
+        .columns([
+            event_edition_maps::Column::MapId,
+            event_edition_maps::Column::BronzeTime,
+            event_edition_maps::Column::SilverTime,
+            event_edition_maps::Column::GoldTime,
+            event_edition_maps::Column::AuthorTime,
+        ])
+        .into_tuple::<(u32, Option<i32>, Option<i32>, Option<i32>, Option<i32>)>()
+        .all(&conn)
+        .await
+        .with_api_err()?
+        .into_iter()
+        .map(|(map_id, bronze, silver, gold, champion)| {
+            (
+                map_id,
+                event::MedalTimes::from_columns(bronze, silver, gold, champion),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
     let mut output_categories = Vec::with_capacity(input_categories.len());
 
     for (cat_id, cat_maps) in maps {
@@ -653,9 +682,7 @@ async fn edition(
                 }
             };
 
-            let medal_times = event::get_medal_times_of(&conn, event.id, edition.id, map.id)
-                .await
-                .with_api_err()?;
+            let medal_times = medal_times_by_map.get(&map.id).copied().flatten();
 
             let original_map = original_map_id
                 .and_then(|id| original_maps.get(&id))

@@ -6,4 +6,6 @@ use crate::objects::player::Player;
 pub struct PlayerWithScore {
     pub rank: i32,
     pub player: Player,
+    #[graphql(skip)]
+    pub score: f64,
 }

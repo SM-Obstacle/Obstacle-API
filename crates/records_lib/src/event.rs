@@ -208,6 +208,26 @@ pub struct MedalTimes {
     pub champion_time: i32,
 }
 
+impl MedalTimes {
+    /// Gathers the medal times of an event edition map, from its raw columns.
+    ///
+    /// An edition doesn't necessarily define medals on its maps, so this returns `None` unless
+    /// all four times are set.
+    pub fn from_columns(
+        bronze_time: Option<i32>,
+        silver_time: Option<i32>,
+        gold_time: Option<i32>,
+        champion_time: Option<i32>,
+    ) -> Option<Self> {
+        Some(Self {
+            bronze_time: bronze_time?,
+            silver_time: silver_time?,
+            gold_time: gold_time?,
+            champion_time: champion_time?,
+        })
+    }
+}
+
 /// Returns the medal times of the provided map bound to the event edition.
 ///
 /// ## Parameters
@@ -235,25 +255,12 @@ pub async fn get_medal_times_of<C: ConnectionTrait>(
             .await?
             .unwrap_or_default();
 
-    let Some(bronze_time) = bronze_time else {
-        return Ok(None);
-    };
-    let Some(silver_time) = silver_time else {
-        return Ok(None);
-    };
-    let Some(gold_time) = gold_time else {
-        return Ok(None);
-    };
-    let Some(champion_time) = champion_time else {
-        return Ok(None);
-    };
-
-    Ok(Some(MedalTimes {
+    Ok(MedalTimes::from_columns(
         bronze_time,
         silver_time,
         gold_time,
         champion_time,
-    }))
+    ))
 }
 
 /// Returns the admins/authors of the provided event edition.

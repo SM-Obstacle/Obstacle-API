@@ -1,6 +1,6 @@
 [package]
 name = "game-api"
-version = "1.5.0"
+version = "1.6.0-dev"
 edition = "2024"
 
 [lib]
@@ -42,6 +42,7 @@ migration = { path = "../migration" }
 entity = { path = "../entity" }
 graphql-api = { path = "../graphql-api" }
 serde_json = { workspace = true }
+mx-layer = { path = "../mx-layer" }
 
 [dev-dependencies]
 test-env = { path = "../test-env" }

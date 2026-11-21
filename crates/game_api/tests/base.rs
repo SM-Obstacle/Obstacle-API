@@ -37,11 +37,20 @@ where
 pub async fn get_app(
     db: Database,
 ) -> impl Service<Request, Response = ServiceResponse<impl MessageBody>, Error = Error> {
+    let shared_state = configure::shared_state(&db);
+
     test::init_service(
         App::new()
             .wrap(middleware::from_fn(configure::fit_request_id))
             .wrap(TracingLogger::<configure::RootSpanBuilder>::new())
-            .configure(|cfg| configure::configure(cfg, db.clone(), RecordsNotifier::default())),
+            .configure(|cfg| {
+                configure::configure(
+                    cfg,
+                    db.clone(),
+                    RecordsNotifier::default(),
+                    shared_state.clone(),
+                )
+            }),
     )
     .await
 }

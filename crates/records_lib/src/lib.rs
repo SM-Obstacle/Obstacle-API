@@ -1,10 +1,13 @@
 //! The main crate of the ShootMania Obstacle API infrastructure.
 //!
-//! This crate is used by all the services related to the API. It contains environment setup
-//! functions, the models saved in the database, and some other stuff.
-//!
-//! If you wish to see the crate of the server program itself, take a look
-//! at the [`game_api`](../game_api/index.html) package.
+//! The project is separated into several crates, including, in particular:
+//! - `records_lib` (this crate): used by all the services related to the API. Mostly contains
+//!   utility functions related to the entities saved in the database;
+//! - [`graphql-api`](../graphql_api/index.html): the GraphQL API, including the various types
+//!   referenced in the schema, and functions to generate the latter;
+//! - [`game_api`](../game_api_lib/index.html): the in-game API itself, including the server with
+//!   the endpoints, and everything that goes with it. It also hosts the `/graphql` endpoint,
+//!   based on the schema provided by `graphql-api`.
 
 #![warn(missing_docs)]
 #![cfg_attr(nightly, feature(doc_cfg))]
@@ -14,6 +17,7 @@ mod expirable;
 mod mptypes;
 
 pub mod error;
+pub use expirable::Expirable;
 pub mod event;
 pub mod leaderboard;
 pub mod map;
@@ -40,7 +44,6 @@ pub type RedisConnection = deadpool_redis::Connection;
 use std::future::Future;
 
 pub use env::*;
-pub use expirable::Expirable;
 pub use mptypes::*;
 pub use pool::Database;
 use rand::Rng as _;

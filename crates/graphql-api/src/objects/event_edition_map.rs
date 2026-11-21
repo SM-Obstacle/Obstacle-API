@@ -1,11 +1,10 @@
 use async_graphql::{ID, connection, dataloader::DataLoader};
 use entity::event_edition_maps;
 use records_lib::{event as event_utils, internal, opt_event::OptEvent};
-use sea_orm::{DbConn, EntityTrait as _, QuerySelect as _};
 
 use crate::{
     error::GqlResult,
-    loaders::map::MapLoader,
+    loaders::{event_edition_map::EventEditionMapLoader, map::MapLoader},
     objects::{
         event_edition::EventEdition, map::Map, medal_times::MedalTimes,
         ranked_record::RankedRecord, records_filter::RecordsFilter, sort::MapRecordSort,
@@ -20,6 +19,38 @@ pub struct EventEditionMap<'a> {
     pub map: Map,
 }
 
+impl EventEditionMap<'_> {
+    /// Loads the row binding this map to its event edition.
+    ///
+    /// Several fields are read off that single row, so they all go through the loader rather
+    /// than querying it once each.
+    async fn load_row(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> GqlResult<event_edition_maps::Model> {
+        let key = (
+            self.edition.inner.event_id,
+            self.edition.inner.id,
+            self.map.inner.id,
+        );
+
+        let row = ctx
+            .data_unchecked::<DataLoader<EventEditionMapLoader>>()
+            .load_one(key)
+            .await?
+            .ok_or_else(|| {
+                internal!(
+                    "event_edition_maps({}, {}, {}) must exist in database",
+                    key.0,
+                    key.1,
+                    key.2
+                )
+            })?;
+
+        Ok(row)
+    }
+}
+
 #[async_graphql::ComplexObject]
 impl EventEditionMap<'_> {
     async fn link_to_original(&self) -> bool {
@@ -29,29 +60,9 @@ impl EventEditionMap<'_> {
     }
 
     async fn original_map(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<Map>> {
-        let conn = ctx.data_unchecked::<DbConn>();
         let map_loader = ctx.data_unchecked::<DataLoader<MapLoader>>();
 
-        let original_map_id = entity::event_edition_maps::Entity::find_by_id((
-            self.edition.inner.event_id,
-            self.edition.inner.id,
-            self.map.inner.id,
-        ))
-        .select_only()
-        .column(event_edition_maps::Column::OriginalMapId)
-        .into_tuple::<Option<_>>()
-        .one(conn)
-        .await?
-        .ok_or_else(|| {
-            internal!(
-                "event_edition_maps({}, {}, {}) must exist in database",
-                self.edition.inner.event_id,
-                self.edition.inner.id,
-                self.map.inner.id
-            )
-        })?;
-
-        let map = match original_map_id {
+        let map = match self.load_row(ctx).await?.original_map_id {
             Some(id) => Some(
                 map_loader
                     .load_one(id)
@@ -109,15 +120,14 @@ impl EventEditionMap<'_> {
     }
 
     async fn medal_times(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<Option<MedalTimes>> {
-        let conn = ctx.data_unchecked::<DbConn>();
+        let row = self.load_row(ctx).await?;
 
-        let medal_times = event_utils::get_medal_times_of(
-            conn,
-            self.edition.inner.event_id,
-            self.edition.inner.id,
-            self.map.inner.id,
-        )
-        .await?;
+        let medal_times = event_utils::MedalTimes::from_columns(
+            row.bronze_time,
+            row.silver_time,
+            row.gold_time,
+            row.author_time,
+        );
 
         Ok(medal_times.map(From::from))
     }

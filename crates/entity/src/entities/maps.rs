@@ -14,6 +14,12 @@ pub struct Model {
     pub player_id: u32,
     /// The name of the map.
     pub name: String,
+    /// The map name stripped of its ManiaPlanet style codes.
+    ///
+    /// Maintained by a trigger from [`Model::name`], so it never has to be set when inserting or
+    /// updating a map. Filter and sort on this rather than on `name`, which contains the raw
+    /// markup.
+    pub unstyled_name: String,
     /// The amount of checkpoints on the map.
     ///
     /// This is optional because old maps may not have saved this info yet. If missing, it is
@@ -32,8 +38,9 @@ pub struct Model {
     pub gold_time: Option<i32>,
     /// The author time of the map.
     pub author_time: Option<i32>,
-    /// The score of the player, calculated periodically.
-    pub score: f64,
+
+    /// The ID in ManiaExchange.
+    pub mx_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -90,3 +97,15 @@ impl Related<super::players::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+impl Related<super::map_periodic_ranking::Entity> for Entity {
+    fn to() -> RelationDef {
+        super::map_periodic_ranking::Relation::Maps.def().rev()
+    }
+}
+
+impl Related<super::ranking_period::Entity> for Entity {
+    fn to() -> RelationDef {
+        super::map_periodic_ranking::Relation::RankingPeriod.def()
+    }
+}

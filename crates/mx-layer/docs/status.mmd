@@ -1,0 +1,16 @@
+sequenceDiagram
+    participant Client
+    participant A as Provider
+    participant Cache as moka Cache
+
+    Client->>A: status_of(key)
+    A->>Cache: get(key)
+    Cache-->>A: cache entry
+    alt Some(Some(value))
+        A-->>Client: Known(value)
+    else Some(None)
+        A-->>Client: NotOnMx
+    else None
+        A-->>Client: Unknown
+    end
+    Note over A: reports only: asks MX nothing<br/>and schedules nothing

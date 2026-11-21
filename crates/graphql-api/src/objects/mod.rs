@@ -6,6 +6,7 @@ pub mod root;
 pub mod map_filter;
 pub mod player_filter;
 pub mod records_filter;
+pub mod string_filter;
 
 pub mod map_with_score;
 pub mod player_with_score;
@@ -29,6 +30,7 @@ pub mod mappack_map;
 pub mod mappack_player;
 
 pub mod map;
+pub mod mx_id_status;
 pub mod related_edition;
 
 pub mod player_rating;

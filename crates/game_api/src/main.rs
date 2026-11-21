@@ -22,7 +22,10 @@ use mkenv::prelude::*;
 use records_lib::{Database, records_notifier::RecordsNotifier};
 use tracing::level_filters::LevelFilter;
 use tracing_actix_web::TracingLogger;
-use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
+use tracing_subscriber::{
+    EnvFilter,
+    fmt::{format::FmtSpan, writer::MakeWriterExt as _},
+};
 
 /// The main entry point.
 #[tokio::main]
@@ -47,6 +50,11 @@ async fn main() -> anyhow::Result<()> {
 
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::CLOSE)
+        // There's one GraphQL path span per resolved field: logging each of their closes would
+        // flood the output.
+        .with_writer(std::io::stdout.with_filter(|meta| {
+            !(meta.is_span() && meta.target() == graphql_api::path_tracing::TARGET)
+        }))
         .with_env_filter(
             EnvFilter::builder()
                 .with_default_directive(LevelFilter::INFO.into())
@@ -84,6 +92,9 @@ async fn main() -> anyhow::Result<()> {
 
     let records_notifier = RecordsNotifier::default();
 
+    // Built here, and not in the application factory below, which runs once per worker thread.
+    let shared_state = configure::shared_state(&db);
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .supports_credentials()
@@ -118,7 +129,14 @@ async fn main() -> anyhow::Result<()> {
                 ))
                 .build(),
             )
-            .configure(|cfg| configure::configure(cfg, db.clone(), records_notifier.clone()))
+            .configure(|cfg| {
+                configure::configure(
+                    cfg,
+                    db.clone(),
+                    records_notifier.clone(),
+                    shared_state.clone(),
+                )
+            })
     })
     .bind(("0.0.0.0", game_api_lib::env().port.get()))
     .context("Cannot bind address")?

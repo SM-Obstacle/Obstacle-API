@@ -11,11 +11,7 @@ use crate::cursors::expr_tuple::{ExprTuple, IntoExprTuple};
 
 /// An enhanced version of [`Cursor`][sea_orm::Cursor].
 ///
-/// It allows specifying expressions for pagination values, and uses tuple syntax when building the
-/// SQL statement, instead of chaining inner `AND` and `OR` operations.
-///
-/// The last change is the most important, because there seems to be an issue with MariaDB/MySQL,
-/// and beside that, the tuple syntax seems more efficient in every DB engine.
+/// It allows specifying expressions for pagination values, instead of plain values only.
 #[derive(Debug, Clone)]
 pub struct CursorQueryBuilder<S> {
     query: SelectStatement,
@@ -88,41 +84,52 @@ impl<S> CursorQueryBuilder<S> {
     where
         F: Fn(SimpleExpr, SimpleExpr) -> SimpleExpr,
     {
-        match (&self.order_columns, values) {
-            (Identity::Unary(c1), ExprTuple::One(v1)) => {
-                let exp = Expr::col((SeaRc::clone(&self.table), SeaRc::clone(c1)));
-                Condition::all().add(f(exp.into(), v1))
-            }
-            (Identity::Binary(c1, c2), ExprTuple::Two(v1, v2)) => {
-                let c1 = Expr::col((SeaRc::clone(&self.table), SeaRc::clone(c1))).into();
-                let c2 = Expr::col((SeaRc::clone(&self.table), SeaRc::clone(c2))).into();
-                let columns = Expr::tuple([c1, c2]).into();
-                let values = Expr::tuple([v1, v2]).into();
-                Condition::all().add(f(columns, values))
-            }
-            (Identity::Ternary(c1, c2, c3), ExprTuple::Three(v1, v2, v3)) => {
-                let c1 = Expr::col((SeaRc::clone(&self.table), SeaRc::clone(c1))).into();
-                let c2 = Expr::col((SeaRc::clone(&self.table), SeaRc::clone(c2))).into();
-                let c3 = Expr::col((SeaRc::clone(&self.table), SeaRc::clone(c3))).into();
-                let columns = Expr::tuple([c1, c2, c3]).into();
-                let values = Expr::tuple([v1, v2, v3]).into();
-                Condition::all().add(f(columns, values))
-            }
-            (Identity::Many(col_vec), ExprTuple::Many(val_vec))
-                if col_vec.len() == val_vec.len() =>
-            {
-                let columns = Expr::tuple(
-                    col_vec
-                        .iter()
-                        .map(|c| Expr::col((SeaRc::clone(&self.table), SeaRc::clone(c))).into())
-                        .collect::<Vec<_>>(),
-                )
-                .into();
-                let values = Expr::tuple(val_vec).into();
-                Condition::all().add(f(columns, values))
-            }
-            _ => panic!("column arity mismatch"),
+        let columns = match &self.order_columns {
+            Identity::Unary(c1) => vec![c1],
+            Identity::Binary(c1, c2) => vec![c1, c2],
+            Identity::Ternary(c1, c2, c3) => vec![c1, c2, c3],
+            Identity::Many(col_vec) => col_vec.iter().collect(),
+        };
+
+        let values = match values {
+            ExprTuple::One(v1) => vec![v1],
+            ExprTuple::Two(v1, v2) => vec![v1, v2],
+            ExprTuple::Three(v1, v2, v3) => vec![v1, v2, v3],
+            ExprTuple::Many(val_vec) => val_vec,
+        };
+
+        if columns.len() != values.len() {
+            panic!("column arity mismatch");
         }
+
+        let col_expr =
+            |c| SimpleExpr::from(Expr::col((SeaRc::clone(&self.table), SeaRc::clone(c))));
+
+        // The keyset predicate is expanded into an `OR` chain of `AND` groups:
+        //
+        //        c1 > v1
+        //     OR (c1 = v1 AND c2 > v2)
+        //     OR (c1 = v1 AND c2 = v2 AND c3 > v3)
+        //
+        // The row-tuple form `(c1, c2, c3) > (v1, v2, v3)` says the same thing far more
+        // concisely, but MariaDB never turns it into an index range: it scans the whole
+        // ordering index and filters afterwards, so every page costs O(table). That is
+        // invisible on the first forward page and brutal when paginating backward, where
+        // the scan starts from the far end of the index. The expanded form is sargable,
+        // so the leading column drives a range scan instead.
+        (0..columns.len()).fold(Condition::any(), |any, n| {
+            let group = columns[..=n]
+                .iter()
+                .copied()
+                .zip(values[..=n].iter())
+                .enumerate()
+                .fold(Condition::all(), |all, (i, (col, val))| {
+                    let col = col_expr(col);
+                    let val = val.clone();
+                    all.add(if i == n { f(col, val) } else { col.eq(val) })
+                });
+            any.add(group)
+        })
     }
 
     /// Use ascending sort order
