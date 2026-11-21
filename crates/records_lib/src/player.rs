@@ -1,7 +1,10 @@
 //! This module contains anything related to in-game players in this library.
 
 use entity::{global_event_records, global_records, players};
-use sea_orm::{ColumnTrait as _, ConnectionTrait, EntityTrait as _, QueryFilter as _, QuerySelect};
+use sea_orm::{
+    ColumnTrait as _, ConnectionTrait, EntityTrait as _, ExprTrait as _, QueryFilter as _,
+    QuerySelect,
+};
 
 use crate::error::RecordsResult;
 use crate::internal;

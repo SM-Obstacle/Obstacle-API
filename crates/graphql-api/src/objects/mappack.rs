@@ -14,8 +14,9 @@ use records_lib::{
     opt_event::OptEvent,
 };
 use sea_orm::{
-    ActiveValue::Set, ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _,
-    PaginatorTrait as _, QueryFilter as _, QueryOrder as _, QuerySelect, TransactionTrait,
+    ActiveValue::Set, ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, ExprTrait as _,
+    PaginatorTrait as _, QueryFilter as _, QueryOrder as _, QuerySelect, TransactionSession as _,
+    TransactionTrait,
 };
 
 use crate::{
@@ -224,7 +225,7 @@ impl Mappack {
                         .event_scores_interval
                         .get()
                         .as_secs()
-                        .checked_sub(elapsed.num_seconds().max(0) as u64)
+                        .checked_sub(Ord::max(elapsed.num_seconds(), 0) as u64)
                 })
                 .unwrap_or_default(),
         ))
@@ -286,9 +287,10 @@ pub async fn get_mappack(
         let should_update = registered_mappack
             .and_then(|mappack| mappack.last_updated_at)
             .map(|last_updated_at| {
-                let elapsed = (chrono::Utc::now().naive_utc() - last_updated_at)
-                    .num_seconds()
-                    .max(0) as u64;
+                let elapsed = Ord::max(
+                    (chrono::Utc::now().naive_utc() - last_updated_at).num_seconds(),
+                    0,
+                ) as u64;
                 elapsed >= records_lib::env().event_scores_interval.get().as_secs()
             })
             .unwrap_or(true);

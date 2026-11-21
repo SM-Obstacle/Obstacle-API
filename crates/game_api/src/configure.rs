@@ -193,13 +193,13 @@ impl tracing_actix_web::RootSpanBuilder for RootSpanBuilder {
         let db = request.app_data::<Database>().unwrap();
         let pool_size = {
             #[allow(unreachable_patterns)]
-            match db.sql_conn {
+            match db.sql_conn.inner {
                 #[cfg(feature = "mysql")]
-                sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(_) => {
+                sea_orm::DatabaseConnectionType::SqlxMySqlPoolConnection(_) => {
                     db.sql_conn.get_mysql_connection_pool().size()
                 }
                 #[cfg(feature = "postgres")]
-                sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(_) => {
+                sea_orm::DatabaseConnectionType::SqlxPostgresPoolConnection(_) => {
                     db.sql_conn.get_postgres_connection_pool().size()
                 }
                 _ => 0,
@@ -207,13 +207,13 @@ impl tracing_actix_web::RootSpanBuilder for RootSpanBuilder {
         };
         let pool_num_idle = {
             #[allow(unreachable_patterns)]
-            match db.sql_conn {
+            match db.sql_conn.inner {
                 #[cfg(feature = "mysql")]
-                sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(_) => {
+                sea_orm::DatabaseConnectionType::SqlxMySqlPoolConnection(_) => {
                     db.sql_conn.get_mysql_connection_pool().num_idle()
                 }
                 #[cfg(feature = "postgres")]
-                sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(_) => {
+                sea_orm::DatabaseConnectionType::SqlxPostgresPoolConnection(_) => {
                     db.sql_conn.get_postgres_connection_pool().num_idle()
                 }
                 _ => 0,

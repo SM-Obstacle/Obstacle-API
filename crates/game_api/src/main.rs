@@ -66,15 +66,15 @@ async fn main() -> anyhow::Result<()> {
 
     let max_connections = {
         #[allow(unreachable_patterns)]
-        match db.sql_conn {
+        match db.sql_conn.inner {
             #[cfg(feature = "mysql")]
-            sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(_) => db
+            sea_orm::DatabaseConnectionType::SqlxMySqlPoolConnection(_) => db
                 .sql_conn
                 .get_mysql_connection_pool()
                 .options()
                 .get_max_connections(),
             #[cfg(feature = "postgres")]
-            sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(_) => db
+            sea_orm::DatabaseConnectionType::SqlxPostgresPoolConnection(_) => db
                 .sql_conn
                 .get_postgres_connection_pool()
                 .options()

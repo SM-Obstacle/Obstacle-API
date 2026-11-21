@@ -4,7 +4,7 @@ use async_graphql::{
     ID,
     connection::{self, CursorType},
 };
-use deadpool_redis::redis::{self, ToRedisArgs};
+use deadpool_redis::redis::{self, ToSingleRedisArg};
 use entity::{
     event as event_entity, event_edition, event_edition_records, global_records,
     map_periodic_ranking, maps, player_periodic_ranking, players, ranking_period, records,
@@ -21,7 +21,7 @@ use sea_orm::{
     QueryOrder as _, QuerySelect, QueryTrait, RelationTrait as _, Select, SelectModel, StreamTrait,
     TransactionTrait,
     prelude::Expr,
-    sea_query::{Asterisk, ExprTrait as _, Func, IntoIden, IntoValueTuple, SelectStatement},
+    sea_query::{Asterisk, ExprTrait as _, Func, IntoIden, SelectStatement, ValueTuple},
 };
 
 use crate::{
@@ -283,8 +283,8 @@ impl QueryRoot {
     ) -> GqlResult<Vec<EventEdition<'_>>> {
         let conn = ctx.data_unchecked::<DbConn>();
 
-        let limit = limit.unwrap_or(3).min(5);
-        let last_days = last_days.map(|d| d.min(30));
+        let limit = Ord::min(limit.unwrap_or(3), 5);
+        let last_days = last_days.map(|d| Ord::min(d, 30));
 
         let editions = event_edition::Entity::find()
             .reverse_join(event_edition_records::Entity)
@@ -546,11 +546,11 @@ impl IntoExprTuple for &PlayerMapRankingCursor {
     }
 }
 
-impl IntoValueTuple for &PlayerMapRankingCursor {
-    fn into_value_tuple(self) -> sea_orm::sea_query::ValueTuple {
-        match self {
-            PlayerMapRankingCursor::Name(name) => IntoValueTuple::into_value_tuple(name),
-            PlayerMapRankingCursor::Score(score) => IntoValueTuple::into_value_tuple(score),
+impl From<&PlayerMapRankingCursor> for ValueTuple {
+    fn from(value: &PlayerMapRankingCursor) -> Self {
+        match value {
+            PlayerMapRankingCursor::Name(name) => ValueTuple::from(name),
+            PlayerMapRankingCursor::Score(score) => ValueTuple::from(score),
         }
     }
 }
@@ -569,7 +569,7 @@ async fn get_ranking_ranks<S, I>(
     members: I,
 ) -> GqlResult<Vec<i32>>
 where
-    S: ToRedisArgs + Send + Sync,
+    S: ToSingleRedisArg + Send + Sync,
     I: IntoIterator<Item = u32>,
 {
     let members = members.into_iter().collect::<Vec<_>>();
@@ -612,7 +612,7 @@ pub(crate) async fn get_players_connection<C, S>(
 ) -> GqlResult<connection::Connection<ID, PlayerWithScore>>
 where
     C: ConnectionTrait,
-    S: ToRedisArgs + Send + Sync,
+    S: ToSingleRedisArg + Send + Sync,
 {
     let pagination_input = PaginationInput::try_from_input(input.connection_parameters)?;
     let cursor_encoder = match input.sort.map(|s| s.field) {
@@ -767,7 +767,7 @@ pub(crate) async fn get_maps_connection<C, S>(
 ) -> GqlResult<connection::Connection<ID, MapWithScore>>
 where
     C: ConnectionTrait,
-    S: ToRedisArgs + Send + Sync,
+    S: ToSingleRedisArg + Send + Sync,
 {
     let pagination_input = PaginationInput::try_from_input(input.connection_parameters)?;
     let cursor_encoder = match input.sort.map(|s| s.field) {

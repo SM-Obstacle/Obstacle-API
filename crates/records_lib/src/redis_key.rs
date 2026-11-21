@@ -9,7 +9,7 @@
 
 use core::fmt;
 
-use deadpool_redis::redis::{RedisWrite, ToRedisArgs};
+use deadpool_redis::redis::{RedisWrite, ToRedisArgs, ToSingleRedisArg};
 
 use crate::{mappack::AnyMappackId, opt_event::OptEvent};
 
@@ -80,6 +80,8 @@ macro_rules! create_key {
                 out.write_arg_fmt(self);
             }
         }
+
+        impl ToSingleRedisArg for $name$(<$_>)? {}
 
         impl fmt::Display for $name$(<$_>)? {
             fn fmt(&$self, $f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -162,6 +164,8 @@ impl ToRedisArgs for EventMapKey<'_> {
     }
 }
 
+impl ToSingleRedisArg for EventMapKey<'_> {}
+
 impl fmt::Display for EventMapKey<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -191,6 +195,8 @@ impl ToRedisArgs for MapKey<'_> {
         out.write_arg_fmt(self)
     }
 }
+
+impl ToSingleRedisArg for MapKey<'_> {}
 
 impl fmt::Display for MapKey<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -253,6 +259,8 @@ where
         out.write_arg_fmt(self);
     }
 }
+
+impl<const KIND: token_kind::Ty> ToSingleRedisArg for TokenKey<'_, KIND> where Self: fmt::Display {}
 
 impl fmt::Display for TokenKey<'_, { token_kind::WEB }> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

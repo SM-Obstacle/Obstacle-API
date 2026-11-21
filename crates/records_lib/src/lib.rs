@@ -46,7 +46,7 @@ use std::future::Future;
 pub use env::*;
 pub use mptypes::*;
 pub use pool::Database;
-use rand::Rng as _;
+use rand::RngExt as _;
 
 /// Asserts that the type of the provided future is Send, and returns an opaque type from it.
 ///

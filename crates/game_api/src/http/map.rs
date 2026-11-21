@@ -13,8 +13,8 @@ use futures::{StreamExt, future::try_join_all};
 use mx_layer::maps::MxIdProvider;
 use records_lib::Database;
 use sea_orm::{
-    ActiveModelTrait as _, ActiveValue::Set, ColumnTrait as _, EntityTrait as _, FromQueryResult,
-    PaginatorTrait, QueryFilter, QuerySelect, prelude::Expr, sea_query::Func,
+    ActiveModelTrait as _, ActiveValue::Set, ColumnTrait as _, EntityTrait as _, ExprTrait as _,
+    FromQueryResult, PaginatorTrait, QueryFilter, QuerySelect, prelude::Expr, sea_query::Func,
 };
 use serde::{Deserialize, Serialize};
 
@@ -486,18 +486,19 @@ pub async fn rate(
             if count > 0 {
                 let date = chrono::Utc::now().naive_utc();
 
-                rating::Entity::update(rating::ActiveModel {
-                    rating_date: Set(date),
-                    ..Default::default()
-                })
-                .filter(
-                    rating::Column::MapId
-                        .eq(map_id)
-                        .and(rating::Column::PlayerId.eq(player_id)),
-                )
-                .exec(&conn)
-                .await
-                .with_api_err()?;
+                rating::Entity::update_many()
+                    .set(rating::ActiveModel {
+                        rating_date: Set(date),
+                        ..Default::default()
+                    })
+                    .filter(
+                        rating::Column::MapId
+                            .eq(map_id)
+                            .and(rating::Column::PlayerId.eq(player_id)),
+                    )
+                    .exec(&conn)
+                    .await
+                    .with_api_err()?;
 
                 date
             } else {
@@ -531,19 +532,20 @@ pub async fn rate(
                 .with_api_err()?;
 
             if count > 0 {
-                player_rating::Entity::update(player_rating::ActiveModel {
-                    rating: Set(rate.rating),
-                    ..Default::default()
-                })
-                .filter(
-                    player_rating::Column::MapId
-                        .eq(map_id)
-                        .and(player_rating::Column::PlayerId.eq(player_id))
-                        .and(player_rating::Column::Kind.eq(rate.kind)),
-                )
-                .exec(&conn)
-                .await
-                .with_api_err()?;
+                player_rating::Entity::update_many()
+                    .set(player_rating::ActiveModel {
+                        rating: Set(rate.rating),
+                        ..Default::default()
+                    })
+                    .filter(
+                        player_rating::Column::MapId
+                            .eq(map_id)
+                            .and(player_rating::Column::PlayerId.eq(player_id))
+                            .and(player_rating::Column::Kind.eq(rate.kind)),
+                    )
+                    .exec(&conn)
+                    .await
+                    .with_api_err()?;
             } else {
                 let new_player_rating = player_rating::ActiveModel {
                     player_id: Set(player_id),

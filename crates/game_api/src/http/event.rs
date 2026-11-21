@@ -27,8 +27,8 @@ use records_lib::{
 
 use sea_orm::{
     ActiveValue::Set,
-    ColumnTrait as _, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
-    QuerySelect, QueryTrait as _, RelationTrait as _, TransactionTrait,
+    ColumnTrait as _, ConnectionTrait, EntityTrait, ExprTrait as _, FromQueryResult, QueryFilter,
+    QueryOrder, QuerySelect, QueryTrait as _, RelationTrait as _, TransactionTrait,
     prelude::Expr,
     sea_query::{Asterisk, Func, Query},
 };
@@ -366,8 +366,8 @@ async fn event_editions(
                 .and(Expr::col(event_edition::Column::StartDate).lt(Func::cust("SYSDATE")))
                 .and(
                     Expr::tuple([
-                        Expr::col(event_edition::Column::EventId).into(),
-                        Expr::col(event_edition::Column::Id).into(),
+                        Expr::col(event_edition::Column::EventId),
+                        Expr::col(event_edition::Column::Id),
                     ])
                     .in_subquery(
                         Query::select()
@@ -659,10 +659,8 @@ async fn edition(
                         Expr::col(("p", players::Column::Name)),
                     ]);
 
-                let next_opponent_query = conn.get_database_backend().build(&*next_opponent_query);
-
                 let next_opponent = conn
-                    .query_one(next_opponent_query)
+                    .query_one(&*next_opponent_query)
                     .await
                     .with_api_err()?
                     .map(|result| NextOpponent::from_query_result(&result, ""))

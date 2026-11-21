@@ -13,7 +13,10 @@ async fn update_mappack<C: ConnectionTrait + TransactionTrait + Sync>(
     redis_pool: &RedisPool,
     mappack: AnyMappackId<'_>,
     event: OptEvent<'_>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    C::Transaction: StreamTrait,
+{
     let rows = mappack::update_mappack(
         conn,
         redis_pool,
@@ -29,6 +32,7 @@ async fn update_mappack<C: ConnectionTrait + TransactionTrait + Sync>(
 async fn update_event_mappacks<C>(conn: &C, redis_pool: &RedisPool) -> anyhow::Result<()>
 where
     C: ConnectionTrait + StreamTrait + TransactionTrait + Sync,
+    C::Transaction: StreamTrait,
 {
     for event in event::event_list(conn, true).await? {
         for edition in event::event_editions_list(conn, &event.handle).await? {

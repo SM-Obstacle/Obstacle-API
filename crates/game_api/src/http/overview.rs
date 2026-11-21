@@ -7,8 +7,8 @@ use records_lib::ranks::update_leaderboard;
 use records_lib::{Database, RedisPool, ranks};
 use records_lib::{player, sync};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, QueryTrait,
-    StreamTrait,
+    ColumnTrait as _, ConnectionTrait, EntityTrait, ExprTrait as _, QueryFilter, QuerySelect,
+    QueryTrait, StreamTrait,
 };
 
 // -- Compute display ranges

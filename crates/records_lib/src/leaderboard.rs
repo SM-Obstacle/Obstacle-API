@@ -3,8 +3,9 @@
 use deadpool_redis::redis::AsyncCommands as _;
 use entity::{event_edition_records, players, records};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, EntityTrait as _, FromQueryResult, Order, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, QueryTrait as _, StreamTrait, prelude::Expr,
+    ColumnTrait as _, ConnectionTrait, EntityTrait as _, ExprTrait as _, FromQueryResult, Order,
+    QueryFilter as _, QueryOrder as _, QuerySelect as _, QueryTrait as _, StreamTrait,
+    prelude::Expr,
 };
 
 use crate::{RedisPool, error::RecordsResult, opt_event::OptEvent, ranks, redis_key::map_key};

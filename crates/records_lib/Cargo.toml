@@ -1,6 +1,6 @@
 [package]
 name = "records-lib"
-version = "1.6.0-dev"
+version = "1.6.0"
 edition = "2024"
 
 [dependencies]
@@ -20,7 +20,7 @@ nom = { workspace = true }
 rand = { workspace = true }
 sea-orm = { workspace = true }
 entity = { path = "../entity" }
-tokio-stream = { version = "0.1.18", features = ["sync"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
 pin-project-lite.workspace = true
 
 [features]
@@ -28,7 +28,6 @@ default = []
 mysql = ["sea-orm/sqlx-mysql"]
 postgres = ["sea-orm/sqlx-postgres"]
 sqlite = ["sea-orm/sqlx-sqlite"]
-sea-orm-proxy = ["sea-orm/proxy"]
 mock = ["sea-orm/mock"]
 
 [build-dependencies]

@@ -50,7 +50,7 @@ impl MigrationTrait for Migration {
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
             .get_connection()
-            .execute(sea_orm::Statement {
+            .execute_raw(sea_orm::Statement {
                 sql: "drop view global_event_records".to_owned(),
                 values: None,
                 db_backend: manager.get_database_backend(),
@@ -59,7 +59,7 @@ impl MigrationTrait for Migration {
 
         manager
             .get_connection()
-            .execute(sea_orm::Statement {
+            .execute_raw(sea_orm::Statement {
                 sql: "drop view global_records".to_owned(),
                 values: None,
                 db_backend: manager.get_database_backend(),
@@ -68,7 +68,7 @@ impl MigrationTrait for Migration {
 
         manager
             .get_connection()
-            .execute(sea_orm::Statement {
+            .execute_raw(sea_orm::Statement {
                 sql: "drop view current_bans".to_owned(),
                 values: None,
                 db_backend: manager.get_database_backend(),

@@ -4,7 +4,7 @@ use entity::{
     event, event_edition, event_edition_maps, global_event_records, global_records, maps, players,
 };
 use game_api_lib::TracedError;
-use sea_orm::{ActiveValue::Set, ColumnTrait as _, EntityTrait, QueryFilter as _};
+use sea_orm::{ActiveValue::Set, ColumnTrait as _, EntityTrait, ExprTrait as _, QueryFilter as _};
 
 use crate::player_finished_base::{Record, Request, Response};
 

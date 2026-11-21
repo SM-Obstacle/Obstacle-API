@@ -108,16 +108,15 @@ where
             )
             .primary_key(Index::create().col(T::id())),
     );
-    println!("ok stmt:\n{}", create_stmt.sql);
     let drop_stmt = conn
         .get_database_backend()
         .build(Table::drop().table(T::table()));
 
-    conn.execute(create_stmt).await?;
+    conn.execute_raw(create_stmt).await?;
 
     let ret = f().await;
 
-    conn.execute(drop_stmt).await?;
+    conn.execute_raw(drop_stmt).await?;
 
     ret
 }
@@ -297,9 +296,9 @@ async fn do_update<C: ConnectionTrait + TransactionTrait>(
             .last_insert_id;
 
         with_temp_table(txn, TempPlayerScores, async || {
-            try_join_all(player_updates.map(|stmt| conn.execute(stmt))).await?;
+            try_join_all(player_updates.map(|stmt| txn.execute_raw(stmt))).await?;
 
-            txn.execute(
+            txn.execute_raw(
                 txn.get_database_backend().build(
                     Query::insert()
                         .into_table(player_periodic_ranking::Entity.table_ref())
@@ -324,9 +323,9 @@ async fn do_update<C: ConnectionTrait + TransactionTrait>(
         .await?;
 
         with_temp_table(txn, TempMapScores, async || {
-            try_join_all(map_updates.map(|stmt| conn.execute(stmt))).await?;
+            try_join_all(map_updates.map(|stmt| txn.execute_raw(stmt))).await?;
 
-            txn.execute(
+            txn.execute_raw(
                 txn.get_database_backend().build(
                     Query::insert()
                         .into_table(map_periodic_ranking::Entity.table_ref())

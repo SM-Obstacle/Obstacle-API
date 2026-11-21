@@ -10,7 +10,7 @@ const REDIS_POOL_WAIT_TIMEOUT_MS: u64 = 2_000;
 
 /// Represents the database of the API, meaning an SQL database, and a Redis database.
 pub struct Database {
-    /// The SQL database connection pool. This can also be a testing database [`DbConn::MockDatabaseConnection`].
+    /// The SQL database connection pool. This can also be a testing database [`DatabaseConnectionType::MockDatabaseConnection`](sea_orm::DatabaseConnectionType::MockDatabaseConnection).
     pub sql_conn: DbConn,
     /// The Redis pool.
     pub redis_pool: RedisPool,
@@ -127,29 +127,7 @@ impl Database {
 
 /// Allows to clone a [`DbConn`] with or without the "mock" feature.
 pub fn clone_dbconn(conn: &DbConn) -> DbConn {
-    match conn {
-        #[cfg(feature = "mysql")]
-        sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(conn) => {
-            sea_orm::DatabaseConnection::SqlxMySqlPoolConnection(conn.clone())
-        }
-        #[cfg(feature = "mock")]
-        sea_orm::DatabaseConnection::MockDatabaseConnection(conn) => {
-            sea_orm::DatabaseConnection::MockDatabaseConnection(conn.clone())
-        }
-        #[cfg(feature = "postgres")]
-        sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(conn) => {
-            sea_orm::DatabaseConnection::SqlxPostgresPoolConnection(conn.clone())
-        }
-        #[cfg(feature = "sqlite")]
-        sea_orm::DatabaseConnection::SqlxSqlitePoolConnection(conn) => {
-            sea_orm::DatabaseConnection::SqlxSqlitePoolConnection(conn.clone())
-        }
-        #[cfg(feature = "sea-orm-proxy")]
-        sea_orm::DatabaseConnection::ProxyDatabaseConnection(conn) => {
-            sea_orm::DatabaseConnection::ProxyDatabaseConnection(conn.clone())
-        }
-        sea_orm::DatabaseConnection::Disconnected => sea_orm::DatabaseConnection::Disconnected,
-    }
+    conn.clone()
 }
 
 impl Clone for Database {

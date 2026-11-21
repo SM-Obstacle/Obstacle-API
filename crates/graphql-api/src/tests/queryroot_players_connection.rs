@@ -1,9 +1,9 @@
 use async_graphql::connection::CursorType;
 use chrono::TimeZone as _;
-use deadpool_redis::redis::{self, ToRedisArgs};
+use deadpool_redis::redis::{self, ToSingleRedisArg};
 use entity::{player_periodic_ranking, players, ranking_period};
 use mkenv::Layer as _;
-use rand::Rng;
+use rand::RngExt;
 use records_lib::RedisConnection;
 use sea_orm::{ActiveValue::Set, EntityTrait};
 
@@ -59,13 +59,13 @@ fn gen_player_ranking_key() -> String {
 
 async fn fill_redis_lb<I, P, S>(
     redis_conn: &mut RedisConnection,
-    key: impl ToRedisArgs,
+    key: impl ToSingleRedisArg,
     iter: I,
 ) -> anyhow::Result<()>
 where
     I: IntoIterator<Item = (P, S)>,
-    P: ToRedisArgs,
-    S: ToRedisArgs,
+    P: ToSingleRedisArg,
+    S: ToSingleRedisArg,
 {
     let mut pipe = redis::pipe();
     pipe.atomic();

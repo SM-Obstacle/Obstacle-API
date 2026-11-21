@@ -29,7 +29,7 @@ pub struct ModeVersion {
 
 impl From<ModeVersion> for sea_orm::Value {
     fn from(value: ModeVersion) -> Self {
-        sea_orm::Value::String(Some(Box::new(value.to_string())))
+        sea_orm::Value::String(Some(value.to_string()))
     }
 }
 

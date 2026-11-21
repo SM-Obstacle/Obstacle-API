@@ -15,7 +15,7 @@ use records_lib::{
     opt_event::OptEvent,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, QueryFilter as _,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, ExprTrait as _, QueryFilter as _,
     QuerySelect as _, sea_query::Query,
 };
 

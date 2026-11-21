@@ -16,10 +16,10 @@ use records_lib::{
     sync,
 };
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, FromQueryResult, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, StreamTrait,
+    ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, ExprTrait as _, FromQueryResult,
+    QueryFilter as _, QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
-    sea_query::{Asterisk, IntoValueTuple, Query},
+    sea_query::{Asterisk, Query, ValueTuple},
 };
 
 use crate::{
@@ -109,7 +109,7 @@ pub(crate) async fn get_map_records<C: ConnectionTrait + StreamTrait>(
 
     if let Some(ref s) = date_sort_by {
         select.order_by_expr(
-            Expr::col(("r", records::Column::RecordDate)).into(),
+            Expr::col(("r", records::Column::RecordDate)),
             match s {
                 SortState::Sort => sea_orm::Order::Desc,
                 SortState::Reverse => sea_orm::Order::Asc,
@@ -119,7 +119,7 @@ pub(crate) async fn get_map_records<C: ConnectionTrait + StreamTrait>(
         select
             .and_where(Expr::col(("r", records::Column::RecordPlayerId)).is_in(record_ids))
             .order_by_expr(
-                Expr::col(("r", records::Column::Time)).into(),
+                Expr::col(("r", records::Column::Time)),
                 if to_reverse {
                     sea_orm::Order::Desc
                 } else {
@@ -127,7 +127,7 @@ pub(crate) async fn get_map_records<C: ConnectionTrait + StreamTrait>(
                 },
             )
             .order_by_expr(
-                Expr::col(("r", records::Column::RecordDate)).into(),
+                Expr::col(("r", records::Column::RecordDate)),
                 sea_orm::Order::Asc,
             );
     }
@@ -136,9 +136,8 @@ pub(crate) async fn get_map_records<C: ConnectionTrait + StreamTrait>(
         select.limit(100);
     }
 
-    let stmt = conn.get_database_backend().build(&*select);
     let records = conn
-        .query_all(stmt)
+        .query_all(&*select)
         .await?
         .into_iter()
         .map(|result| records::Model::from_query_result(&result, ""))
@@ -217,15 +216,11 @@ impl IntoExprTuple for &MapRecordCursor {
     }
 }
 
-impl IntoValueTuple for &MapRecordCursor {
-    fn into_value_tuple(self) -> sea_orm::sea_query::ValueTuple {
-        match self {
-            MapRecordCursor::Date(record_date_cursor) => {
-                IntoValueTuple::into_value_tuple(record_date_cursor)
-            }
-            MapRecordCursor::Rank(record_rank_cursor) => {
-                IntoValueTuple::into_value_tuple(record_rank_cursor)
-            }
+impl From<&MapRecordCursor> for ValueTuple {
+    fn from(value: &MapRecordCursor) -> Self {
+        match value {
+            MapRecordCursor::Date(record_date_cursor) => ValueTuple::from(record_date_cursor),
+            MapRecordCursor::Rank(record_rank_cursor) => ValueTuple::from(record_rank_cursor),
         }
     }
 }

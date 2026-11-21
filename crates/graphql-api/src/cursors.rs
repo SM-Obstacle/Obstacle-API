@@ -168,12 +168,12 @@ where
     }
 }
 
-impl<T> IntoValueTuple for &RecordDateCursor<T>
+impl<T> From<&RecordDateCursor<T>> for ValueTuple
 where
     T: Into<Value> + Clone,
 {
-    fn into_value_tuple(self) -> ValueTuple {
-        (self.record_date, self.data.clone()).into_value_tuple()
+    fn from(value: &RecordDateCursor<T>) -> Self {
+        (value.record_date, value.data.clone()).into_value_tuple()
     }
 }
 
@@ -209,12 +209,12 @@ where
     }
 }
 
-impl<T> IntoValueTuple for &RecordRankCursor<T>
+impl<T> From<&RecordRankCursor<T>> for ValueTuple
 where
     T: Into<Value> + Clone,
 {
-    fn into_value_tuple(self) -> sea_orm::sea_query::ValueTuple {
-        (self.time, self.record_date, self.data.clone()).into_value_tuple()
+    fn from(value: &RecordRankCursor<T>) -> Self {
+        (value.time, value.record_date, value.data.clone()).into_value_tuple()
     }
 }
 
@@ -248,12 +248,12 @@ where
     }
 }
 
-impl<T> IntoValueTuple for &TextCursor<T>
+impl<T> From<&TextCursor<T>> for ValueTuple
 where
     T: Into<Value> + Clone,
 {
-    fn into_value_tuple(self) -> ValueTuple {
-        (self.text.clone(), self.data.clone()).into_value_tuple()
+    fn from(value: &TextCursor<T>) -> Self {
+        (value.text.clone(), value.data.clone()).into_value_tuple()
     }
 }
 
@@ -287,12 +287,12 @@ where
     }
 }
 
-impl<T> IntoValueTuple for &F64Cursor<T>
+impl<T> From<&F64Cursor<T>> for ValueTuple
 where
     T: Into<Value> + Clone,
 {
-    fn into_value_tuple(self) -> ValueTuple {
-        (self.score, self.data.clone()).into_value_tuple()
+    fn from(value: &F64Cursor<T>) -> Self {
+        (value.score, value.data.clone()).into_value_tuple()
     }
 }
 

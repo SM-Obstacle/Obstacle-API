@@ -1,6 +1,6 @@
 use entity::{mappack_map_periodic_ranking, maps};
 use records_lib::{mappack::AnyMappackId, must};
-use sea_orm::{ColumnTrait as _, DbConn, EntityTrait as _, QueryFilter as _};
+use sea_orm::{ColumnTrait as _, DbConn, EntityTrait as _, ExprTrait as _, QueryFilter as _};
 
 use crate::{
     error::GqlResult,

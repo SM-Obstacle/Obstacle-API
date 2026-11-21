@@ -1,5 +1,5 @@
 use mkenv::prelude::*;
-use rand::Rng;
+use rand::RngExt;
 use std::time::Duration;
 
 use async_graphql::connection::CursorType;

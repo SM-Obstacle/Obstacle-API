@@ -6,7 +6,8 @@ use entity::{
     global_records, maps, players, records,
 };
 use sea_orm::{
-    ActiveValue::Set, ColumnTrait as _, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    ActiveValue::Set, ColumnTrait as _, EntityTrait, ExprTrait as _, QueryFilter, QueryOrder,
+    QuerySelect,
 };
 
 use crate::player_finished_base::{Record, Request, Response};

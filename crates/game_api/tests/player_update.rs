@@ -1,7 +1,7 @@
 use actix_web::test;
 use chrono::SubsecRound;
 use entity::players;
-use sea_orm::{ActiveValue::Set, ColumnTrait as _, EntityTrait, QueryFilter};
+use sea_orm::{ActiveValue::Set, ColumnTrait as _, EntityTrait, ExprTrait as _, QueryFilter};
 
 mod base;
 

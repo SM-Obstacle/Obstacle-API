@@ -10,8 +10,8 @@ use entity::{
 use mkenv::prelude::*;
 use sea_orm::{
     ActiveValue::Set,
-    ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, Order, QueryFilter, QueryOrder,
-    QueryTrait, StreamTrait, TransactionTrait,
+    ColumnTrait, ConnectionTrait, EntityTrait, ExprTrait as _, FromQueryResult, Order, QueryFilter,
+    QueryOrder, QueryTrait, StreamTrait, TransactionTrait,
     prelude::Expr,
     sea_query::{Asterisk, Query},
 };
@@ -148,7 +148,10 @@ pub async fn update_mappack<C: TransactionTrait + ConnectionTrait + Sync>(
     mappack: AnyMappackId<'_>,
     event: OptEvent<'_>,
     retention: MappackRetention,
-) -> RecordsResult<usize> {
+) -> RecordsResult<usize>
+where
+    C::Transaction: StreamTrait,
+{
     ensure_mappack(conn, mappack, retention).await?;
     // Calculate the scores
     let scores = crate::assert_future_send(sync::transaction_with_config(
@@ -490,7 +493,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
                     .eq(Expr::col(("r", records::Column::RecordPlayerId))),
             )
             .and_where(Expr::col(("r", records::Column::MapId)).eq(map.map_id))
-            .order_by_expr(Expr::col(("r", records::Column::Time)).into(), Order::Asc);
+            .order_by_expr(Expr::col(("r", records::Column::Time)), Order::Asc);
 
         match event.get() {
             Some((ev, ed)) => {
@@ -505,9 +508,8 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
             }
         }
 
-        let stmt = conn.get_database_backend().build(&query);
         let res = conn
-            .query_all(stmt)
+            .query_all(&query)
             .await?
             .into_iter()
             .map(|result| RecordRow::from_query_result(&result, ""))
@@ -575,8 +577,8 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
 
     for player in &mut scores {
         player.ranks.sort_by(|a, b| {
-            ((a.rank / maps[a.map_idx].last_rank.max(1)
-                - b.rank / maps[b.map_idx].last_rank.max(1))
+            ((a.rank / Ord::max(maps[a.map_idx].last_rank, 1)
+                - b.rank / Ord::max(maps[b.map_idx].last_rank, 1))
                 + (a.rank - b.rank) / 1000)
                 .cmp(&0)
         });
@@ -608,7 +610,7 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
     let mut old_rank = 0;
 
     for (rank, player) in scores.iter_mut().enumerate() {
-        player.rank = if old_score.eq(&player.score) && old_finishes == player.maps_finished {
+        player.rank = if old_score == player.score && old_finishes == player.maps_finished {
             old_rank
         } else {
             rank as u32 + 1

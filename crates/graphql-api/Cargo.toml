@@ -1,21 +1,21 @@
 [package]
 name = "graphql-api"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 
 [dependencies]
 async-graphql = { workspace = true, features = ["dataloader", "apollo_tracing", "custom-error-conversion"] }
-base64 = "0.22"
+base64 = "0.23.1"
 chrono = { workspace = true }
 deadpool-redis = { workspace = true }
 entity = { path = "../entity" }
 futures = { workspace = true }
-hmac = "0.12.1"
+hmac = "0.13.0"
 mkenv = { workspace = true }
 records-lib = { path = "../records_lib" }
 sea-orm = { workspace = true }
 serde = { workspace = true }
-sha2 = "0.10.9"
+sha2 = "0.11.1"
 tokio = { workspace = true, features = ["macros"] }
 itertools.workspace = true
 serde_json.workspace = true

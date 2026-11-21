@@ -6,7 +6,8 @@ use entity::maps;
 use mx_layer::{maps::MapMxIds, polite::Sink};
 use records_lib::error::RecordsResult;
 use sea_orm::{
-    ColumnTrait as _, DbConn, EntityTrait as _, QueryFilter as _, sea_query::CaseStatement,
+    ColumnTrait as _, DbConn, EntityTrait as _, ExprTrait as _, QueryFilter as _,
+    sea_query::CaseStatement,
 };
 
 /// How many maps one `UPDATE` covers at most.
