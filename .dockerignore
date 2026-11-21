@@ -1,0 +1,13 @@
+.git
+.github
+.docker
+.claude
+.idea
+.vscode
+.zed
+.crates-lsp
+target
+.env
+.env.*
+*.csv
+*.http
