@@ -18,8 +18,9 @@ RUN apt-get update -y \
 	&& rm -rf /var/lib/apt/lists/*
 
 FROM runtime AS backend
+# On failure, stop the API gracefully so the restart policy brings it back up.
 HEALTHCHECK --interval=10m --timeout=40s \
-	CMD curl -f "http://localhost:${RECORDS_API_PORT}/info" || bash -c 'kill -s 15 -1 && (sleep 10; kill -s 9 -1)'
+	CMD curl -fsS --max-time 30 -o /dev/null "http://localhost:${RECORDS_API_PORT}/info" || { kill -s TERM 1; exit 1; }
 COPY --from=builder /code/target/release/game-api /game-api
 CMD ["/game-api"]
 
@@ -32,5 +33,7 @@ COPY --from=builder /code/target/release/socc /socc
 CMD ["/socc"]
 
 FROM runtime AS migrator
+COPY ./docker/migrator-entrypoint.sh /entrypoint.sh
 COPY --from=builder /code/target/release/migration /bin/migration
-CMD ["/bin/migration"]
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["up"]
