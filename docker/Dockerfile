@@ -1,16 +1,25 @@
 # One image per service, selected with --target:
 #   docker build -f docker/Dockerfile --target backend -t obstacle-api/backend .
 
-FROM rust:1.98.1-bookworm AS base
-
+FROM rust:1.98.1-bookworm AS chef
+RUN cargo install cargo-chef --version 0.1.78 --locked
 WORKDIR /code
-COPY ./Cargo.toml ./Cargo.lock* ./
-COPY ./crates ./crates
-RUN cargo fetch
 
-FROM base AS builder
+# The recipe only describes the dependencies: it stays the same as long as
+# Cargo.toml/Cargo.lock files don't change, which keeps the `cook` layer cached.
+FROM chef AS planner
+COPY ./Cargo.toml ./Cargo.lock ./
+COPY ./crates ./crates
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
 ARG DB_BACKEND=mysql
-RUN cargo build --release --offline --no-default-features -F $DB_BACKEND
+COPY --from=planner /code/recipe.json recipe.json
+RUN cargo chef cook --release --no-default-features --features $DB_BACKEND --recipe-path recipe.json
+COPY ./Cargo.toml ./Cargo.lock ./
+COPY ./crates ./crates
+RUN cargo build --release --no-default-features -F $DB_BACKEND \
+	-p game-api -p admin -p socc -p migration
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update -y \
