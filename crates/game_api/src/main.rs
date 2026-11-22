@@ -30,7 +30,12 @@ use tracing_subscriber::{
 /// The main entry point.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv()?;
+    // The .env file is optional: the environment can also be set by the container runtime.
+    if let Err(e) = dotenvy::dotenv()
+        && !e.not_found()
+    {
+        return Err(e.into());
+    }
     game_api_lib::init_env()?;
     #[cfg(feature = "request_filter")]
     request_filter::init_wh_url(game_api_lib::env().wh_invalid_req_url.get()).map_err(|_| {

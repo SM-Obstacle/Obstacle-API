@@ -3,7 +3,6 @@ target
 python_*
 cert
 .idea
-Cargo.lock
 .docker
 *.http
 *.csv

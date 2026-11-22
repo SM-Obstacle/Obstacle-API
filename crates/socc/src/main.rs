@@ -53,7 +53,12 @@ mkenv::make_config! {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv()?;
+    // The .env file is optional: the environment can also be set by the container runtime.
+    if let Err(e) = dotenvy::dotenv()
+        && !e.not_found()
+    {
+        return Err(e.into());
+    }
     setup_tracing()?;
     let env = Env::define();
     env.init();
