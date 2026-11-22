@@ -20,7 +20,7 @@ RUN apt-get update -y \
 FROM runtime AS backend
 # On failure, stop the API gracefully so the restart policy brings it back up.
 HEALTHCHECK --interval=10m --timeout=40s \
-	CMD curl -fsS --max-time 30 -o /dev/null "http://localhost:${RECORDS_API_PORT}/info" || { kill -s TERM 1; exit 1; }
+	CMD curl -fsS --max-time 30 -o /dev/null "http://localhost:${RECORDS_API_PORT:-3000}/info" || { kill -s TERM 1; exit 1; }
 COPY --from=builder /code/target/release/game-api /game-api
 CMD ["/game-api"]
 
