@@ -22,12 +22,19 @@ env:
   PUSH: ${{ github.event_name != 'pull_request' }}
 
 jobs:
-  build:
-    name: Build and push images
+  tags:
+    name: Compute tags
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    outputs:
+      registry: ${{ steps.tags.outputs.registry }}
+      backend_tags: ${{ steps.tags.outputs.backend_tags }}
+      backend_version: ${{ steps.tags.outputs.backend_version }}
+      admin_tags: ${{ steps.tags.outputs.admin_tags }}
+      admin_version: ${{ steps.tags.outputs.admin_version }}
+      socc_tags: ${{ steps.tags.outputs.socc_tags }}
+      socc_version: ${{ steps.tags.outputs.socc_version }}
+      migrator_tags: ${{ steps.tags.outputs.migrator_tags }}
+      migrator_version: ${{ steps.tags.outputs.migrator_version }}
 
     steps:
       - name: Checkout repository
@@ -43,11 +50,34 @@ jobs:
         id: tags
         run: .github/scripts/image-tags.sh
 
+  # Each platform is built natively on its own runner and pushed by digest only;
+  # the `merge` job then tags a multi-platform manifest pointing to these digests.
+  build:
+    name: Build (${{ matrix.arch }})
+    needs: tags
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64/v8
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: env.PUSH == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -55,64 +85,153 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build backend
+        id: backend
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
           target: backend
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           build-args: DB_BACKEND=${{ env.DB_BACKEND }}
-          push: ${{ env.PUSH }}
-          tags: ${{ steps.tags.outputs.backend_tags }}
+          outputs: type=image,name=${{ needs.tags.outputs.registry }}/backend,push-by-digest=true,name-canonical=true,push=${{ env.PUSH }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.tags.outputs.backend_version }}
-          cache-from: type=gha,scope=api-${{ env.DB_BACKEND }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.backend_version }}
+          cache-from: type=gha,scope=api-${{ env.DB_BACKEND }}-${{ matrix.arch }}
           # Later builds reuse the shared stages from the builder's local cache.
-          cache-to: type=gha,scope=api-${{ env.DB_BACKEND }},mode=max
+          cache-to: type=gha,scope=api-${{ env.DB_BACKEND }}-${{ matrix.arch }},mode=max
 
       - name: Build admin
+        id: admin
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
           target: admin
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           build-args: DB_BACKEND=${{ env.DB_BACKEND }}
-          push: ${{ env.PUSH }}
-          tags: ${{ steps.tags.outputs.admin_tags }}
+          outputs: type=image,name=${{ needs.tags.outputs.registry }}/admin,push-by-digest=true,name-canonical=true,push=${{ env.PUSH }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.tags.outputs.admin_version }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.admin_version }}
 
       - name: Build socc
+        id: socc
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
           target: socc
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           build-args: DB_BACKEND=${{ env.DB_BACKEND }}
-          push: ${{ env.PUSH }}
-          tags: ${{ steps.tags.outputs.socc_tags }}
+          outputs: type=image,name=${{ needs.tags.outputs.registry }}/socc,push-by-digest=true,name-canonical=true,push=${{ env.PUSH }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.tags.outputs.socc_version }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.socc_version }}
 
       - name: Build migrator
+        id: migrator
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
           target: migrator
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           build-args: DB_BACKEND=${{ env.DB_BACKEND }}
-          push: ${{ env.PUSH }}
-          tags: ${{ steps.tags.outputs.migrator_tags }}
+          outputs: type=image,name=${{ needs.tags.outputs.registry }}/migrator,push-by-digest=true,name-canonical=true,push=${{ env.PUSH }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.tags.outputs.migrator_version }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.migrator_version }}
+
+      - name: Export digests
+        if: env.PUSH == 'true'
+        env:
+          BACKEND: ${{ steps.backend.outputs.digest }}
+          ADMIN: ${{ steps.admin.outputs.digest }}
+          SOCC: ${{ steps.socc.outputs.digest }}
+          MIGRATOR: ${{ steps.migrator.outputs.digest }}
+        run: |
+          for pair in "backend=$BACKEND" "admin=$ADMIN" "socc=$SOCC" "migrator=$MIGRATOR"; do
+            svc="${pair%%=*}"
+            digest="${pair#*=}"
+            mkdir -p "$RUNNER_TEMP/digests/$svc"
+            touch "$RUNNER_TEMP/digests/$svc/${digest#sha256:}"
+          done
+
+      - name: Upload digests
+        if: env.PUSH == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish manifests
+    if: github.event_name != 'pull_request'
+    needs: [tags, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: digests-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifests
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          REGISTRY: ${{ needs.tags.outputs.registry }}
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+          backend_tags: ${{ needs.tags.outputs.backend_tags }}
+          backend_version: ${{ needs.tags.outputs.backend_version }}
+          admin_tags: ${{ needs.tags.outputs.admin_tags }}
+          admin_version: ${{ needs.tags.outputs.admin_version }}
+          socc_tags: ${{ needs.tags.outputs.socc_tags }}
+          socc_version: ${{ needs.tags.outputs.socc_version }}
+          migrator_tags: ${{ needs.tags.outputs.migrator_tags }}
+          migrator_version: ${{ needs.tags.outputs.migrator_version }}
+        run: |
+          set -euo pipefail
+          for svc in backend admin socc migrator; do
+            tags_var="${svc}_tags"
+            version_var="${svc}_version"
+
+            args=()
+            IFS=, read -ra tags <<<"${!tags_var}"
+            for tag in "${tags[@]}"; do
+              args+=(-t "$tag")
+            done
+            for digest in "$svc"/*; do
+              args+=("$REGISTRY/$svc@sha256:$(basename "$digest")")
+            done
+
+            # GHCR reads the repository link from the index annotations of multi-platform images.
+            docker buildx imagetools create \
+              --annotation "index:org.opencontainers.image.source=$SOURCE_URL" \
+              --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
+              --annotation "index:org.opencontainers.image.version=${!version_var}" \
+              "${args[@]}"
+
+            docker buildx imagetools inspect "${tags[0]}"
+          done

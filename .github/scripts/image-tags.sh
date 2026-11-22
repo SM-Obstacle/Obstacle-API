@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Computes the Docker image tags and writes them to $GITHUB_OUTPUT.
+# Computes the Docker image tags and writes them to $GITHUB_OUTPUT:
+#   registry: image name prefix, e.g. ghcr.io/sm-obstacle/obstacle-api
 # For each service <svc>:
 #   <svc>_version: version of the matching cargo package
 #   <svc>_tags:    comma-separated list of full image tags
@@ -37,6 +38,8 @@ if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
     fi
   fi
 fi
+
+echo "registry=$registry" >> "${GITHUB_OUTPUT:-/dev/stdout}"
 
 for entry in $services; do
   svc="${entry%%:*}"
