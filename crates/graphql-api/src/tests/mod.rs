@@ -65,6 +65,51 @@ async fn player_and_map_records_amount() -> anyhow::Result<()> {
         .exec(&db.sql_conn)
         .await?;
 
+        entity::event::Entity::insert(entity::event::ActiveModel {
+            id: Set(1),
+            handle: Set("event".to_owned()),
+            ..Default::default()
+        })
+        .exec(&db.sql_conn)
+        .await?;
+
+        entity::event_edition::Entity::insert(entity::event_edition::ActiveModel {
+            id: Set(1),
+            event_id: Set(1),
+            name: Set("edition".to_owned()),
+            start_date: Set(chrono::Utc
+                .with_ymd_and_hms(2026, 11, 22, 12, 0, 0)
+                .unwrap()
+                .naive_utc()),
+            save_non_event_record: Set(0),
+            non_original_maps: Set(0),
+            is_transparent: Set(0),
+            ..Default::default()
+        })
+        .exec(&db.sql_conn)
+        .await?;
+
+        entity::event_edition_maps::Entity::insert(entity::event_edition_maps::ActiveModel {
+            event_id: Set(1),
+            edition_id: Set(1),
+            map_id: Set(1),
+            order: Set(0),
+            is_disabled: Set(false),
+            ..Default::default()
+        })
+        .exec(&db.sql_conn)
+        .await?;
+
+        entity::event_edition_records::Entity::insert_many([
+            entity::event_edition_records::ActiveModel {
+                record_id: Set(1),
+                event_id: Set(1),
+                edition_id: Set(1),
+            },
+        ])
+        .exec(&db.sql_conn)
+        .await?;
+
         assert_eq!(
             crate::objects::player::get_player_records_amount(&db.sql_conn, 1).await?,
             1
@@ -72,6 +117,26 @@ async fn player_and_map_records_amount() -> anyhow::Result<()> {
         assert_eq!(
             crate::objects::map::get_map_records_amount(&db.sql_conn, 1).await?,
             1
+        );
+        assert_eq!(
+            crate::objects::event_edition_map::get_event_edition_map_records_amount(
+                &db.sql_conn,
+                1,
+                1,
+                1,
+            )
+            .await?,
+            1
+        );
+        assert_eq!(
+            crate::objects::event_edition_map::get_event_edition_map_records_amount(
+                &db.sql_conn,
+                1,
+                2,
+                1,
+            )
+            .await?,
+            0
         );
 
         anyhow::Ok(())

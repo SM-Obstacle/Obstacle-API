@@ -1,6 +1,7 @@
 use async_graphql::{ID, connection, dataloader::DataLoader};
-use entity::event_edition_maps;
+use entity::{event_edition_maps, global_event_records};
 use records_lib::{event as event_utils, internal, opt_event::OptEvent};
+use sea_orm::{ColumnTrait as _, DbConn, EntityTrait as _, PaginatorTrait as _, QueryFilter as _};
 
 use crate::{
     error::GqlResult,
@@ -51,8 +52,34 @@ impl EventEditionMap<'_> {
     }
 }
 
+pub(crate) async fn get_event_edition_map_records_amount<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    event_id: u32,
+    edition_id: u32,
+    map_id: u32,
+) -> GqlResult<usize> {
+    let amount = global_event_records::Entity::find()
+        .filter(global_event_records::Column::MapId.eq(map_id))
+        .filter(global_event_records::Column::EventId.eq(event_id))
+        .filter(global_event_records::Column::EditionId.eq(edition_id))
+        .count(conn)
+        .await?;
+    Ok(amount as usize)
+}
+
 #[async_graphql::ComplexObject]
 impl EventEditionMap<'_> {
+    async fn records_amount(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<usize> {
+        let conn = ctx.data_unchecked::<DbConn>();
+        get_event_edition_map_records_amount(
+            conn,
+            self.edition.inner.event_id,
+            self.edition.inner.id,
+            self.map.inner.id,
+        )
+        .await
+    }
+
     async fn link_to_original(&self) -> bool {
         !(self.edition.inner.save_non_event_record != 0
             && self.edition.inner.non_original_maps != 0)
