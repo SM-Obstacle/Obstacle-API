@@ -4,8 +4,8 @@ use entity::{global_records, players, records, role};
 use records_lib::{Database, ranks};
 use records_lib::{RedisPool, error::RecordsError, opt_event::OptEvent, sync};
 use sea_orm::{
-    ColumnTrait as _, ConnectionTrait, EntityTrait as _, FromQueryResult, QueryFilter as _,
-    QueryOrder as _, QuerySelect as _, StreamTrait, TransactionTrait,
+    ColumnTrait as _, ConnectionTrait, EntityTrait as _, FromQueryResult, PaginatorTrait as _,
+    QueryFilter as _, QueryOrder as _, QuerySelect as _, StreamTrait, TransactionTrait,
 };
 
 use crate::cursors::RecordDateCursor;
@@ -45,6 +45,17 @@ impl TryFrom<role::Model> for PlayerRole {
     }
 }
 
+pub(crate) async fn get_player_records_amount<C: ConnectionTrait>(
+    conn: &C,
+    player_id: u32,
+) -> GqlResult<usize> {
+    let amount = global_records::Entity::find()
+        .filter(global_records::Column::RecordPlayerId.eq(player_id))
+        .count(conn)
+        .await?;
+    Ok(amount as usize)
+}
+
 #[derive(Debug, Clone, FromQueryResult)]
 pub struct Player {
     #[sea_orm(nested)]
@@ -69,6 +80,15 @@ impl Player {
 
     async fn name(&self) -> &str {
         &self.inner.name
+    }
+
+    async fn join_date(&self) -> Option<chrono::NaiveDateTime> {
+        self.inner.join_date
+    }
+
+    async fn records_amount(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<usize> {
+        let conn = ctx.data_unchecked::<sea_orm::DbConn>();
+        get_player_records_amount(conn, self.inner.id).await
     }
 
     async fn zone_path(&self) -> Option<&str> {

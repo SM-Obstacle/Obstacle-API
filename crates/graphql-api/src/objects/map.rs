@@ -17,7 +17,7 @@ use records_lib::{
 };
 use sea_orm::{
     ColumnTrait as _, ConnectionTrait, DbConn, EntityTrait as _, ExprTrait as _, FromQueryResult,
-    QueryFilter as _, QueryOrder as _, QuerySelect as _, StreamTrait,
+    PaginatorTrait as _, QueryFilter as _, QueryOrder as _, QuerySelect as _, StreamTrait,
     prelude::Expr,
     sea_query::{Asterisk, Query, ValueTuple},
 };
@@ -63,6 +63,17 @@ impl From<maps::Model> for Map {
     fn from(inner: maps::Model) -> Self {
         Self { inner }
     }
+}
+
+pub(crate) async fn get_map_records_amount<C: ConnectionTrait>(
+    conn: &C,
+    map_id: u32,
+) -> GqlResult<usize> {
+    let amount = global_records::Entity::find()
+        .filter(global_records::Column::MapId.eq(map_id))
+        .count(conn)
+        .await?;
+    Ok(amount as usize)
 }
 
 pub(crate) async fn get_map_records<C: ConnectionTrait + StreamTrait>(
@@ -462,6 +473,11 @@ impl Map {
 
     async fn name(&self) -> &str {
         &self.inner.name
+    }
+
+    async fn records_amount(&self, ctx: &async_graphql::Context<'_>) -> GqlResult<usize> {
+        let conn = ctx.data_unchecked::<DbConn>();
+        get_map_records_amount(conn, self.inner.id).await
     }
 
     async fn score(&self, ctx: &async_graphql::Context<'_>) -> f64 {
