@@ -23,8 +23,7 @@ use crate::{
     config::InitError,
     cursors::ConnectionParameters,
     objects::{
-        map::get_map_records, player::get_player_records_connection,
-        root::get_records_connection,
+        map::get_map_records, player::get_player_records_connection, root::get_records_connection,
     },
 };
 
@@ -274,8 +273,15 @@ async fn map_ranks_with_outdated_leaderboard_time() -> anyhow::Result<()> {
         let map_id = fixture.map_ids[0];
 
         // Bring the leaderboard in, exactly in sync with the database.
-        get_map_records(&db.sql_conn, &db.redis_pool, map_id, Default::default(), None, None)
-            .await?;
+        get_map_records(
+            &db.sql_conn,
+            &db.redis_pool,
+            map_id,
+            Default::default(),
+            None,
+            None,
+        )
+        .await?;
 
         // The slowest player of the map improves to between the 1st and the 2nd, behind
         // Redis' back: the leaderboard keeps the same size, with the old time.
@@ -286,13 +292,25 @@ async fn map_ranks_with_outdated_leaderboard_time() -> anyhow::Result<()> {
             .exec(&db.sql_conn)
             .await?;
 
-        let records =
-            get_map_records(&db.sql_conn, &db.redis_pool, map_id, Default::default(), None, None)
-                .await?;
+        let records = get_map_records(
+            &db.sql_conn,
+            &db.redis_pool,
+            map_id,
+            Default::default(),
+            None,
+            None,
+        )
+        .await?;
 
         let ranked = records
             .iter()
-            .map(|r| (r.inner.record.record_player_id, r.inner.record.time, r.inner.rank))
+            .map(|r| {
+                (
+                    r.inner.record.record_player_id,
+                    r.inner.record.time,
+                    r.inner.rank,
+                )
+            })
             .collect_vec();
 
         // Times 1000, 1500, 2000, 3000, 4000: all distinct, so are the ranks.
@@ -306,7 +324,11 @@ async fn map_ranks_with_outdated_leaderboard_time() -> anyhow::Result<()> {
             .await?
             .zscore(map_key(map_id, Default::default()), slowest_id)
             .await?;
-        assert_eq!(cached, Some(1500.), "the outdated time should have been repaired");
+        assert_eq!(
+            cached,
+            Some(1500.),
+            "the outdated time should have been repaired"
+        );
 
         anyhow::Ok(())
     })
