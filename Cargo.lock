@@ -286,7 +286,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "admin"
-version = "1.5.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "compute-player-map-ranking"
-version = "0.2.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1642,7 +1642,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "dsc_webhook"
-version = "0.4.0"
+version = "1.6.1"
 dependencies = [
  "actix-web",
  "serde",
@@ -1685,7 +1685,7 @@ dependencies = [
 
 [[package]]
 name = "entity"
-version = "0.3.0"
+version = "1.6.1"
 dependencies = [
  "nom",
  "sea-orm",
@@ -2028,7 +2028,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "graphql-api"
-version = "0.5.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "async-graphql",
@@ -2055,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "graphql-schema-generator"
-version = "0.2.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2835,7 +2835,7 @@ dependencies = [
 
 [[package]]
 name = "migration"
-version = "0.3.0"
+version = "1.6.1"
 dependencies = [
  "entity",
  "sea-orm",
@@ -2938,7 +2938,7 @@ checksum = "e94e1e6445d314f972ff7395df2de295fe51b71821694f0b0e1e79c4f12c8577"
 
 [[package]]
 name = "mx-layer"
-version = "0.1.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "futures",
@@ -3247,7 +3247,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "player-map-ranking"
-version = "0.2.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "entity",
@@ -3539,7 +3539,7 @@ dependencies = [
 
 [[package]]
 name = "records-lib"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "chrono",
  "deadpool-redis",
@@ -3642,7 +3642,7 @@ checksum = "d902046e6a28a1e4c3cab97258a0ce11e994903f01c2d97a9447a0b3df85f4f6"
 
 [[package]]
 name = "request_filter"
-version = "0.1.0"
+version = "1.6.1"
 dependencies = [
  "actix-web",
  "dsc_webhook",
@@ -4243,7 +4243,7 @@ dependencies = [
 
 [[package]]
 name = "socc"
-version = "1.4.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4642,7 +4642,7 @@ dependencies = [
 
 [[package]]
 name = "test-env"
-version = "0.2.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "dotenvy",

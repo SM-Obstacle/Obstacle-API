@@ -27,14 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       registry: ${{ steps.tags.outputs.registry }}
+      version: ${{ steps.tags.outputs.version }}
       backend_tags: ${{ steps.tags.outputs.backend_tags }}
-      backend_version: ${{ steps.tags.outputs.backend_version }}
       admin_tags: ${{ steps.tags.outputs.admin_tags }}
-      admin_version: ${{ steps.tags.outputs.admin_version }}
       socc_tags: ${{ steps.tags.outputs.socc_tags }}
-      socc_version: ${{ steps.tags.outputs.socc_version }}
       migrator_tags: ${{ steps.tags.outputs.migrator_tags }}
-      migrator_version: ${{ steps.tags.outputs.migrator_version }}
 
     steps:
       - name: Checkout repository
@@ -97,7 +94,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.tags.outputs.backend_version }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.version }}
           cache-from: type=gha,scope=api-${{ env.DB_BACKEND }}-${{ matrix.arch }}
           # Later builds reuse the shared stages from the builder's local cache.
           cache-to: type=gha,scope=api-${{ env.DB_BACKEND }}-${{ matrix.arch }},mode=max
@@ -115,7 +112,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.tags.outputs.admin_version }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.version }}
 
       - name: Build socc
         id: socc
@@ -130,7 +127,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.tags.outputs.socc_version }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.version }}
 
       - name: Build migrator
         id: migrator
@@ -145,7 +142,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.tags.outputs.migrator_version }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.version }}
 
       - name: Export digests
         if: env.PUSH == 'true'
@@ -203,19 +200,15 @@ jobs:
         env:
           REGISTRY: ${{ needs.tags.outputs.registry }}
           SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+          VERSION: ${{ needs.tags.outputs.version }}
           backend_tags: ${{ needs.tags.outputs.backend_tags }}
-          backend_version: ${{ needs.tags.outputs.backend_version }}
           admin_tags: ${{ needs.tags.outputs.admin_tags }}
-          admin_version: ${{ needs.tags.outputs.admin_version }}
           socc_tags: ${{ needs.tags.outputs.socc_tags }}
-          socc_version: ${{ needs.tags.outputs.socc_version }}
           migrator_tags: ${{ needs.tags.outputs.migrator_tags }}
-          migrator_version: ${{ needs.tags.outputs.migrator_version }}
         run: |
           set -euo pipefail
           for svc in backend admin socc migrator; do
             tags_var="${svc}_tags"
-            version_var="${svc}_version"
 
             args=()
             IFS=, read -ra tags <<<"${!tags_var}"
@@ -230,7 +223,7 @@ jobs:
             docker buildx imagetools create \
               --annotation "index:org.opencontainers.image.source=$SOURCE_URL" \
               --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
-              --annotation "index:org.opencontainers.image.version=${!version_var}" \
+              --annotation "index:org.opencontainers.image.version=$VERSION" \
               "${args[@]}"
 
             docker buildx imagetools inspect "${tags[0]}"
