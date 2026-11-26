@@ -2,6 +2,7 @@
 # Computes the Docker image tags and writes them to $GITHUB_OUTPUT:
 #   registry: image name prefix, e.g. ghcr.io/sm-obstacle/obstacle-api
 #   version:  workspace version (from [workspace.package] in Cargo.toml)
+#   latest:   "true" if the images are tagged "latest"
 #   <svc>_tags: comma-separated list of full image tags, for each service <svc>
 #
 # All images share the workspace version and are tagged <version>-<sha7>. When
@@ -41,6 +42,7 @@ fi
 {
   echo "registry=$registry"
   echo "version=$version"
+  echo "latest=$latest"
 } >> "${GITHUB_OUTPUT:-/dev/stdout}"
 
 for svc in $services; do
