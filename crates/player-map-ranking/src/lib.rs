@@ -145,7 +145,7 @@ pub async fn compute_scores<C: ConnectionTrait>(
 
         for (i, record) in map_records.iter().enumerate() {
             let r = (i + 1) as f64;
-            let t = ms_to_sec(record.time).max(stats.average_record);
+            let t = ms_to_sec(record.time);
             let score = compute_score(r, stats.records_count, t, stats.average_record);
 
             let map_score = map_scores.entry(record.map_id).or_insert(0.);
