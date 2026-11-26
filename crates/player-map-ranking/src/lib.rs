@@ -21,8 +21,16 @@ fn ms_to_sec(time: i32) -> f64 {
     time as f64 / 1000.
 }
 
+/// Computes the score of a record:
+///
+/// `[log10(1000 * rn²) + log10(max(0, average_record - t)² + 1)] * log10(rn / r + 1)³`
+///
+/// where `r` is the record's rank, `rn` the number of records on the map, `t` the record time
+/// and `average_record` the map's average record time (both in seconds). The time term only
+/// rewards records faster than the average, and is 0 for the others.
 fn compute_score(r: f64, rn: f64, t: f64, average_record: f64) -> f64 {
-    let record_score = (1000.0 * (rn * rn)).log10() + ((average_record - t).powi(2) + 1.0).log10();
+    let time_gain = (average_record - t).max(0.0);
+    let record_score = (1000.0 * (rn * rn)).log10() + (time_gain.powi(2) + 1.0).log10();
     record_score * ((rn / r) + 1.0).log10().powi(3)
 }
 
