@@ -27,14 +27,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       registry: ${{ steps.tags.outputs.registry }}
+      version: ${{ steps.tags.outputs.version }}
+      latest: ${{ steps.tags.outputs.latest }}
       backend_tags: ${{ steps.tags.outputs.backend_tags }}
-      backend_version: ${{ steps.tags.outputs.backend_version }}
       admin_tags: ${{ steps.tags.outputs.admin_tags }}
-      admin_version: ${{ steps.tags.outputs.admin_version }}
       socc_tags: ${{ steps.tags.outputs.socc_tags }}
-      socc_version: ${{ steps.tags.outputs.socc_version }}
       migrator_tags: ${{ steps.tags.outputs.migrator_tags }}
-      migrator_version: ${{ steps.tags.outputs.migrator_version }}
 
     steps:
       - name: Checkout repository
@@ -97,7 +95,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.tags.outputs.backend_version }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.version }}
           cache-from: type=gha,scope=api-${{ env.DB_BACKEND }}-${{ matrix.arch }}
           # Later builds reuse the shared stages from the builder's local cache.
           cache-to: type=gha,scope=api-${{ env.DB_BACKEND }}-${{ matrix.arch }},mode=max
@@ -115,7 +113,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.tags.outputs.admin_version }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.version }}
 
       - name: Build socc
         id: socc
@@ -130,7 +128,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.tags.outputs.socc_version }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.version }}
 
       - name: Build migrator
         id: migrator
@@ -145,7 +143,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.tags.outputs.migrator_version }}
+            org.opencontainers.image.version=${{ needs.tags.outputs.version }}
 
       - name: Export digests
         if: env.PUSH == 'true'
@@ -203,19 +201,15 @@ jobs:
         env:
           REGISTRY: ${{ needs.tags.outputs.registry }}
           SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+          VERSION: ${{ needs.tags.outputs.version }}
           backend_tags: ${{ needs.tags.outputs.backend_tags }}
-          backend_version: ${{ needs.tags.outputs.backend_version }}
           admin_tags: ${{ needs.tags.outputs.admin_tags }}
-          admin_version: ${{ needs.tags.outputs.admin_version }}
           socc_tags: ${{ needs.tags.outputs.socc_tags }}
-          socc_version: ${{ needs.tags.outputs.socc_version }}
           migrator_tags: ${{ needs.tags.outputs.migrator_tags }}
-          migrator_version: ${{ needs.tags.outputs.migrator_version }}
         run: |
           set -euo pipefail
           for svc in backend admin socc migrator; do
             tags_var="${svc}_tags"
-            version_var="${svc}_version"
 
             args=()
             IFS=, read -ra tags <<<"${!tags_var}"
@@ -230,8 +224,66 @@ jobs:
             docker buildx imagetools create \
               --annotation "index:org.opencontainers.image.source=$SOURCE_URL" \
               --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
-              --annotation "index:org.opencontainers.image.version=${!version_var}" \
+              --annotation "index:org.opencontainers.image.version=$VERSION" \
               "${args[@]}"
 
             docker buildx imagetools inspect "${tags[0]}"
           done
+
+  # Deploys to production each time latest is published (highest vX.Y.Z tag pushed).
+  #
+  # The deploy key is restricted on the server to a single forced command, in the
+  # deploy user's authorized_keys:
+  #   command="sudo /usr/local/bin/deploy-api",restrict ssh-ed25519 AAAA...
+  # That root-owned script (docker compose pull, run the migrations, then up -d) is
+  # the only thing the key can run, so the workflow sends no command at all.
+  #
+  # Settings, in the "production" environment (Settings > Environments):
+  # - secrets: DEPLOY_SSH_HOST, DEPLOY_SSH_USER, DEPLOY_SSH_KEY (private key),
+  #            DEPLOY_SSH_KNOWN_HOSTS (output of `ssh-keyscan -p <port> <host>`)
+  # - variable: DEPLOY_SSH_PORT (optional, defaults to 22)
+  deploy:
+    name: Deploy to production
+    needs: [tags, merge]
+    if: needs.tags.outputs.latest == 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    environment: production
+    # Never run two deployments at once, and never cancel one halfway
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+
+    steps:
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$SSH_KEY" ] || [ -z "$KNOWN_HOSTS" ]; then
+            echo "::error::DEPLOY_SSH_KEY and DEPLOY_SSH_KNOWN_HOSTS secrets must be set"
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      # Runs the server's forced command (deploy script); its exit code fails the job if needed
+      - name: Deploy
+        env:
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT || '22' }}
+        run: |
+          if [ -z "$SSH_HOST" ] || [ -z "$SSH_USER" ]; then
+            echo "::error::DEPLOY_SSH_HOST and DEPLOY_SSH_USER secrets must be set"
+            exit 1
+          fi
+          ssh -T -i ~/.ssh/deploy_key -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            "$SSH_USER@$SSH_HOST" < /dev/null
+
+      - name: Remove the SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
