@@ -28,6 +28,7 @@ jobs:
     outputs:
       registry: ${{ steps.tags.outputs.registry }}
       version: ${{ steps.tags.outputs.version }}
+      latest: ${{ steps.tags.outputs.latest }}
       backend_tags: ${{ steps.tags.outputs.backend_tags }}
       admin_tags: ${{ steps.tags.outputs.admin_tags }}
       socc_tags: ${{ steps.tags.outputs.socc_tags }}
@@ -228,3 +229,61 @@ jobs:
 
             docker buildx imagetools inspect "${tags[0]}"
           done
+
+  # Deploys to production each time latest is published (highest vX.Y.Z tag pushed).
+  #
+  # The deploy key is restricted on the server to a single forced command, in the
+  # deploy user's authorized_keys:
+  #   command="sudo /usr/local/bin/deploy-api",restrict ssh-ed25519 AAAA...
+  # That root-owned script (docker compose pull, run the migrations, then up -d) is
+  # the only thing the key can run, so the workflow sends no command at all.
+  #
+  # Settings, in the "production" environment (Settings > Environments):
+  # - secrets: DEPLOY_SSH_HOST, DEPLOY_SSH_USER, DEPLOY_SSH_KEY (private key),
+  #            DEPLOY_SSH_KNOWN_HOSTS (output of `ssh-keyscan -p <port> <host>`)
+  # - variable: DEPLOY_SSH_PORT (optional, defaults to 22)
+  deploy:
+    name: Deploy to production
+    needs: [tags, merge]
+    if: needs.tags.outputs.latest == 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    environment: production
+    # Never run two deployments at once, and never cancel one halfway
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+
+    steps:
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$SSH_KEY" ] || [ -z "$KNOWN_HOSTS" ]; then
+            echo "::error::DEPLOY_SSH_KEY and DEPLOY_SSH_KNOWN_HOSTS secrets must be set"
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      # Runs the server's forced command (deploy script); its exit code fails the job if needed
+      - name: Deploy
+        env:
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT || '22' }}
+        run: |
+          if [ -z "$SSH_HOST" ] || [ -z "$SSH_USER" ]; then
+            echo "::error::DEPLOY_SSH_HOST and DEPLOY_SSH_USER secrets must be set"
+            exit 1
+          fi
+          ssh -T -i ~/.ssh/deploy_key -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            "$SSH_USER@$SSH_HOST" < /dev/null
+
+      - name: Remove the SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
