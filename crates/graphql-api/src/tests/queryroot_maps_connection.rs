@@ -674,3 +674,122 @@ async fn last_x() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn paginate_through_equal_scores() -> anyhow::Result<()> {
+    setup();
+
+    // Map 1 is first, maps 2 to 10 are tied, so the tie spans several pages.
+    // Real-world values: the tied score has many significant digits.
+    let (top, tied) = (13999.519237788329, 13999.050807630227);
+    let scores = [top, tied, tied, tied, tied, tied, tied, tied, tied, tied];
+    let page_size = 3;
+
+    let author = players::ActiveModel {
+        id: Set(1),
+        login: Set("boogalogin".to_owned()),
+        name: Set("booganame".to_owned()),
+        role: Set(0),
+        ..Default::default()
+    };
+
+    let maps = (0..scores.len()).map(|i| maps::ActiveModel {
+        id: Set((i + 1) as _),
+        game_id: Set(format!("map_{i}_uid")),
+        name: Set(format!("map_{i}_name")),
+        player_id: Set(1),
+        ..Default::default()
+    });
+
+    let period = ranking_period::ActiveModel {
+        period_id: Set(1),
+        period_date: Set(chrono::Utc
+            .with_ymd_and_hms(2026, 8, 17, 00, 00, 00)
+            .unwrap()
+            .naive_utc()),
+        is_global: Set(false),
+    };
+
+    let map_scores =
+        scores
+            .iter()
+            .enumerate()
+            .map(|(i, score)| map_periodic_ranking::ActiveModel {
+                period_id: Set(1),
+                map_id: Set((i + 1) as _),
+                score: Set(*score),
+            });
+
+    let source = gen_map_ranking_key();
+
+    test_env::wrap(async |db| {
+        players::Entity::insert(author).exec(&db.sql_conn).await?;
+        maps::Entity::insert_many(maps).exec(&db.sql_conn).await?;
+        ranking_period::Entity::insert(period)
+            .exec(&db.sql_conn)
+            .await?;
+        map_periodic_ranking::Entity::insert_many(map_scores)
+            .exec(&db.sql_conn)
+            .await?;
+
+        let mut redis_conn = db.redis_pool.get().await?;
+        fill_redis_lb(
+            &mut redis_conn,
+            &source,
+            scores.iter().enumerate().map(|(i, score)| (i + 1, *score)),
+        )
+        .await?;
+
+        let mut visited = Vec::new();
+        let mut after = None;
+        loop {
+            let result = get_maps_connection(
+                &db.sql_conn,
+                &mut redis_conn,
+                ConnectionInputBuilder::new(ConnectionParameters {
+                    first: Some(page_size),
+                    after: after.take(),
+                    ..Default::default()
+                })
+                .build(&source),
+            )
+            .await?;
+
+            visited.extend(
+                result
+                    .edges
+                    .iter()
+                    .map(|edge| (edge.node.map.inner.id, edge.node.rank)),
+            );
+
+            if !result.has_next_page || visited.len() > scores.len() {
+                break;
+            }
+            let last = result
+                .edges
+                .last()
+                .expect("a page with a next one isn't empty");
+            after = Some(F64Cursor::decode_cursor(&last.cursor.0)?.into());
+        }
+
+        // Tied maps are sorted by descending ID, like the cursor.
+        itertools::assert_equal(
+            visited,
+            [
+                (1, 1),
+                (10, 2),
+                (9, 2),
+                (8, 2),
+                (7, 2),
+                (6, 2),
+                (5, 2),
+                (4, 2),
+                (3, 2),
+                (2, 2),
+            ],
+        );
+
+        anyhow::Ok(())
+    })
+    .await
+}

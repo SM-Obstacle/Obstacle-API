@@ -530,4 +530,17 @@ mod tests {
             },
         );
     }
+
+    /// The score must be decoded bit-for-bit, otherwise the keyset condition `score = cursor`
+    /// doesn't match the tied rows, and the pagination restarts at the top of the tie.
+    ///
+    /// This relies on the `float_roundtrip` feature of `serde_json`.
+    #[test]
+    fn score_cursor_round_trip_exact_float() {
+        setup();
+        let score = 13999.050807630227;
+        let cursor = F64Cursor { score, data: 123 }.encode_cursor();
+        let decoded = F64Cursor::<u32>::decode_cursor(&cursor).unwrap();
+        assert_eq!(decoded.score.to_bits(), f64::to_bits(score));
+    }
 }
