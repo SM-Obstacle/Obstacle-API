@@ -15,10 +15,10 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 ARG DB_BACKEND=mysql
 COPY --from=planner /code/recipe.json recipe.json
-RUN cargo chef cook --release --no-default-features --features $DB_BACKEND --recipe-path recipe.json
+RUN cargo chef cook --release --no-default-features --features $DB_BACKEND,game-api/request_filter --recipe-path recipe.json
 COPY ./Cargo.toml ./Cargo.lock ./
 COPY ./crates ./crates
-RUN cargo build --release --no-default-features -F $DB_BACKEND \
+RUN cargo build --release --no-default-features -F $DB_BACKEND,game-api/request_filter \
 	-p game-api -p admin -p socc -p migration
 
 FROM debian:bookworm-slim AS runtime
