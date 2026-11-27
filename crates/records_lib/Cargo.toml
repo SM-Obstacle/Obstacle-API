@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 chrono = { workspace = true }
+cron = { workspace = true }
 deadpool-redis = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true }

@@ -3,39 +3,21 @@
 //! The cache manager is a service that runs alongside the API. It fetches periodically the records
 //! in the database to calculate the scores in certain contexts, then store the results in the Redis
 //! database.
+//!
+//! The jobs are planned with cron expressions, with a seconds field, and are in UTC. See the
+//! [`scheduler`] module for more information.
 
-use std::{future::Future, time::Duration};
-
-use anyhow::Context;
+use cron::Schedule;
 use mkenv::prelude::*;
 use records_lib::{Database, DbEnv, LibEnv};
-use tokio::{task::JoinHandle, time};
-use tracing::info;
 
 mod campaign_scores;
 mod player_map_ranking;
+mod scheduler;
 
-async fn handle<F, Fut>(db: Database, period: Duration, f: F) -> anyhow::Result<()>
-where
-    F: Fn(Database) -> Fut,
-    Fut: Future<Output = anyhow::Result<()>>,
-{
-    let mut interval = time::interval(period);
-
-    loop {
-        interval.tick().await;
-        f(db.clone()).await?;
-    }
-}
-
-#[inline]
-async fn join<O>(
-    task: JoinHandle<anyhow::Result<O>>,
-    join_ctx: &'static str,
-    task_ctx: &'static str,
-) -> anyhow::Result<O> {
-    task.await.context(join_ctx)?.context(task_ctx)
-}
+use campaign_scores::CampaignScores;
+use player_map_ranking::{GlobalRanking, PeriodicRanking};
+use scheduler::Scheduler;
 
 fn setup_tracing() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -44,10 +26,44 @@ fn setup_tracing() -> anyhow::Result<()> {
         .map_err(|e| anyhow::format_err!("{e}"))
 }
 
+fn default_schedule(expr: &str) -> Schedule {
+    expr.parse()
+        .expect("default cron expression should be valid")
+}
+
+mkenv::make_config! {
+    struct SchedulesEnv {
+        periodic_ranking: {
+            var_name: "SOCC_PERIODIC_RANKING_SCHEDULE",
+            layers: [
+                parsed_from_str<Schedule>(),
+                or_default_val(|| default_schedule("0 0 0 * * Mon")),
+            ],
+            description: "The cron schedule of the update of the player/map ranking scores. \
+                Each update uses the records made during the period preceding the last record, \
+                the period being the time between two occurrences of the schedule",
+            default_val_fmt: "0 0 0 * * Mon (every Monday at midnight)",
+        },
+
+        global_ranking: {
+            var_name: "SOCC_GLOBAL_RANKING_SCHEDULE",
+            layers: [
+                parsed_from_str<Schedule>(),
+                or_default_val(|| default_schedule("0 0 0 1 * *")),
+            ],
+            description: "The cron schedule of the update of the global (all-time) player/map \
+                ranking scores. The periodic ranking uses them to order the players/maps that \
+                weren't active during the last period",
+            default_val_fmt: "0 0 0 1 * * (the first day of every month at midnight)",
+        }
+    }
+}
+
 mkenv::make_config! {
     struct Env {
         db_env: { DbEnv },
         lib_env: { LibEnv },
+        schedules: { SchedulesEnv },
     }
 }
 
@@ -62,10 +78,8 @@ async fn main() -> anyhow::Result<()> {
     setup_tracing()?;
     let env = Env::define();
     env.init();
-    let event_scores_interval = env.lib_env.event_scores_interval.get();
-    let player_ranking_scores_interval = env.lib_env.player_map_ranking_scores_interval.get();
-    let player_global_ranking_scores_interval =
-        env.lib_env.player_map_global_ranking_scores_interval.get();
+    let schedules = env.schedules;
+    let campaign_scores_schedule = env.lib_env.event_scores_schedule.get();
     records_lib::init_env(env.lib_env);
 
     let db = Database::from_db_url(
@@ -74,38 +88,14 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    // Init tasks
-    campaign_scores::init(db.clone())
-        .await
-        .context("cannot initialize campaign_scores task")?;
+    let mut scheduler = Scheduler::default();
+    scheduler
+        .add("campaign_scores", campaign_scores_schedule, CampaignScores)
+        // Both ranking jobs share the same intermediate tables, so they must not overlap. The
+        // global one is registered first, so that the periodic one uses fresh global scores when
+        // both are due at the same time, which is notably the case at startup.
+        .add("ranking", schedules.global_ranking.get(), GlobalRanking)
+        .add("ranking", schedules.periodic_ranking.get(), PeriodicRanking);
 
-    let event_scores_handle = tokio::spawn(handle(
-        db.clone(),
-        event_scores_interval,
-        campaign_scores::update,
-    ));
-
-    let player_map_ranking_handle = tokio::spawn(player_map_ranking::run(
-        db.clone(),
-        player_ranking_scores_interval,
-        player_global_ranking_scores_interval,
-    ));
-
-    info!("Spawned all tasks");
-
-    join(
-        event_scores_handle,
-        "When joining the campaign_scores::update task",
-        "When updating campaign scores",
-    )
-    .await?;
-
-    join(
-        player_map_ranking_handle,
-        "When joining the player_ranking::update task",
-        "When updating player and map ranking scores",
-    )
-    .await?;
-
-    Ok(())
+    scheduler.run(db).await
 }

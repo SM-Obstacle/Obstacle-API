@@ -17,6 +17,7 @@ mkenv = { workspace = true }
 entity = { path = "../entity" }
 sea-orm = { workspace = true }
 chrono = { workspace = true }
+cron = { workspace = true }
 player-map-ranking = { path = "../player-map-ranking" }
 
 [features]

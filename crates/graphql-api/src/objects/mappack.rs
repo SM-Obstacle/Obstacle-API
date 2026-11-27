@@ -3,13 +3,12 @@ use entity::{
     event, event_edition, mappack_maps, mappack_periodic_ranking, mappack_player_periodic_ranking,
     mappacks,
 };
-use mkenv::prelude::*;
 use mx_layer::mappacks::MappackProvider;
 use records_lib::{
     Database, Expirable,
     error::{RecordsError, RecordsResult},
     internal,
-    mappack::{AnyMappackId, MappackRetention, update_mappack},
+    mappack::{self, AnyMappackId, MappackRetention, update_mappack},
     must,
     opt_event::OptEvent,
 };
@@ -217,18 +216,7 @@ impl Mappack {
             .one(&db.sql_conn)
             .await?;
         let last_updated_at = last_updated_at.and_then(|m| m.last_updated_at);
-        Ok(Some(
-            last_updated_at
-                .and_then(|last| {
-                    let elapsed = chrono::Utc::now().naive_utc() - last;
-                    records_lib::env()
-                        .event_scores_interval
-                        .get()
-                        .as_secs()
-                        .checked_sub(Ord::max(elapsed.num_seconds(), 0) as u64)
-                })
-                .unwrap_or_default(),
-        ))
+        Ok(mappack::next_update_in(last_updated_at))
     }
 }
 
@@ -286,13 +274,7 @@ pub async fn get_mappack(
         let is_registered = registered_mappack.is_some();
         let should_update = registered_mappack
             .and_then(|mappack| mappack.last_updated_at)
-            .map(|last_updated_at| {
-                let elapsed = Ord::max(
-                    (chrono::Utc::now().naive_utc() - last_updated_at).num_seconds(),
-                    0,
-                ) as u64;
-                elapsed >= records_lib::env().event_scores_interval.get().as_secs()
-            })
+            .map(mappack::is_update_due)
             .unwrap_or(true);
 
         if should_update {

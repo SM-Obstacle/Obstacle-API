@@ -26,6 +26,7 @@ tokio = "1.54.1"
 async-graphql = "7.2.1"
 sqlx = { version = "0.9.1", features = ["chrono", "mysql", "runtime-tokio"] }
 chrono = { version = "0.4.45", features = ["serde"] }
+cron = "0.17.0"
 deadpool = { version = "0.13.1", features = ["managed", "rt_tokio_1"] }
 deadpool-redis = { version = "0.23.1", features = ["rt_tokio_1"] }
 serde = "1.0.229"

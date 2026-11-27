@@ -623,3 +623,107 @@ async fn calc_scores<C: ConnectionTrait + StreamTrait>(
 
     Ok(Some(MappackScores { maps, scores }))
 }
+
+/// Returns whether the scores of a mappack last updated at `last_updated_at` are outdated, meaning
+/// an occurrence of the event scores schedule has passed since then.
+///
+/// `last_updated_at` is in UTC, like the `last_updated_at` column of the `mappacks` table.
+pub fn is_update_due(last_updated_at: chrono::NaiveDateTime) -> bool {
+    is_update_due_with(
+        &crate::env().event_scores_schedule.get(),
+        last_updated_at.and_utc(),
+        chrono::Utc::now(),
+    )
+}
+
+/// Returns the number of seconds until the next update of a mappack last updated at
+/// `last_updated_at`, following the event scores schedule.
+///
+/// This is 0 if the mappack was never updated, or if its update is due (see [`is_update_due`]).
+/// This is `None` if the schedule has no future occurrence.
+pub fn next_update_in(last_updated_at: Option<chrono::NaiveDateTime>) -> Option<u64> {
+    next_update_in_with(
+        &crate::env().event_scores_schedule.get(),
+        last_updated_at.map(|last| last.and_utc()),
+        chrono::Utc::now(),
+    )
+}
+
+fn is_update_due_with(
+    schedule: &cron::Schedule,
+    last_updated_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    schedule
+        .after(&last_updated_at)
+        .next()
+        .is_some_and(|next| next <= now)
+}
+
+fn next_update_in_with(
+    schedule: &cron::Schedule,
+    last_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<u64> {
+    match last_updated_at {
+        Some(last) if !is_update_due_with(schedule, last, now) => {
+            let next = schedule.after(&now).next()?;
+            Some(Ord::max((next - now).num_seconds(), 0) as u64)
+        }
+        _ => Some(0),
+    }
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use chrono::{DateTime, TimeZone as _, Utc};
+
+    use super::{is_update_due_with, next_update_in_with};
+
+    fn at(h: u32, m: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 11, 27, h, m, 0).unwrap()
+    }
+
+    fn every_6h() -> cron::Schedule {
+        "0 0 */6 * * *".parse().unwrap()
+    }
+
+    #[test]
+    fn next_update_after_startup_run() {
+        // socc restarted at 13:20, so the scores were updated off-schedule: the next update is
+        // still the one at 18:00.
+        assert_eq!(
+            next_update_in_with(&every_6h(), Some(at(13, 20)), at(14, 0)),
+            Some(4 * 3600)
+        );
+    }
+
+    #[test]
+    fn next_update_after_scheduled_run() {
+        assert_eq!(
+            next_update_in_with(&every_6h(), Some(at(12, 1)), at(17, 30)),
+            Some(30 * 60)
+        );
+    }
+
+    #[test]
+    fn overdue_update() {
+        // The 18:00 run hasn't updated the mappack yet.
+        assert!(is_update_due_with(&every_6h(), at(12, 1), at(18, 5)));
+        assert_eq!(
+            next_update_in_with(&every_6h(), Some(at(12, 1)), at(18, 5)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn never_updated() {
+        assert_eq!(next_update_in_with(&every_6h(), None, at(10, 0)), Some(0));
+    }
+
+    #[test]
+    fn not_due_before_next_occurrence() {
+        assert!(!is_update_due_with(&every_6h(), at(13, 20), at(17, 59)));
+        assert!(is_update_due_with(&every_6h(), at(13, 20), at(18, 0)));
+    }
+}

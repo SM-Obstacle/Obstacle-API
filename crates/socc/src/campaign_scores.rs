@@ -7,6 +7,8 @@ use records_lib::{
 };
 use sea_orm::{ConnectionTrait, StreamTrait, TransactionTrait};
 
+use crate::scheduler::{Job, JobContext};
+
 #[tracing::instrument(skip(conn, redis_pool), fields(mappack = %mappack.mappack_id()))]
 async fn update_mappack<C: ConnectionTrait + TransactionTrait + Sync>(
     conn: &C,
@@ -72,18 +74,23 @@ where
     Ok(())
 }
 
-pub async fn init(db: Database) -> anyhow::Result<()> {
-    let mut redis_conn = db.redis_pool.get().await?;
-    let _: () = redis_conn.del(mappacks_key()).await?;
-    Ok(())
-}
+/// Updates the scores of the event mappacks, and cleans up the temporary mappacks.
+pub struct CampaignScores;
 
-pub async fn update(db: Database) -> anyhow::Result<()> {
-    update_event_mappacks(&db.sql_conn, &db.redis_pool).await?;
+impl Job for CampaignScores {
+    fn name(&self) -> &'static str {
+        "campaign_scores"
+    }
 
-    mappack::cleanup_temporary_mappacks(&db.sql_conn).await?;
+    async fn init(&self, db: &Database) -> anyhow::Result<()> {
+        let mut redis_conn = db.redis_pool.get().await?;
+        let _: () = redis_conn.del(mappacks_key()).await?;
+        Ok(())
+    }
 
-    tracing::info!("End");
-
-    Ok(())
+    async fn run(&self, ctx: JobContext<'_>) -> anyhow::Result<()> {
+        update_event_mappacks(&ctx.db.sql_conn, &ctx.db.redis_pool).await?;
+        mappack::cleanup_temporary_mappacks(&ctx.db.sql_conn).await?;
+        Ok(())
+    }
 }

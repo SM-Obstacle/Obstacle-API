@@ -1,13 +1,15 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use deadpool_redis::redis;
-use entity::{map_periodic_ranking, maps, player_periodic_ranking, players, ranking_period};
+use entity::{
+    global_records, map_periodic_ranking, maps, player_periodic_ranking, players, ranking_period,
+};
 use futures::future::try_join_all;
 use player_map_ranking::compute_scores;
 use records_lib::{
-    Database, RedisPool,
+    RedisPool,
     redis_key::{map_ranking, player_ranking},
     sync,
 };
@@ -17,7 +19,8 @@ use sea_orm::{
     QueryFilter as _, QueryOrder as _, QuerySelect as _, TransactionTrait,
     sea_query::{ColumnDef, ForeignKey, Index, IntoIden, IntoTableRef, Query, SimpleExpr, Table},
 };
-use tokio::time;
+
+use crate::scheduler::{Job, JobContext};
 
 trait TempTable {
     fn table() -> impl IntoTableRef;
@@ -367,38 +370,71 @@ async fn do_update<C: ConnectionTrait + TransactionTrait>(
     Ok(())
 }
 
-async fn update(db: &Database, from: Option<DateTime<Utc>>) -> anyhow::Result<()> {
-    let kind = if from.is_none() { "global" } else { "periodic" };
-    let res = do_update(&db.sql_conn, &db.redis_pool, from).await;
+/// Computes the global (all-time) player/map ranking scores.
+///
+/// It must be registered in the same scheduler group as [`PeriodicRanking`], and before it: they
+/// share the same intermediate tables, and the periodic ranking uses the global scores.
+pub struct GlobalRanking;
 
-    match &res {
-        Ok(_) => tracing::info!("Player and map {kind} ranking update completed successfully"),
-        Err(e) => tracing::error!("Player and map {kind} ranking update returned an error: {e}"),
+impl Job for GlobalRanking {
+    fn name(&self) -> &'static str {
+        "global_ranking"
     }
 
-    res
+    async fn run(&self, ctx: JobContext<'_>) -> anyhow::Result<()> {
+        do_update(&ctx.db.sql_conn, &ctx.db.redis_pool, None).await
+    }
 }
 
-/// Runs the global and periodic player/map ranking updates, each at its own interval.
+/// Returns the date of the most recent record, if any.
 ///
-/// Both updates run in the same task, so they never overlap (they share the same intermediate
-/// tables). When both are due, the global one runs first, so the periodic one uses fresh global
-/// scores, which is notably the case at startup.
-pub async fn run(
-    db: Database,
-    periodic_interval: Duration,
-    global_interval: Duration,
-) -> anyhow::Result<()> {
-    let mut global_ticks = time::interval(global_interval);
-    let mut periodic_ticks = time::interval(periodic_interval);
+/// This is the same set of records as the one the scores are computed from. The query reads the
+/// records by descending date and stops at the first one, instead of a `MAX` that would scan all of
+/// them.
+async fn last_record_date<C: ConnectionTrait>(conn: &C) -> Result<Option<DateTime<Utc>>, DbErr> {
+    let date = global_records::Entity::find()
+        .select_only()
+        .column(global_records::Column::RecordDate)
+        .order_by_desc(global_records::Column::RecordDate)
+        .limit(1)
+        .into_tuple::<chrono::NaiveDateTime>()
+        .one(conn)
+        .await?;
+    Ok(date.map(|date| date.and_utc()))
+}
 
-    loop {
-        tokio::select! {
-            biased;
-            _ = global_ticks.tick() => update(&db, None).await?,
-            _ = periodic_ticks.tick() => {
-                update(&db, Some(chrono::Utc::now() - periodic_interval)).await?
-            }
-        }
+/// Computes the player/map ranking scores from the records made during the period preceding the
+/// most recent record. The period is the duration between the last two occurrences of the job's
+/// schedule.
+///
+/// Anchoring the period on the last record rather than on the run time keeps the ranking
+/// meaningful when no record was made recently.
+///
+/// See [`GlobalRanking`] for the registration constraints.
+pub struct PeriodicRanking;
+
+impl Job for PeriodicRanking {
+    fn name(&self) -> &'static str {
+        "periodic_ranking"
+    }
+
+    async fn run(&self, ctx: JobContext<'_>) -> anyhow::Result<()> {
+        let period = ctx
+            .period
+            .context("the schedule of the periodic ranking has no previous period")?;
+        let last_record_date = last_record_date(&ctx.db.sql_conn)
+            .await
+            .context("couldn't get the date of the last record")?;
+        let Some(last_record_date) = last_record_date else {
+            tracing::warn!("There is no record, skipping the periodic ranking");
+            return Ok(());
+        };
+
+        do_update(
+            &ctx.db.sql_conn,
+            &ctx.db.redis_pool,
+            Some(last_record_date - period),
+        )
+        .await
     }
 }

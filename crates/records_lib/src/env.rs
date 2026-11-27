@@ -1,5 +1,4 @@
-use std::time::Duration;
-
+use cron::Schedule;
 use entity::types::InGameAlignment;
 use once_cell::sync::OnceCell;
 
@@ -197,45 +196,23 @@ mkenv::make_config! {
             default_val_fmt: "-29.5",
         },
 
-        /// The interval of a mappack scores update
-        pub event_scores_interval: {
-            var_name: "EVENT_SCORES_INTERVAL_SECONDS",
+        /// The cron schedule of the update of the event scores.
+        ///
+        /// The SOCC updates the event mappacks on this schedule, and the API uses it to tell when
+        /// the next update of a mappack happens, and to refresh the temporary mappacks.
+        pub event_scores_schedule: {
+            var_name: "EVENT_SCORES_SCHEDULE",
             layers: [
-                parsed<Duration>(|input| {
-                    input.parse().map(Duration::from_secs).map_err(From::from)
+                parsed_from_str<Schedule>(),
+                or_default_val(|| {
+                    "0 0 */6 * * *"
+                        .parse()
+                        .expect("default cron expression should be valid")
                 }),
-                or_default_val(|| Duration::from_secs(6 * 3600)),
             ],
-            description: "The interval of the update of the event scores, in seconds",
-            default_val_fmt: "6h",
-        },
-
-        /// The interval of the player/map ranking update
-        pub player_map_ranking_scores_interval: {
-            var_name: "PLAYER_MAP_RANKING_SCORES_INTERVAL",
-            layers: [
-                parsed<Duration>(|input| {
-                    input.parse().map(Duration::from_secs).map_err(From::from)
-                }),
-                or_default_val(|| Duration::from_secs(3600 * 24 * 7)),
-            ],
-            description: "The interval of the update of the player/map ranking scores, in seconds",
-            default_val_fmt: "every week",
-        },
-
-        /// The interval of the global player/map ranking update
-        pub player_map_global_ranking_scores_interval: {
-            var_name: "PLAYER_MAP_GLOBAL_RANKING_SCORES_INTERVAL",
-            layers: [
-                parsed<Duration>(|input| {
-                    input.parse().map(Duration::from_secs).map_err(From::from)
-                }),
-                or_default_val(|| Duration::from_secs(3600 * 24 * 30)),
-            ],
-            description: "The interval of the update of the global (all-time) player/map ranking \
-                scores, in seconds. The periodic ranking uses them to order the players/maps \
-                that weren't active during the last period.",
-            default_val_fmt: "every 30 days",
+            description: "The cron schedule (with seconds, in UTC) of the update of the event \
+                scores",
+            default_val_fmt: "0 0 */6 * * * (every 6 hours)",
         }
     }
 }
